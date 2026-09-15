@@ -74,12 +74,14 @@ void FeatureEditorPanel::createUi()
     auto* coneButton = new QPushButton("Cone", this);
     auto* sphereButton = new QPushButton("Sphere", this);
     auto* torusButton = new QPushButton("Torus", this);
+    auto* hexagonButton = new QPushButton("Hexagon", this);
 
     primitiveLayout->addWidget(boxButton, 0, 0);
     primitiveLayout->addWidget(cylinderButton, 0, 1);
     primitiveLayout->addWidget(coneButton, 1, 0);
     primitiveLayout->addWidget(sphereButton, 1, 1);
-    primitiveLayout->addWidget(torusButton, 2, 0, 1, 2);
+    primitiveLayout->addWidget(torusButton, 2, 0);
+    primitiveLayout->addWidget(hexagonButton, 2, 1);
 
     rootLayout->addLayout(primitiveLayout);
 
@@ -166,6 +168,13 @@ void FeatureEditorPanel::createUi()
         &QPushButton::clicked,
         this,
         [this]() { addTorus(); }
+    );
+
+    connect(
+        hexagonButton,
+        &QPushButton::clicked,
+        this,
+        [this]() { addHexagon(); }
     );
 
     connect(
@@ -332,6 +341,27 @@ void FeatureEditorPanel::addTorus()
     );
 
     recomputeAndNotify("Torus added");
+}
+
+
+void FeatureEditorPanel::addHexagon()
+{
+    if (body_ == nullptr) {
+        return;
+    }
+
+    const std::string id =
+        "hexagon-" + std::to_string(nextFeatureNumber_++);
+
+    body_->addFeature(
+        std::make_shared<cad::parametric::HexagonFeature>(
+            id,
+            30.0,
+            12.0
+        )
+    );
+
+    recomputeAndNotify("Hexagon added");
 }
 
 void FeatureEditorPanel::addBoolean(
@@ -828,6 +858,56 @@ void FeatureEditorPanel::rebuildProperties(
             "Minor radius",
             minorRadius
         );
+        return;
+    }
+
+    if (auto hexagon =
+            std::dynamic_pointer_cast<
+                cad::parametric::HexagonFeature
+            >(feature)) {
+
+        auto* acrossFlats =
+            makeLengthEditor(
+                propertiesWidget_,
+                hexagon->acrossFlats()
+            );
+
+        auto* height =
+            makeLengthEditor(
+                propertiesWidget_,
+                hexagon->height()
+            );
+
+        connect(
+            acrossFlats,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, hexagon](const double value) {
+                hexagon->setAcrossFlats(value);
+                commitFeatureChange(hexagon);
+            }
+        );
+
+        connect(
+            height,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, hexagon](const double value) {
+                hexagon->setHeight(value);
+                commitFeatureChange(hexagon);
+            }
+        );
+
+        propertiesLayout_->addRow(
+            "Across flats",
+            acrossFlats
+        );
+
+        propertiesLayout_->addRow(
+            "Height",
+            height
+        );
+
         return;
     }
 

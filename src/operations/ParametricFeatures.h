@@ -127,6 +127,30 @@ private:
     double minorRadius_;
 };
 
+
+class HexagonFeature final : public ParametricFeature
+{
+public:
+    HexagonFeature(
+        std::string id,
+        double acrossFlats,
+        double height
+    );
+
+    void setAcrossFlats(double acrossFlats);
+    void setHeight(double height);
+
+    double acrossFlats() const noexcept;
+    double height() const noexcept;
+
+protected:
+    TopoDS_Shape build() const override;
+
+private:
+    double acrossFlats_;
+    double height_;
+};
+
 class ExtrudeFeature final : public ParametricFeature
 {
 public:

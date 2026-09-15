@@ -38,6 +38,7 @@ private:
     void addCone();
     void addSphere();
     void addTorus();
+    void addHexagon();
 
     void addBoolean(
         cad::parametric::BooleanOperation operation,

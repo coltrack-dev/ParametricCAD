@@ -2,6 +2,17 @@
 
 #include "operations/BasicFeatures.h"
 
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+
+#include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
+
+#include <array>
+#include <cmath>
+
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -234,6 +245,137 @@ TopoDS_Shape TorusFeature::build() const
         majorRadius_,
         minorRadius_
     );
+}
+
+
+HexagonFeature::HexagonFeature(
+    std::string id,
+    const double acrossFlats,
+    const double height
+)
+    : ParametricFeature(std::move(id), "Hexagon"),
+      acrossFlats_(acrossFlats),
+      height_(height)
+{
+}
+
+void HexagonFeature::setAcrossFlats(
+    const double acrossFlats
+)
+{
+    acrossFlats_ = acrossFlats;
+    markDirty();
+}
+
+void HexagonFeature::setHeight(
+    const double height
+)
+{
+    height_ = height;
+    markDirty();
+}
+
+double HexagonFeature::acrossFlats() const noexcept
+{
+    return acrossFlats_;
+}
+
+double HexagonFeature::height() const noexcept
+{
+    return height_;
+}
+
+TopoDS_Shape HexagonFeature::build() const
+{
+    if (!std::isfinite(acrossFlats_) || acrossFlats_ <= 0.0) {
+        throw std::invalid_argument(
+            "acrossFlats must be a finite positive number"
+        );
+    }
+
+    if (!std::isfinite(height_) || height_ <= 0.0) {
+        throw std::invalid_argument(
+            "height must be a finite positive number"
+        );
+    }
+
+    // For a regular hexagon:
+    // acrossFlats = sqrt(3) * circumradius.
+    const double circumradius =
+        acrossFlats_ / std::sqrt(3.0);
+
+    std::array<gp_Pnt, 6> points{};
+
+    constexpr double Pi =
+        3.1415926535897932384626433832795;
+
+    for (int index = 0; index < 6; ++index) {
+        // 30-degree offset gives horizontal top/bottom flats.
+        const double angle =
+            Pi / 6.0
+            + static_cast<double>(index) * Pi / 3.0;
+
+        points[static_cast<std::size_t>(index)] =
+            gp_Pnt(
+                circumradius * std::cos(angle),
+                circumradius * std::sin(angle),
+                0.0
+            );
+    }
+
+    BRepBuilderAPI_MakeWire wireBuilder;
+
+    for (int index = 0; index < 6; ++index) {
+        const int nextIndex =
+            (index + 1) % 6;
+
+        wireBuilder.Add(
+            BRepBuilderAPI_MakeEdge(
+                points[static_cast<std::size_t>(index)],
+                points[static_cast<std::size_t>(nextIndex)]
+            ).Edge()
+        );
+    }
+
+    if (!wireBuilder.IsDone()) {
+        throw std::runtime_error(
+            "Hexagon wire construction failed"
+        );
+    }
+
+    BRepBuilderAPI_MakeFace faceBuilder(
+        wireBuilder.Wire()
+    );
+
+    if (!faceBuilder.IsDone()) {
+        throw std::runtime_error(
+            "Hexagon face construction failed"
+        );
+    }
+
+    BRepPrimAPI_MakePrism prismBuilder(
+        faceBuilder.Face(),
+        gp_Vec(0.0, 0.0, height_)
+    );
+
+    prismBuilder.Build();
+
+    if (!prismBuilder.IsDone()) {
+        throw std::runtime_error(
+            "Hexagon extrusion failed"
+        );
+    }
+
+    TopoDS_Shape result =
+        prismBuilder.Shape();
+
+    if (result.IsNull()) {
+        throw std::runtime_error(
+            "Hexagon extrusion returned a null shape"
+        );
+    }
+
+    return result;
 }
 
 ExtrudeFeature::ExtrudeFeature(
