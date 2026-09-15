@@ -7,17 +7,37 @@
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <Aspect_DisplayConnection.hxx>
+#include <TopoDS_Shape.hxx>
+
+class QKeyEvent;
+class QMouseEvent;
+class QPaintEvent;
+class QResizeEvent;
+class QShowEvent;
+class QWheelEvent;
 
 class CadViewer final : public QWidget
 {
     Q_OBJECT
 
 public:
+    enum class SelectionMode
+    {
+        Object,
+        Edge,
+        Face
+    };
+
     explicit CadViewer(QWidget* parent = nullptr);
 
     void display(const TopoDS_Shape& shape);
     void clear();
     void fitAll();
+
+    void setSelectionMode(SelectionMode mode);
+    SelectionMode selectionMode() const;
+    TopoDS_Shape selectedShape() const;
+    void clearSelection();
 
 protected:
     QPaintEngine* paintEngine() const override;
@@ -26,19 +46,25 @@ protected:
     void showEvent(QShowEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     void initializeOcc();
     void bindWindow();
+    void updateHover(const QPoint& position);
+    void selectAt(const QPoint& position, bool toggleSelection);
+    void applySelectionMode();
 
     Handle(V3d_Viewer) viewer_;
     Handle(V3d_View) view_;
     Handle(AIS_InteractiveContext) context_;
 
     QPoint lastMousePosition_;
+    QPoint mousePressPosition_;
     bool initialized_{false};
+    SelectionMode selectionMode_{SelectionMode::Object};
 
     Handle(Aspect_DisplayConnection) displayConnection_;
-
 };

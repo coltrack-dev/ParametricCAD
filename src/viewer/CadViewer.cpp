@@ -1,13 +1,16 @@
 #include "viewer/CadViewer.h"
 
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QWheelEvent>
 
+#include <AIS_SelectionScheme.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <OpenGl_GraphicDriver.hxx>
+#include <TopAbs_ShapeEnum.hxx>
 
 #ifdef _WIN32
 #include <WNT_Window.hxx>
@@ -67,6 +70,7 @@ void CadViewer::initializeOcc()
     view_->MustBeResized();
 
     initialized_ = true;
+    applySelectionMode();
 }
 
 void CadViewer::bindWindow()
@@ -136,6 +140,7 @@ void CadViewer::display(const TopoDS_Shape& shape)
         Standard_True
     );
 
+    applySelectionMode();
     fitAll();
 }
 
@@ -159,13 +164,106 @@ void CadViewer::fitAll()
     view_->Redraw();
 }
 
+void CadViewer::setSelectionMode(SelectionMode mode)
+{
+    selectionMode_ = mode;
+
+    if (initialized_) {
+        clearSelection();
+        applySelectionMode();
+    }
+}
+
+CadViewer::SelectionMode CadViewer::selectionMode() const
+{
+    return selectionMode_;
+}
+
+TopoDS_Shape CadViewer::selectedShape() const
+{
+    if (!initialized_) {
+        return {};
+    }
+
+    context_->InitSelected();
+
+    if (!context_->MoreSelected() || !context_->HasSelectedShape()) {
+        return {};
+    }
+
+    return context_->SelectedShape();
+}
+
+void CadViewer::clearSelection()
+{
+    if (!initialized_) {
+        return;
+    }
+
+    context_->ClearSelected(Standard_True);
+}
+
+void CadViewer::applySelectionMode()
+{
+    if (!initialized_) {
+        return;
+    }
+
+    context_->Deactivate();
+
+    Standard_Integer mode = 0;
+
+    switch (selectionMode_) {
+    case SelectionMode::Object:
+        mode = 0;
+        break;
+    case SelectionMode::Edge:
+        mode = AIS_Shape::SelectionMode(TopAbs_EDGE);
+        break;
+    case SelectionMode::Face:
+        mode = AIS_Shape::SelectionMode(TopAbs_FACE);
+        break;
+    }
+
+    context_->Activate(mode, Standard_True);
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::updateHover(const QPoint& position)
+{
+    if (!initialized_) {
+        return;
+    }
+
+    context_->MoveTo(
+        position.x(),
+        position.y(),
+        view_,
+        Standard_True
+    );
+}
+
+void CadViewer::selectAt(const QPoint& position, bool toggleSelection)
+{
+    updateHover(position);
+
+    context_->SelectDetected(
+        toggleSelection
+            ? AIS_SelectionScheme_XOR
+            : AIS_SelectionScheme_Replace
+    );
+    context_->UpdateCurrentViewer();
+}
+
 void CadViewer::mousePressEvent(QMouseEvent* event)
 {
     lastMousePosition_ =
         event->position().toPoint();
+    mousePressPosition_ = lastMousePosition_;
 
     if (initialized_ &&
-        event->button() == Qt::LeftButton) {
+        event->button() == Qt::MiddleButton &&
+        !event->modifiers().testFlag(Qt::ShiftModifier)) {
 
         view_->StartRotation(
             lastMousePosition_.x(),
@@ -185,31 +283,48 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     const QPoint currentPosition =
         event->position().toPoint();
 
-    if (event->buttons().testFlag(Qt::LeftButton)) {
+    if (event->buttons().testFlag(Qt::MiddleButton)) {
 
-        view_->Rotation(
-            currentPosition.x(),
-            currentPosition.y()
-        );
+        if (event->modifiers().testFlag(Qt::ShiftModifier)) {
+            const int deltaX =
+                currentPosition.x() -
+                lastMousePosition_.x();
 
-    } else if (
-        event->buttons().testFlag(Qt::MiddleButton)) {
+            const int deltaY =
+                lastMousePosition_.y() -
+                currentPosition.y();
 
-        const int deltaX =
-            currentPosition.x() -
-            lastMousePosition_.x();
+            view_->Pan(
+                deltaX,
+                deltaY
+            );
+        } else {
+            view_->Rotation(
+                currentPosition.x(),
+                currentPosition.y()
+            );
+        }
 
-        const int deltaY =
-            lastMousePosition_.y() -
-            currentPosition.y();
-
-        view_->Pan(
-            deltaX,
-            deltaY
-        );
+    } else if (event->buttons() == Qt::NoButton) {
+        updateHover(currentPosition);
     }
 
     lastMousePosition_ = currentPosition;
+}
+
+void CadViewer::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (initialized_ &&
+        event->button() == Qt::LeftButton &&
+        event->position().toPoint() == mousePressPosition_) {
+
+        selectAt(
+            event->position().toPoint(),
+            event->modifiers().testFlag(Qt::ControlModifier)
+        );
+    }
+
+    QWidget::mouseReleaseEvent(event);
 }
 
 void CadViewer::wheelEvent(QWheelEvent* event)
@@ -225,4 +340,29 @@ void CadViewer::wheelEvent(QWheelEvent* event)
 
     view_->SetZoom(factor);
     view_->Redraw();
+}
+
+void CadViewer::keyPressEvent(QKeyEvent* event)
+{
+    switch (event->key()) {
+    case Qt::Key_1:
+        setSelectionMode(SelectionMode::Object);
+        return;
+    case Qt::Key_2:
+        setSelectionMode(SelectionMode::Edge);
+        return;
+    case Qt::Key_3:
+        setSelectionMode(SelectionMode::Face);
+        return;
+    case Qt::Key_Escape:
+        clearSelection();
+        return;
+    case Qt::Key_F:
+        fitAll();
+        return;
+    default:
+        break;
+    }
+
+    QWidget::keyPressEvent(event);
 }
