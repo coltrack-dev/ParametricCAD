@@ -47,6 +47,12 @@ void MainWindow::createParametricPanel()
         }
     );
 
+    featureEditorPanel_->setFeatureSelectedHandler(
+        [this](const std::string& featureId) {
+            displayParametricFeature(featureId);
+        }
+    );
+
     dockWidget->setWidget(featureEditorPanel_);
 
     addDockWidget(
@@ -78,6 +84,50 @@ void MainWindow::refreshParametricModel()
     statusBar()->showMessage(
         "Parametric model recomputed",
         2000
+    );
+}
+
+
+void MainWindow::displayParametricFeature(
+    const std::string& featureId
+)
+{
+    viewer_->clear();
+
+    if (featureId.empty()) {
+        if (!parametricBody_.shape().IsNull()) {
+            viewer_->display(
+                parametricBody_.shape()
+            );
+        }
+
+        statusBar()->showMessage(
+            "Body",
+            1500
+        );
+        return;
+    }
+
+    const auto feature =
+        parametricBody_.findFeature(featureId);
+
+    if (!feature || feature->shape().IsNull()) {
+        statusBar()->showMessage(
+            "Selected feature has no shape",
+            2500
+        );
+        return;
+    }
+
+    viewer_->display(
+        feature->shape()
+    );
+
+    statusBar()->showMessage(
+        QString::fromStdString(
+            feature->name()
+        ),
+        1500
     );
 }
 

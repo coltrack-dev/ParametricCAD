@@ -32,6 +32,7 @@ QDoubleSpinBox* makeLengthEditor(
     editor->setRange(0.001, 1'000'000.0);
     editor->setSingleStep(1.0);
     editor->setSuffix(" mm");
+    editor->setKeyboardTracking(false);
     editor->setValue(value);
     return editor;
 }
@@ -55,6 +56,13 @@ void FeatureEditorPanel::setModelChangedHandler(
 )
 {
     modelChangedHandler_ = std::move(handler);
+}
+
+void FeatureEditorPanel::setFeatureSelectedHandler(
+    std::function<void(const std::string&)> handler
+)
+{
+    featureSelectedHandler_ = std::move(handler);
 }
 
 void FeatureEditorPanel::createUi()
@@ -228,10 +236,19 @@ void FeatureEditorPanel::createUi()
 
             if (id.isEmpty()) {
                 clearProperties();
+
+                if (featureSelectedHandler_) {
+                    featureSelectedHandler_(std::string{});
+                }
+
                 return;
             }
 
             showFeature(id.toStdString());
+
+            if (featureSelectedHandler_) {
+                featureSelectedHandler_(id.toStdString());
+            }
         }
     );
 
@@ -657,23 +674,23 @@ void FeatureEditorPanel::rebuildProperties(
 
         connect(
             width,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [apply](double) { apply(); }
+            [apply]() { apply(); }
         );
 
         connect(
             depth,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [apply](double) { apply(); }
+            [apply]() { apply(); }
         );
 
         connect(
             height,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [apply](double) { apply(); }
+            [apply]() { apply(); }
         );
 
         propertiesLayout_->addRow("Width", width);
@@ -700,20 +717,20 @@ void FeatureEditorPanel::rebuildProperties(
 
         connect(
             radius,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, cylinder](const double value) {
-                cylinder->setRadius(value);
+            [this, cylinder, radius]() {
+                cylinder->setRadius(radius->value());
                 commitFeatureChange(cylinder);
             }
         );
 
         connect(
             height,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, cylinder](const double value) {
-                cylinder->setHeight(value);
+            [this, cylinder, height]() {
+                cylinder->setHeight(height->value());
                 commitFeatureChange(cylinder);
             }
         );
@@ -746,30 +763,30 @@ void FeatureEditorPanel::rebuildProperties(
 
         connect(
             bottomRadius,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, cone](const double value) {
-                cone->setBottomRadius(value);
+            [this, cone, bottomRadius]() {
+                cone->setBottomRadius(bottomRadius->value());
                 commitFeatureChange(cone);
             }
         );
 
         connect(
             topRadius,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, cone](const double value) {
-                cone->setTopRadius(value);
+            [this, cone, topRadius]() {
+                cone->setTopRadius(topRadius->value());
                 commitFeatureChange(cone);
             }
         );
 
         connect(
             height,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, cone](const double value) {
-                cone->setHeight(value);
+            [this, cone, height]() {
+                cone->setHeight(height->value());
                 commitFeatureChange(cone);
             }
         );
@@ -802,10 +819,10 @@ void FeatureEditorPanel::rebuildProperties(
 
         connect(
             radius,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, sphere](const double value) {
-                sphere->setRadius(value);
+            [this, sphere, radius]() {
+                sphere->setRadius(radius->value());
                 commitFeatureChange(sphere);
             }
         );
@@ -832,20 +849,20 @@ void FeatureEditorPanel::rebuildProperties(
 
         connect(
             majorRadius,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, torus](const double value) {
-                torus->setMajorRadius(value);
+            [this, torus, majorRadius]() {
+                torus->setMajorRadius(majorRadius->value());
                 commitFeatureChange(torus);
             }
         );
 
         connect(
             minorRadius,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, torus](const double value) {
-                torus->setMinorRadius(value);
+            [this, torus, minorRadius]() {
+                torus->setMinorRadius(minorRadius->value());
                 commitFeatureChange(torus);
             }
         );
@@ -880,20 +897,20 @@ void FeatureEditorPanel::rebuildProperties(
 
         connect(
             acrossFlats,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, hexagon](const double value) {
-                hexagon->setAcrossFlats(value);
+            [this, hexagon, acrossFlats]() {
+                hexagon->setAcrossFlats(acrossFlats->value());
                 commitFeatureChange(hexagon);
             }
         );
 
         connect(
             height,
-            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            &QDoubleSpinBox::editingFinished,
             this,
-            [this, hexagon](const double value) {
-                hexagon->setHeight(value);
+            [this, hexagon, height]() {
+                hexagon->setHeight(height->value());
                 commitFeatureChange(hexagon);
             }
         );

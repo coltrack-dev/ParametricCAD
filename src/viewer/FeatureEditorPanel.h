@@ -25,6 +25,9 @@ public:
 
     void setBody(cad::parametric::Body* body);
     void setModelChangedHandler(std::function<void()> handler);
+    void setFeatureSelectedHandler(
+        std::function<void(const std::string&)> handler
+    );
     void refresh();
 
 private:
@@ -71,5 +74,6 @@ private:
     QLabel* messageLabel_{nullptr};
 
     std::function<void()> modelChangedHandler_;
+    std::function<void(const std::string&)> featureSelectedHandler_;
     int nextFeatureNumber_{1};
 };

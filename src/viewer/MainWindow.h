@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QMainWindow>
+
+#include <string>
 #include "model/Document.h"
 #include "model/Body.h"
 
@@ -18,6 +20,7 @@ private:
     void createActions();
     void createParametricPanel();
     void refreshParametricModel();
+    void displayParametricFeature(const std::string& featureId);
     void createBox();
     void createCylinder();
     void clearDocument();
