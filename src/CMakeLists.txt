@@ -19,19 +19,42 @@ set(PARAMETRIC_CAD_SOURCES
 add_executable(ParametricCAD ${PARAMETRIC_CAD_SOURCES})
 
 target_include_directories(ParametricCAD
-    PRIVATE
+        PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_include_directories(ParametricCAD
+        SYSTEM PRIVATE
         ${OpenCASCADE_INCLUDE_DIR}
 )
 
 target_link_libraries(ParametricCAD
-    PRIVATE
+        PRIVATE
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets
         Qt6::OpenGL
         Qt6::OpenGLWidgets
-        ${OpenCASCADE_LIBRARIES}
+
+        # OCCT Foundation
+        TKernel
+        TKMath
+
+        # OCCT geometry
+        TKG2d
+        TKG3d
+        TKGeomBase
+        TKBRep
+        TKGeomAlgo
+        TKTopAlgo
+
+        # Primitive modeling operations
+        TKPrim
+
+        # 3D visualization
+        TKService
+        TKV3d
+        TKOpenGl
 )
 
 if(MSVC)

@@ -18,10 +18,15 @@
 CadViewer::CadViewer(QWidget* parent)
     : QWidget(parent)
 {
+    setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_PaintOnScreen);
     setAttribute(Qt::WA_NoSystemBackground);
+
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
+
+    // Force Qt to create the native platform window.
+    winId();
 }
 
 QPaintEngine* CadViewer::paintEngine() const
@@ -54,6 +59,7 @@ void CadViewer::initializeOcc()
     initialized_ = true;
 }
 
+
 void CadViewer::bindWindow()
 {
 #ifdef _WIN32
@@ -70,6 +76,7 @@ void CadViewer::bindWindow()
         window->Map();
     }
 }
+
 
 void CadViewer::showEvent(QShowEvent* event)
 {
@@ -129,6 +136,14 @@ void CadViewer::fitAll()
 void CadViewer::mousePressEvent(QMouseEvent* event)
 {
     lastMousePosition_ = event->position().toPoint();
+
+    if (initialized_ && event->button() == Qt::LeftButton) {
+        view_->StartRotation(
+            lastMousePosition_.x(),
+            lastMousePosition_.y()
+        );
+    }
+
     QWidget::mousePressEvent(event);
 }
 
@@ -141,13 +156,17 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     const QPoint currentPosition = event->position().toPoint();
 
     if (event->buttons().testFlag(Qt::LeftButton)) {
-        view_->Rotation(lastMousePosition_.x(),
-                        lastMousePosition_.y(),
-                        currentPosition.x(),
-                        currentPosition.y());
+        view_->Rotation(
+            currentPosition.x(),
+            currentPosition.y()
+        );
     } else if (event->buttons().testFlag(Qt::MiddleButton)) {
-        const int deltaX = currentPosition.x() - lastMousePosition_.x();
-        const int deltaY = lastMousePosition_.y() - currentPosition.y();
+        const int deltaX =
+            currentPosition.x() - lastMousePosition_.x();
+
+        const int deltaY =
+            lastMousePosition_.y() - currentPosition.y();
+
         view_->Pan(deltaX, deltaY);
     }
 

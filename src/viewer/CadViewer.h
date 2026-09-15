@@ -6,6 +6,7 @@
 #include <AIS_Shape.hxx>
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
+#include <Aspect_DisplayConnection.hxx>
 
 class CadViewer final : public QWidget
 {
@@ -37,4 +38,7 @@ private:
 
     QPoint lastMousePosition_;
     bool initialized_{false};
+
+    Handle(Aspect_DisplayConnection) displayConnection_;
+
 };

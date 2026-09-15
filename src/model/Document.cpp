@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+Document::~Document() = default;
+
 Feature& Document::addFeature(std::unique_ptr<Feature> feature)
 {
     if (!feature) {
@@ -11,8 +13,10 @@ Feature& Document::addFeature(std::unique_ptr<Feature> feature)
     }
 
     feature->recompute();
+
     Feature& reference = *feature;
     features_.push_back(std::move(feature));
+
     return reference;
 }
 
@@ -21,7 +25,8 @@ void Document::clear()
     features_.clear();
 }
 
-const std::vector<std::unique_ptr<Feature>>& Document::features() const noexcept
+const std::vector<std::unique_ptr<Feature>>&
+Document::features() const noexcept
 {
     return features_;
 }
