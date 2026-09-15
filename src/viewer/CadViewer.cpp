@@ -326,8 +326,6 @@ bool CadViewer::beginPushPull()
     pushPullDistance_ = 0.0;
     pushPullActive_ = true;
 
-    context_->ClearSelected(Standard_False);
-    context_->Erase(pushPullObject_, Standard_False);
     context_->UpdateCurrentViewer();
 
     setCursor(Qt::SizeVerCursor);
@@ -365,6 +363,20 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
         static_cast<double>(pushPullStartPosition_.y() - position.y()) *
         PushPullUnitsPerPixel;
 
+    if (std::abs(pushPullDistance_) <= PushPullTolerance) {
+        if (!pushPullPreview_.IsNull()) {
+            context_->Remove(pushPullPreview_, Standard_False);
+            pushPullPreview_.Nullify();
+        }
+
+        if (!pushPullObject_.IsNull()) {
+            context_->Display(pushPullObject_, Standard_False);
+        }
+
+        context_->UpdateCurrentViewer();
+        return;
+    }
+
     const TopoDS_Shape previewShape =
         buildPushPullResult(pushPullDistance_);
 
@@ -373,6 +385,9 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
     }
 
     if (pushPullPreview_.IsNull()) {
+        // Keep the original model visible until a real Push/Pull distance
+        // exists. Only then replace it with the preview result.
+        context_->Erase(pushPullObject_, Standard_False);
         pushPullPreview_ = new AIS_Shape(previewShape);
         context_->Display(pushPullPreview_, Standard_False);
     } else {
