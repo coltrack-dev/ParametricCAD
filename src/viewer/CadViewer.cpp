@@ -189,6 +189,8 @@ void CadViewer::setSelectionMode(SelectionMode mode)
         cancelPushPull();
     }
 
+    pushPullArmed_ = false;
+    unsetCursor();
     selectionMode_ = mode;
 
     if (initialized_) {
@@ -426,7 +428,11 @@ void CadViewer::commitPushPull()
     pushPullFace_.Nullify();
     pushPullBaseShape_.Nullify();
     pushPullObject_.Nullify();
-    unsetCursor();
+    if (pushPullArmed_) {
+        setCursor(Qt::CrossCursor);
+    } else {
+        unsetCursor();
+    }
 
     applySelectionMode();
     context_->UpdateCurrentViewer();
@@ -452,7 +458,12 @@ void CadViewer::cancelPushPull()
     pushPullFace_.Nullify();
     pushPullBaseShape_.Nullify();
     pushPullObject_.Nullify();
-    unsetCursor();
+
+    if (pushPullArmed_) {
+        setCursor(Qt::CrossCursor);
+    } else {
+        unsetCursor();
+    }
 
     applySelectionMode();
     context_->UpdateCurrentViewer();
@@ -473,6 +484,14 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
 
         if (event->button() == Qt::RightButton) {
             cancelPushPull();
+            return;
+        }
+    }
+
+    if (pushPullArmed_ && event->button() == Qt::LeftButton) {
+        selectAt(lastMousePosition_, false);
+
+        if (beginPushPull()) {
             return;
         }
     }
@@ -595,13 +614,17 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
         setSelectionMode(SelectionMode::Face);
         return;
     case Qt::Key_P:
-        if (selectionMode_ != SelectionMode::Face) {
-            setSelectionMode(SelectionMode::Face);
-        } else {
-            beginPushPull();
-        }
+        setSelectionMode(SelectionMode::Face);
+        pushPullArmed_ = true;
+        setCursor(Qt::CrossCursor);
         return;
     case Qt::Key_Escape:
+        if (pushPullArmed_) {
+            pushPullArmed_ = false;
+            clearSelection();
+            unsetCursor();
+            return;
+        }
         clearSelection();
         return;
     case Qt::Key_F:

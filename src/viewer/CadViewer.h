@@ -75,6 +75,7 @@ private:
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
 
+    bool pushPullArmed_{false};
     bool pushPullActive_{false};
     double pushPullDistance_{0.0};
     TopoDS_Face pushPullFace_;
