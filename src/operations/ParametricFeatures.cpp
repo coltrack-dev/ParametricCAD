@@ -3,6 +3,7 @@
 #include "operations/BasicFeatures.h"
 
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace cad::parametric {
@@ -16,7 +17,8 @@ void requireFeature(
 {
     if (!feature) {
         throw std::invalid_argument(
-            std::string(parameterName) + " feature must not be null"
+            std::string(parameterName)
+            + " feature must not be null"
         );
     }
 }
@@ -48,9 +50,28 @@ void BoxParametricFeature::setSize(
     markDirty();
 }
 
+double BoxParametricFeature::width() const noexcept
+{
+    return width_;
+}
+
+double BoxParametricFeature::depth() const noexcept
+{
+    return depth_;
+}
+
+double BoxParametricFeature::height() const noexcept
+{
+    return height_;
+}
+
 TopoDS_Shape BoxParametricFeature::build() const
 {
-    return cad::modeling::BasicFeatures::box(width_, depth_, height_);
+    return cad::modeling::BasicFeatures::box(
+        width_,
+        depth_,
+        height_
+    );
 }
 
 CylinderParametricFeature::CylinderParametricFeature(
@@ -76,9 +97,22 @@ void CylinderParametricFeature::setHeight(const double height)
     markDirty();
 }
 
+double CylinderParametricFeature::radius() const noexcept
+{
+    return radius_;
+}
+
+double CylinderParametricFeature::height() const noexcept
+{
+    return height_;
+}
+
 TopoDS_Shape CylinderParametricFeature::build() const
 {
-    return cad::modeling::BasicFeatures::cylinder(radius_, height_);
+    return cad::modeling::BasicFeatures::cylinder(
+        radius_,
+        height_
+    );
 }
 
 ConeFeature::ConeFeature(
@@ -92,6 +126,39 @@ ConeFeature::ConeFeature(
       topRadius_(topRadius),
       height_(height)
 {
+}
+
+void ConeFeature::setBottomRadius(const double radius)
+{
+    bottomRadius_ = radius;
+    markDirty();
+}
+
+void ConeFeature::setTopRadius(const double radius)
+{
+    topRadius_ = radius;
+    markDirty();
+}
+
+void ConeFeature::setHeight(const double height)
+{
+    height_ = height;
+    markDirty();
+}
+
+double ConeFeature::bottomRadius() const noexcept
+{
+    return bottomRadius_;
+}
+
+double ConeFeature::topRadius() const noexcept
+{
+    return topRadius_;
+}
+
+double ConeFeature::height() const noexcept
+{
+    return height_;
 }
 
 TopoDS_Shape ConeFeature::build() const
@@ -112,6 +179,17 @@ SphereFeature::SphereFeature(
 {
 }
 
+void SphereFeature::setRadius(const double radius)
+{
+    radius_ = radius;
+    markDirty();
+}
+
+double SphereFeature::radius() const noexcept
+{
+    return radius_;
+}
+
 TopoDS_Shape SphereFeature::build() const
 {
     return cad::modeling::BasicFeatures::sphere(radius_);
@@ -126,6 +204,28 @@ TorusFeature::TorusFeature(
       majorRadius_(majorRadius),
       minorRadius_(minorRadius)
 {
+}
+
+void TorusFeature::setMajorRadius(const double radius)
+{
+    majorRadius_ = radius;
+    markDirty();
+}
+
+void TorusFeature::setMinorRadius(const double radius)
+{
+    minorRadius_ = radius;
+    markDirty();
+}
+
+double TorusFeature::majorRadius() const noexcept
+{
+    return majorRadius_;
+}
+
+double TorusFeature::minorRadius() const noexcept
+{
+    return minorRadius_;
 }
 
 TopoDS_Shape TorusFeature::build() const
@@ -155,6 +255,18 @@ void ExtrudeFeature::setVector(gp_Vec vector)
     markDirty();
 }
 
+const ParametricFeature::Ptr&
+ExtrudeFeature::profile() const noexcept
+{
+    return profile_;
+}
+
+const gp_Vec&
+ExtrudeFeature::vector() const noexcept
+{
+    return vector_;
+}
+
 TopoDS_Shape ExtrudeFeature::build() const
 {
     return cad::modeling::BasicFeatures::extrude(
@@ -176,6 +288,37 @@ RevolveFeature::RevolveFeature(
 {
     requireFeature(profile_, "profile");
     addDependency(profile_);
+}
+
+void RevolveFeature::setAxis(gp_Ax1 axis)
+{
+    axis_ = std::move(axis);
+    markDirty();
+}
+
+void RevolveFeature::setAngleRadians(
+    const double angleRadians
+)
+{
+    angleRadians_ = angleRadians;
+    markDirty();
+}
+
+const ParametricFeature::Ptr&
+RevolveFeature::profile() const noexcept
+{
+    return profile_;
+}
+
+const gp_Ax1&
+RevolveFeature::axis() const noexcept
+{
+    return axis_;
+}
+
+double RevolveFeature::angleRadians() const noexcept
+{
+    return angleRadians_;
 }
 
 TopoDS_Shape RevolveFeature::build() const
@@ -200,8 +343,35 @@ BooleanFeature::BooleanFeature(
 {
     requireFeature(left_, "left");
     requireFeature(right_, "right");
+
     addDependency(left_);
     addDependency(right_);
+}
+
+void BooleanFeature::setOperation(
+    const BooleanOperation operation
+)
+{
+    operation_ = operation;
+    markDirty();
+}
+
+const ParametricFeature::Ptr&
+BooleanFeature::left() const noexcept
+{
+    return left_;
+}
+
+const ParametricFeature::Ptr&
+BooleanFeature::right() const noexcept
+{
+    return right_;
+}
+
+BooleanOperation
+BooleanFeature::operation() const noexcept
+{
+    return operation_;
 }
 
 TopoDS_Shape BooleanFeature::build() const
@@ -244,6 +414,37 @@ FilletFeature::FilletFeature(
     addDependency(base_);
 }
 
+void FilletFeature::setEdges(
+    std::vector<TopoDS_Edge> edges
+)
+{
+    edges_ = std::move(edges);
+    markDirty();
+}
+
+void FilletFeature::setRadius(const double radius)
+{
+    radius_ = radius;
+    markDirty();
+}
+
+const ParametricFeature::Ptr&
+FilletFeature::base() const noexcept
+{
+    return base_;
+}
+
+const std::vector<TopoDS_Edge>&
+FilletFeature::edges() const noexcept
+{
+    return edges_;
+}
+
+double FilletFeature::radius() const noexcept
+{
+    return radius_;
+}
+
 TopoDS_Shape FilletFeature::build() const
 {
     return cad::modeling::BasicFeatures::fillet(
@@ -256,7 +457,7 @@ TopoDS_Shape FilletFeature::build() const
 ChamferFeature::ChamferFeature(
     std::string id,
     const Ptr& base,
-    std::vector<std::pair<TopoDS_Edge, TopoDS_Face>> edges,
+    std::vector<TopoDS_Edge> edges,
     const double distance
 )
     : ParametricFeature(std::move(id), "Chamfer"),
@@ -266,6 +467,39 @@ ChamferFeature::ChamferFeature(
 {
     requireFeature(base_, "base");
     addDependency(base_);
+}
+
+void ChamferFeature::setEdges(
+    std::vector<TopoDS_Edge> edges
+)
+{
+    edges_ = std::move(edges);
+    markDirty();
+}
+
+void ChamferFeature::setDistance(
+    const double distance
+)
+{
+    distance_ = distance;
+    markDirty();
+}
+
+const ParametricFeature::Ptr&
+ChamferFeature::base() const noexcept
+{
+    return base_;
+}
+
+const std::vector<TopoDS_Edge>&
+ChamferFeature::edges() const noexcept
+{
+    return edges_;
+}
+
+double ChamferFeature::distance() const noexcept
+{
+    return distance_;
 }
 
 TopoDS_Shape ChamferFeature::build() const
@@ -292,6 +526,39 @@ ShellFeature::ShellFeature(
     addDependency(base_);
 }
 
+void ShellFeature::setFacesToRemove(
+    std::vector<TopoDS_Face> faces
+)
+{
+    facesToRemove_ = std::move(faces);
+    markDirty();
+}
+
+void ShellFeature::setThickness(
+    const double thickness
+)
+{
+    thickness_ = thickness;
+    markDirty();
+}
+
+const ParametricFeature::Ptr&
+ShellFeature::base() const noexcept
+{
+    return base_;
+}
+
+const std::vector<TopoDS_Face>&
+ShellFeature::facesToRemove() const noexcept
+{
+    return facesToRemove_;
+}
+
+double ShellFeature::thickness() const noexcept
+{
+    return thickness_;
+}
+
 TopoDS_Shape ShellFeature::build() const
 {
     return cad::modeling::BasicFeatures::shell(
@@ -312,6 +579,25 @@ OffsetFeature::OffsetFeature(
 {
     requireFeature(base_, "base");
     addDependency(base_);
+}
+
+void OffsetFeature::setDistance(
+    const double distance
+)
+{
+    distance_ = distance;
+    markDirty();
+}
+
+const ParametricFeature::Ptr&
+OffsetFeature::base() const noexcept
+{
+    return base_;
+}
+
+double OffsetFeature::distance() const noexcept
+{
+    return distance_;
 }
 
 TopoDS_Shape OffsetFeature::build() const
@@ -335,6 +621,46 @@ LoftFeature::LoftFeature(
 {
 }
 
+void LoftFeature::setSections(
+    std::vector<TopoDS_Wire> sections
+)
+{
+    sections_ = std::move(sections);
+    markDirty();
+}
+
+void LoftFeature::setMakeSolid(
+    const bool makeSolid
+)
+{
+    makeSolid_ = makeSolid;
+    markDirty();
+}
+
+void LoftFeature::setRuled(
+    const bool ruled
+)
+{
+    ruled_ = ruled;
+    markDirty();
+}
+
+const std::vector<TopoDS_Wire>&
+LoftFeature::sections() const noexcept
+{
+    return sections_;
+}
+
+bool LoftFeature::makeSolid() const noexcept
+{
+    return makeSolid_;
+}
+
+bool LoftFeature::ruled() const noexcept
+{
+    return ruled_;
+}
+
 TopoDS_Shape LoftFeature::build() const
 {
     return cad::modeling::BasicFeatures::loft(
@@ -355,6 +681,26 @@ SweepFeature::SweepFeature(
 {
     requireFeature(profile_, "profile");
     addDependency(profile_);
+}
+
+void SweepFeature::setPath(
+    TopoDS_Wire path
+)
+{
+    path_ = std::move(path);
+    markDirty();
+}
+
+const TopoDS_Wire&
+SweepFeature::path() const noexcept
+{
+    return path_;
+}
+
+const ParametricFeature::Ptr&
+SweepFeature::profile() const noexcept
+{
+    return profile_;
 }
 
 TopoDS_Shape SweepFeature::build() const

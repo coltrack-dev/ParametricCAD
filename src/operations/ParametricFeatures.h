@@ -7,10 +7,9 @@
 #include <TopoDS_Wire.hxx>
 
 #include <gp_Ax1.hxx>
-#include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
-#include <utility>
+#include <string>
 #include <vector>
 
 namespace cad::parametric {
@@ -26,6 +25,10 @@ public:
     );
 
     void setSize(double width, double depth, double height);
+
+    double width() const noexcept;
+    double depth() const noexcept;
+    double height() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -48,6 +51,9 @@ public:
     void setRadius(double radius);
     void setHeight(double height);
 
+    double radius() const noexcept;
+    double height() const noexcept;
+
 protected:
     TopoDS_Shape build() const override;
 
@@ -66,6 +72,14 @@ public:
         double height
     );
 
+    void setBottomRadius(double radius);
+    void setTopRadius(double radius);
+    void setHeight(double height);
+
+    double bottomRadius() const noexcept;
+    double topRadius() const noexcept;
+    double height() const noexcept;
+
 protected:
     TopoDS_Shape build() const override;
 
@@ -79,6 +93,9 @@ class SphereFeature final : public ParametricFeature
 {
 public:
     SphereFeature(std::string id, double radius);
+
+    void setRadius(double radius);
+    double radius() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -95,6 +112,12 @@ public:
         double majorRadius,
         double minorRadius
     );
+
+    void setMajorRadius(double radius);
+    void setMinorRadius(double radius);
+
+    double majorRadius() const noexcept;
+    double minorRadius() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -115,6 +138,9 @@ public:
 
     void setVector(gp_Vec vector);
 
+    const Ptr& profile() const noexcept;
+    const gp_Vec& vector() const noexcept;
+
 protected:
     TopoDS_Shape build() const override;
 
@@ -132,6 +158,13 @@ public:
         gp_Ax1 axis,
         double angleRadians
     );
+
+    void setAxis(gp_Ax1 axis);
+    void setAngleRadians(double angleRadians);
+
+    const Ptr& profile() const noexcept;
+    const gp_Ax1& axis() const noexcept;
+    double angleRadians() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -159,6 +192,12 @@ public:
         BooleanOperation operation
     );
 
+    void setOperation(BooleanOperation operation);
+
+    const Ptr& left() const noexcept;
+    const Ptr& right() const noexcept;
+    BooleanOperation operation() const noexcept;
+
 protected:
     TopoDS_Shape build() const override;
 
@@ -178,6 +217,13 @@ public:
         double radius
     );
 
+    void setEdges(std::vector<TopoDS_Edge> edges);
+    void setRadius(double radius);
+
+    const Ptr& base() const noexcept;
+    const std::vector<TopoDS_Edge>& edges() const noexcept;
+    double radius() const noexcept;
+
 protected:
     TopoDS_Shape build() const override;
 
@@ -193,16 +239,23 @@ public:
     ChamferFeature(
         std::string id,
         const Ptr& base,
-        std::vector<std::pair<TopoDS_Edge, TopoDS_Face>> edges,
+        std::vector<TopoDS_Edge> edges,
         double distance
     );
+
+    void setEdges(std::vector<TopoDS_Edge> edges);
+    void setDistance(double distance);
+
+    const Ptr& base() const noexcept;
+    const std::vector<TopoDS_Edge>& edges() const noexcept;
+    double distance() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
 
 private:
     Ptr base_;
-    std::vector<TopoDS_Edge> edges;
+    std::vector<TopoDS_Edge> edges_;
     double distance_;
 };
 
@@ -215,6 +268,13 @@ public:
         std::vector<TopoDS_Face> facesToRemove,
         double thickness
     );
+
+    void setFacesToRemove(std::vector<TopoDS_Face> faces);
+    void setThickness(double thickness);
+
+    const Ptr& base() const noexcept;
+    const std::vector<TopoDS_Face>& facesToRemove() const noexcept;
+    double thickness() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -234,6 +294,11 @@ public:
         double distance
     );
 
+    void setDistance(double distance);
+
+    const Ptr& base() const noexcept;
+    double distance() const noexcept;
+
 protected:
     TopoDS_Shape build() const override;
 
@@ -252,6 +317,14 @@ public:
         bool ruled = false
     );
 
+    void setSections(std::vector<TopoDS_Wire> sections);
+    void setMakeSolid(bool makeSolid);
+    void setRuled(bool ruled);
+
+    const std::vector<TopoDS_Wire>& sections() const noexcept;
+    bool makeSolid() const noexcept;
+    bool ruled() const noexcept;
+
 protected:
     TopoDS_Shape build() const override;
 
@@ -269,6 +342,11 @@ public:
         TopoDS_Wire path,
         const Ptr& profile
     );
+
+    void setPath(TopoDS_Wire path);
+
+    const TopoDS_Wire& path() const noexcept;
+    const Ptr& profile() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
