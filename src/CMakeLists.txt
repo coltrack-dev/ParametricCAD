@@ -49,6 +49,8 @@ target_link_libraries(ParametricCAD
         TKTopAlgo
 
         TKBO
+        TKFillet
+        TKOffset
 
         # Primitive modeling operations
         TKPrim

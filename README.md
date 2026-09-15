@@ -1,6 +1,6 @@
 # ParametricCAD
 
-ParametricCAD is an experimental desktop CAD application written in C++ using Qt 6 and Open CASCADE Technology (OCCT).
+ParametricCAD is a simple desktop CAD application written in C++ using Qt 6 and Open CASCADE Technology (OCCT).
 
 The project is intended as a public portfolio project for exploring CAD architecture, B-Rep geometry, interactive 3D modeling, parametric operations, and SketchUp-like direct modeling workflows.
 
