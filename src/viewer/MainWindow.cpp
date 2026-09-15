@@ -3,8 +3,10 @@
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "viewer/CadViewer.h"
+#include "viewer/FeatureEditorPanel.h"
 
 #include <QAction>
+#include <QDockWidget>
 #include <QMenu>
 #include <QMenuBar>
 #include <QStatusBar>
@@ -20,7 +22,63 @@ MainWindow::MainWindow(QWidget* parent)
     setCentralWidget(viewer_);
 
     createActions();
+    createParametricPanel();
     statusBar()->showMessage("Ready");
+}
+
+
+void MainWindow::createParametricPanel()
+{
+    auto* dockWidget =
+        new QDockWidget("Model", this);
+
+    dockWidget->setObjectName("ParametricModelDock");
+
+    featureEditorPanel_ =
+        new FeatureEditorPanel(dockWidget);
+
+    featureEditorPanel_->setBody(
+        &parametricBody_
+    );
+
+    featureEditorPanel_->setModelChangedHandler(
+        [this]() {
+            refreshParametricModel();
+        }
+    );
+
+    dockWidget->setWidget(featureEditorPanel_);
+
+    addDockWidget(
+        Qt::LeftDockWidgetArea,
+        dockWidget
+    );
+}
+
+void MainWindow::refreshParametricModel()
+{
+    if (!parametricBody_.recompute()) {
+        statusBar()->showMessage(
+            QString::fromStdString(
+                parametricBody_.lastError()
+            ),
+            5000
+        );
+        return;
+    }
+
+    viewer_->clear();
+
+    if (!parametricBody_.shape().IsNull()) {
+        viewer_->display(
+            parametricBody_.shape()
+        );
+    }
+
+    statusBar()->showMessage(
+        "Parametric model recomputed",
+        2000
+    );
 }
 
 void MainWindow::createActions()

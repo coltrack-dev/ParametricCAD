@@ -2,6 +2,8 @@ set(PARAMETRIC_CAD_SOURCES
     app/main.cpp
     viewer/MainWindow.cpp
     viewer/MainWindow.h
+    viewer/FeatureEditorPanel.cpp
+    viewer/FeatureEditorPanel.h
     viewer/CadViewer.cpp
     viewer/CadViewer.h
     model/Document.cpp

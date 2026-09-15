@@ -2,8 +2,10 @@
 
 #include <QMainWindow>
 #include "model/Document.h"
+#include "model/Body.h"
 
 class CadViewer;
+class FeatureEditorPanel;
 
 class MainWindow final : public QMainWindow
 {
@@ -14,10 +16,14 @@ public:
 
 private:
     void createActions();
+    void createParametricPanel();
+    void refreshParametricModel();
     void createBox();
     void createCylinder();
     void clearDocument();
 
     Document document_;
+    cad::parametric::Body parametricBody_;
     CadViewer* viewer_{nullptr};
+    FeatureEditorPanel* featureEditorPanel_{nullptr};
 };
