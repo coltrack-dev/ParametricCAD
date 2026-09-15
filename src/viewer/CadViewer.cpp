@@ -40,8 +40,11 @@ void CadViewer::initializeOcc()
         return;
     }
 
-    Handle(Aspect_DisplayConnection) displayConnection = new Aspect_DisplayConnection();
-    Handle(OpenGl_GraphicDriver) graphicDriver = new OpenGl_GraphicDriver(displayConnection);
+    // The graphic driver and Xw_Window must use the same display connection.
+    displayConnection_ = new Aspect_DisplayConnection();
+
+    Handle(OpenGl_GraphicDriver) graphicDriver =
+        new OpenGl_GraphicDriver(displayConnection_);
 
     viewer_ = new V3d_Viewer(graphicDriver);
     viewer_->SetDefaultLights();
@@ -53,21 +56,38 @@ void CadViewer::initializeOcc()
     bindWindow();
 
     view_->SetBackgroundColor(Quantity_NOC_GRAY20);
-    view_->TriedronDisplay(Aspect_TOTP_LEFT_LOWER, Quantity_NOC_WHITE, 0.08, V3d_ZBUFFER);
+
+    view_->TriedronDisplay(
+        Aspect_TOTP_LEFT_LOWER,
+        Quantity_NOC_WHITE,
+        0.08,
+        V3d_ZBUFFER
+    );
+
     view_->MustBeResized();
 
     initialized_ = true;
 }
 
-
 void CadViewer::bindWindow()
 {
 #ifdef _WIN32
-    Handle(WNT_Window) window = new WNT_Window(reinterpret_cast<Aspect_Handle>(winId()));
+
+    Handle(WNT_Window) window =
+        new WNT_Window(
+            reinterpret_cast<Aspect_Handle>(winId())
+        );
+
 #else
-    Handle(Aspect_DisplayConnection) displayConnection = new Aspect_DisplayConnection();
-    Handle(Xw_Window) window = new Xw_Window(displayConnection,
-                                             static_cast<Aspect_Drawable>(winId()));
+
+    const WId nativeWindowId = winId();
+
+    Handle(Xw_Window) window =
+        new Xw_Window(
+            displayConnection_,
+            static_cast<Aspect_Drawable>(nativeWindowId)
+        );
+
 #endif
 
     view_->SetWindow(window);
@@ -77,10 +97,10 @@ void CadViewer::bindWindow()
     }
 }
 
-
 void CadViewer::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
+
     initializeOcc();
 }
 
@@ -108,8 +128,14 @@ void CadViewer::display(const TopoDS_Shape& shape)
 {
     initializeOcc();
 
-    Handle(AIS_Shape) interactiveShape = new AIS_Shape(shape);
-    context_->Display(interactiveShape, Standard_True);
+    Handle(AIS_Shape) interactiveShape =
+        new AIS_Shape(shape);
+
+    context_->Display(
+        interactiveShape,
+        Standard_True
+    );
+
     fitAll();
 }
 
@@ -135,9 +161,12 @@ void CadViewer::fitAll()
 
 void CadViewer::mousePressEvent(QMouseEvent* event)
 {
-    lastMousePosition_ = event->position().toPoint();
+    lastMousePosition_ =
+        event->position().toPoint();
 
-    if (initialized_ && event->button() == Qt::LeftButton) {
+    if (initialized_ &&
+        event->button() == Qt::LeftButton) {
+
         view_->StartRotation(
             lastMousePosition_.x(),
             lastMousePosition_.y()
@@ -153,21 +182,31 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
-    const QPoint currentPosition = event->position().toPoint();
+    const QPoint currentPosition =
+        event->position().toPoint();
 
     if (event->buttons().testFlag(Qt::LeftButton)) {
+
         view_->Rotation(
             currentPosition.x(),
             currentPosition.y()
         );
-    } else if (event->buttons().testFlag(Qt::MiddleButton)) {
+
+    } else if (
+        event->buttons().testFlag(Qt::MiddleButton)) {
+
         const int deltaX =
-            currentPosition.x() - lastMousePosition_.x();
+            currentPosition.x() -
+            lastMousePosition_.x();
 
         const int deltaY =
-            lastMousePosition_.y() - currentPosition.y();
+            lastMousePosition_.y() -
+            currentPosition.y();
 
-        view_->Pan(deltaX, deltaY);
+        view_->Pan(
+            deltaX,
+            deltaY
+        );
     }
 
     lastMousePosition_ = currentPosition;
@@ -179,7 +218,11 @@ void CadViewer::wheelEvent(QWheelEvent* event)
         return;
     }
 
-    const double factor = event->angleDelta().y() > 0 ? 0.8 : 1.25;
+    const double factor =
+        event->angleDelta().y() > 0
+            ? 0.8
+            : 1.25;
+
     view_->SetZoom(factor);
     view_->Redraw();
 }
