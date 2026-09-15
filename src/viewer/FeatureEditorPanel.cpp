@@ -3,9 +3,10 @@
 #include "model/ParametricFeature.h"
 #include "operations/ParametricFeatures.h"
 
+#include <QAbstractItemView>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
-#include <QHBoxLayout>
+#include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QTreeWidget>
@@ -14,6 +15,7 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -57,26 +59,77 @@ void FeatureEditorPanel::setModelChangedHandler(
 void FeatureEditorPanel::createUi()
 {
     auto* rootLayout = new QVBoxLayout(this);
+    rootLayout->setContentsMargins(6, 6, 6, 6);
+    rootLayout->setSpacing(6);
 
-    auto* buttonLayout = new QHBoxLayout();
+    auto* primitivesTitle =
+        new QLabel("<b>Primitives</b>", this);
+    rootLayout->addWidget(primitivesTitle);
+
+    auto* primitiveLayout = new QGridLayout();
 
     auto* boxButton = new QPushButton("Box", this);
     auto* cylinderButton = new QPushButton("Cylinder", this);
+    auto* coneButton = new QPushButton("Cone", this);
+    auto* sphereButton = new QPushButton("Sphere", this);
+    auto* torusButton = new QPushButton("Torus", this);
 
-    buttonLayout->addWidget(boxButton);
-    buttonLayout->addWidget(cylinderButton);
+    primitiveLayout->addWidget(boxButton, 0, 0);
+    primitiveLayout->addWidget(cylinderButton, 0, 1);
+    primitiveLayout->addWidget(coneButton, 1, 0);
+    primitiveLayout->addWidget(sphereButton, 1, 1);
+    primitiveLayout->addWidget(torusButton, 2, 0, 1, 2);
 
-    rootLayout->addLayout(buttonLayout);
+    rootLayout->addLayout(primitiveLayout);
+
+    auto* booleanTitle =
+        new QLabel("<b>Boolean</b>", this);
+    rootLayout->addWidget(booleanTitle);
+
+    auto* booleanLayout = new QGridLayout();
+
+    auto* fuseButton = new QPushButton("Fuse", this);
+    auto* cutButton = new QPushButton("Cut", this);
+    auto* commonButton = new QPushButton("Common", this);
+
+    fuseButton->setToolTip(
+        "Select two features in the tree with Ctrl, then Fuse"
+    );
+    cutButton->setToolTip(
+        "Select two features: first is base, second is cutting tool"
+    );
+    commonButton->setToolTip(
+        "Select two features and keep their intersection"
+    );
+
+    booleanLayout->addWidget(fuseButton, 0, 0);
+    booleanLayout->addWidget(cutButton, 0, 1);
+    booleanLayout->addWidget(commonButton, 1, 0, 1, 2);
+
+    rootLayout->addLayout(booleanLayout);
+
+    messageLabel_ = new QLabel(this);
+    messageLabel_->setWordWrap(true);
+    messageLabel_->hide();
+    rootLayout->addWidget(messageLabel_);
 
     tree_ = new QTreeWidget(this);
     tree_->setHeaderHidden(true);
+    tree_->setSelectionMode(
+        QAbstractItemView::ExtendedSelection
+    );
+    tree_->setMinimumWidth(260);
+
     rootLayout->addWidget(tree_, 2);
 
-    auto* title = new QLabel("<b>Properties</b>", this);
-    rootLayout->addWidget(title);
+    auto* propertiesTitle =
+        new QLabel("<b>Properties</b>", this);
+    rootLayout->addWidget(propertiesTitle);
 
     propertiesWidget_ = new QWidget(this);
-    propertiesLayout_ = new QFormLayout(propertiesWidget_);
+    propertiesLayout_ =
+        new QFormLayout(propertiesWidget_);
+
     rootLayout->addWidget(propertiesWidget_, 1);
 
     connect(
@@ -91,6 +144,63 @@ void FeatureEditorPanel::createUi()
         &QPushButton::clicked,
         this,
         [this]() { addCylinder(); }
+    );
+
+    connect(
+        coneButton,
+        &QPushButton::clicked,
+        this,
+        [this]() { addCone(); }
+    );
+
+    connect(
+        sphereButton,
+        &QPushButton::clicked,
+        this,
+        [this]() { addSphere(); }
+    );
+
+    connect(
+        torusButton,
+        &QPushButton::clicked,
+        this,
+        [this]() { addTorus(); }
+    );
+
+    connect(
+        fuseButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            addBoolean(
+                cad::parametric::BooleanOperation::Fuse,
+                "Fuse"
+            );
+        }
+    );
+
+    connect(
+        cutButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            addBoolean(
+                cad::parametric::BooleanOperation::Cut,
+                "Cut"
+            );
+        }
+    );
+
+    connect(
+        commonButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            addBoolean(
+                cad::parametric::BooleanOperation::Common,
+                "Common"
+            );
+        }
     );
 
     connect(
@@ -127,21 +237,18 @@ void FeatureEditorPanel::addBox()
     const std::string id =
         "box-" + std::to_string(nextFeatureNumber_++);
 
-    auto feature =
-        std::make_shared<cad::parametric::BoxParametricFeature>(
+    body_->addFeature(
+        std::make_shared<
+            cad::parametric::BoxParametricFeature
+        >(
             id,
             100.0,
             70.0,
             30.0
-        );
+        )
+    );
 
-    body_->addFeature(feature);
-    body_->recompute();
-    refresh();
-
-    if (modelChangedHandler_) {
-        modelChangedHandler_();
-    }
+    recomputeAndNotify("Box added");
 }
 
 void FeatureEditorPanel::addCylinder()
@@ -153,24 +260,170 @@ void FeatureEditorPanel::addCylinder()
     const std::string id =
         "cylinder-" + std::to_string(nextFeatureNumber_++);
 
-    auto feature =
-        std::make_shared<cad::parametric::CylinderParametricFeature>(
+    body_->addFeature(
+        std::make_shared<
+            cad::parametric::CylinderParametricFeature
+        >(
             id,
             25.0,
             60.0
+        )
+    );
+
+    recomputeAndNotify("Cylinder added");
+}
+
+void FeatureEditorPanel::addCone()
+{
+    if (body_ == nullptr) {
+        return;
+    }
+
+    const std::string id =
+        "cone-" + std::to_string(nextFeatureNumber_++);
+
+    body_->addFeature(
+        std::make_shared<cad::parametric::ConeFeature>(
+            id,
+            30.0,
+            15.0,
+            60.0
+        )
+    );
+
+    recomputeAndNotify("Cone added");
+}
+
+void FeatureEditorPanel::addSphere()
+{
+    if (body_ == nullptr) {
+        return;
+    }
+
+    const std::string id =
+        "sphere-" + std::to_string(nextFeatureNumber_++);
+
+    body_->addFeature(
+        std::make_shared<cad::parametric::SphereFeature>(
+            id,
+            35.0
+        )
+    );
+
+    recomputeAndNotify("Sphere added");
+}
+
+void FeatureEditorPanel::addTorus()
+{
+    if (body_ == nullptr) {
+        return;
+    }
+
+    const std::string id =
+        "torus-" + std::to_string(nextFeatureNumber_++);
+
+    body_->addFeature(
+        std::make_shared<cad::parametric::TorusFeature>(
+            id,
+            45.0,
+            12.0
+        )
+    );
+
+    recomputeAndNotify("Torus added");
+}
+
+void FeatureEditorPanel::addBoolean(
+    const cad::parametric::BooleanOperation operation,
+    const QString& operationName
+)
+{
+    if (body_ == nullptr) {
+        return;
+    }
+
+    const std::vector<FeaturePtr> features =
+        selectedFeatures();
+
+    if (features.size() != 2) {
+        setPanelMessage(
+            "Select exactly two features in the tree. "
+            "Use Ctrl+Click for multi-selection.",
+            true
+        );
+        return;
+    }
+
+    const std::string id =
+        operationName.toLower().toStdString()
+        + "-"
+        + std::to_string(nextFeatureNumber_++);
+
+    auto booleanFeature =
+        std::make_shared<cad::parametric::BooleanFeature>(
+            id,
+            features[0],
+            features[1],
+            operation
         );
 
-    body_->addFeature(feature);
-    body_->recompute();
-    refresh();
+    booleanFeature->setName(
+        operationName.toStdString()
+    );
 
-    if (modelChangedHandler_) {
-        modelChangedHandler_();
+    body_->addFeature(booleanFeature);
+
+    recomputeAndNotify(
+        operationName + " added"
+    );
+}
+
+std::vector<FeatureEditorPanel::FeaturePtr>
+FeatureEditorPanel::selectedFeatures() const
+{
+    std::vector<FeaturePtr> result;
+
+    if (body_ == nullptr || tree_ == nullptr) {
+        return result;
     }
+
+    const QList<QTreeWidgetItem*> selectedItems =
+        tree_->selectedItems();
+
+    for (QTreeWidgetItem* item : selectedItems) {
+        if (item == nullptr) {
+            continue;
+        }
+
+        const QString id =
+            item->data(0, FeatureIdRole).toString();
+
+        if (id.isEmpty()) {
+            continue;
+        }
+
+        FeaturePtr feature =
+            body_->findFeature(id.toStdString());
+
+        if (feature) {
+            result.push_back(feature);
+        }
+    }
+
+    return result;
 }
 
 void FeatureEditorPanel::refresh()
 {
+    QString currentId;
+
+    if (tree_->currentItem() != nullptr) {
+        currentId =
+            tree_->currentItem()
+                ->data(0, FeatureIdRole)
+                .toString();
+    }
+
     tree_->clear();
 
     auto* bodyItem =
@@ -182,7 +435,9 @@ void FeatureEditorPanel::refresh()
         return;
     }
 
-    for (const auto& feature : body_->features()) {
+    QTreeWidgetItem* currentItemToRestore = nullptr;
+
+    for (const FeaturePtr& feature : body_->features()) {
         if (!feature) {
             continue;
         }
@@ -200,16 +455,30 @@ void FeatureEditorPanel::refresh()
         }
 
         auto* item =
-            new QTreeWidgetItem(bodyItem, QStringList{title});
+            new QTreeWidgetItem(
+                bodyItem,
+                QStringList{title}
+            );
+
+        const QString id =
+            QString::fromStdString(feature->id());
 
         item->setData(
             0,
             FeatureIdRole,
-            QString::fromStdString(feature->id())
+            id
         );
+
+        if (id == currentId) {
+            currentItemToRestore = item;
+        }
     }
 
-    clearProperties();
+    if (currentItemToRestore != nullptr) {
+        tree_->setCurrentItem(currentItemToRestore);
+    } else {
+        clearProperties();
+    }
 }
 
 void FeatureEditorPanel::showFeature(
@@ -227,7 +496,7 @@ void FeatureEditorPanel::showFeature(
 }
 
 void FeatureEditorPanel::rebuildProperties(
-    const std::shared_ptr<cad::parametric::ParametricFeature>& feature
+    const FeaturePtr& feature
 )
 {
     clearProperties();
@@ -252,17 +521,46 @@ void FeatureEditorPanel::rebuildProperties(
         )
     );
 
+    if (feature->state()
+        == cad::parametric::FeatureState::Failed) {
+
+        auto* errorLabel =
+            new QLabel(
+                QString::fromStdString(feature->error()),
+                propertiesWidget_
+            );
+
+        errorLabel->setWordWrap(true);
+        errorLabel->setStyleSheet(
+            "QLabel { color: #c0392b; }"
+        );
+
+        propertiesLayout_->addRow(
+            "Error",
+            errorLabel
+        );
+    }
+
     if (auto box =
             std::dynamic_pointer_cast<
                 cad::parametric::BoxParametricFeature
             >(feature)) {
 
         auto* width =
-            makeLengthEditor(propertiesWidget_, box->width());
+            makeLengthEditor(
+                propertiesWidget_,
+                box->width()
+            );
         auto* depth =
-            makeLengthEditor(propertiesWidget_, box->depth());
+            makeLengthEditor(
+                propertiesWidget_,
+                box->depth()
+            );
         auto* height =
-            makeLengthEditor(propertiesWidget_, box->height());
+            makeLengthEditor(
+                propertiesWidget_,
+                box->height()
+            );
 
         const auto apply =
             [this, box, width, depth, height]() {
@@ -271,6 +569,7 @@ void FeatureEditorPanel::rebuildProperties(
                     depth->value(),
                     height->value()
                 );
+
                 commitFeatureChange(box);
             };
 
@@ -311,7 +610,6 @@ void FeatureEditorPanel::rebuildProperties(
                 propertiesWidget_,
                 cylinder->radius()
             );
-
         auto* height =
             makeLengthEditor(
                 propertiesWidget_,
@@ -343,11 +641,198 @@ void FeatureEditorPanel::rebuildProperties(
         return;
     }
 
+    if (auto cone =
+            std::dynamic_pointer_cast<
+                cad::parametric::ConeFeature
+            >(feature)) {
+
+        auto* bottomRadius =
+            makeLengthEditor(
+                propertiesWidget_,
+                cone->bottomRadius()
+            );
+        auto* topRadius =
+            makeLengthEditor(
+                propertiesWidget_,
+                cone->topRadius()
+            );
+        auto* height =
+            makeLengthEditor(
+                propertiesWidget_,
+                cone->height()
+            );
+
+        connect(
+            bottomRadius,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, cone](const double value) {
+                cone->setBottomRadius(value);
+                commitFeatureChange(cone);
+            }
+        );
+
+        connect(
+            topRadius,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, cone](const double value) {
+                cone->setTopRadius(value);
+                commitFeatureChange(cone);
+            }
+        );
+
+        connect(
+            height,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, cone](const double value) {
+                cone->setHeight(value);
+                commitFeatureChange(cone);
+            }
+        );
+
+        propertiesLayout_->addRow(
+            "Bottom radius",
+            bottomRadius
+        );
+        propertiesLayout_->addRow(
+            "Top radius",
+            topRadius
+        );
+        propertiesLayout_->addRow(
+            "Height",
+            height
+        );
+        return;
+    }
+
+    if (auto sphere =
+            std::dynamic_pointer_cast<
+                cad::parametric::SphereFeature
+            >(feature)) {
+
+        auto* radius =
+            makeLengthEditor(
+                propertiesWidget_,
+                sphere->radius()
+            );
+
+        connect(
+            radius,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, sphere](const double value) {
+                sphere->setRadius(value);
+                commitFeatureChange(sphere);
+            }
+        );
+
+        propertiesLayout_->addRow("Radius", radius);
+        return;
+    }
+
+    if (auto torus =
+            std::dynamic_pointer_cast<
+                cad::parametric::TorusFeature
+            >(feature)) {
+
+        auto* majorRadius =
+            makeLengthEditor(
+                propertiesWidget_,
+                torus->majorRadius()
+            );
+        auto* minorRadius =
+            makeLengthEditor(
+                propertiesWidget_,
+                torus->minorRadius()
+            );
+
+        connect(
+            majorRadius,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, torus](const double value) {
+                torus->setMajorRadius(value);
+                commitFeatureChange(torus);
+            }
+        );
+
+        connect(
+            minorRadius,
+            qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this,
+            [this, torus](const double value) {
+                torus->setMinorRadius(value);
+                commitFeatureChange(torus);
+            }
+        );
+
+        propertiesLayout_->addRow(
+            "Major radius",
+            majorRadius
+        );
+        propertiesLayout_->addRow(
+            "Minor radius",
+            minorRadius
+        );
+        return;
+    }
+
+    if (auto booleanFeature =
+            std::dynamic_pointer_cast<
+                cad::parametric::BooleanFeature
+            >(feature)) {
+
+        QString operation;
+
+        switch (booleanFeature->operation()) {
+            case cad::parametric::BooleanOperation::Fuse:
+                operation = "Fuse";
+                break;
+            case cad::parametric::BooleanOperation::Cut:
+                operation = "Cut";
+                break;
+            case cad::parametric::BooleanOperation::Common:
+                operation = "Common";
+                break;
+        }
+
+        propertiesLayout_->addRow(
+            "Operation",
+            new QLabel(operation, propertiesWidget_)
+        );
+
+        propertiesLayout_->addRow(
+            "Left",
+            new QLabel(
+                QString::fromStdString(
+                    booleanFeature->left()->name()
+                ),
+                propertiesWidget_
+            )
+        );
+
+        propertiesLayout_->addRow(
+            "Right",
+            new QLabel(
+                QString::fromStdString(
+                    booleanFeature->right()->name()
+                ),
+                propertiesWidget_
+            )
+        );
+
+        return;
+    }
+
     auto* info =
         new QLabel(
-            "No dedicated editor for this feature yet.",
+            "This feature is part of the parametric history. "
+            "A specialized editor will be added later.",
             propertiesWidget_
         );
+
     info->setWordWrap(true);
     propertiesLayout_->addRow(info);
 }
@@ -369,7 +854,7 @@ void FeatureEditorPanel::clearProperties()
 }
 
 void FeatureEditorPanel::commitFeatureChange(
-    const std::shared_ptr<cad::parametric::ParametricFeature>& feature
+    const FeaturePtr& feature
 )
 {
     if (body_ == nullptr || !feature) {
@@ -377,11 +862,65 @@ void FeatureEditorPanel::commitFeatureChange(
     }
 
     body_->markDirtyFrom(feature->id());
-    body_->recompute();
+
+    recomputeAndNotify(
+        "Feature updated"
+    );
+}
+
+void FeatureEditorPanel::recomputeAndNotify(
+    const QString& successMessage
+)
+{
+    if (body_ == nullptr) {
+        return;
+    }
+
+    if (!body_->recompute()) {
+        setPanelMessage(
+            QString::fromStdString(
+                body_->lastError()
+            ),
+            true
+        );
+
+        refresh();
+
+        if (modelChangedHandler_) {
+            modelChangedHandler_();
+        }
+
+        return;
+    }
+
+    setPanelMessage(
+        successMessage,
+        false
+    );
+
+    refresh();
 
     if (modelChangedHandler_) {
         modelChangedHandler_();
     }
+}
 
-    refresh();
+void FeatureEditorPanel::setPanelMessage(
+    const QString& message,
+    const bool error
+)
+{
+    if (messageLabel_ == nullptr) {
+        return;
+    }
+
+    messageLabel_->setText(message);
+
+    messageLabel_->setStyleSheet(
+        error
+            ? "QLabel { color: #c0392b; font-weight: 600; }"
+            : "QLabel { color: #2e7d32; }"
+    );
+
+    messageLabel_->setVisible(!message.isEmpty());
 }
