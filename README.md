@@ -1,201 +1,306 @@
 # ParametricCAD
 
-pet-project CAD-системы на **C++20 + Qt 6 + Open CASCADE (OCCT)**,
-подготовленный для разработки в **CLion**.
+ParametricCAD is an experimental desktop CAD application written in C++ using Qt 6 and Open CASCADE Technology (OCCT).
 
-## Что уже реализовано
+The project is intended as a public portfolio project for exploring CAD architecture, B-Rep geometry, interactive 3D modeling, parametric operations, and SketchUp-like direct modeling workflows.
 
-MVP-0:
+## Current Features
 
-- CMake-проект для CLion;
-- Qt 6 desktop application;
-- интеграция с Open CASCADE;
-- 3D viewer;
-- координатный trihedron;
-- создание Box / Cylinder;
-- Fit All;
-- удаление объектов сцены;
-- простая модель `Document`;
-- заготовка feature-архитектуры;
-- unit-тест базовой геометрии без внешнего test framework.
+### Primitive geometry
 
-Следующие этапы:
+- Box creation
+- Cylinder creation
+- Open CASCADE B-Rep geometry
+- Interactive 3D viewport
 
-1. selection граней/рёбер;
-2. Sketch;
-3. Extrude/Revolve;
-4. Feature tree;
-5. dependency graph + recompute;
-6. Boolean operations;
-7. Fillet/Chamfer;
-8. STEP import/export;
-9. undo/redo;
-10. persistence.
+### Selection
 
-## Зависимости
+The viewer supports selection of different topology levels:
 
-Нужны:
+- Object
+- Edge
+- Face
 
-- CMake >= 3.24
-- C++20 compiler
+Keyboard shortcuts:
+
+| Key | Action |
+|---|---|
+| `1` | Object selection |
+| `2` | Edge selection |
+| `3` | Face selection |
+| `Esc` | Clear selection / cancel current tool |
+
+Geometry under the mouse cursor is highlighted before selection.
+
+### Push / Pull
+
+A SketchUp-inspired Push/Pull tool is available for planar faces.
+
+Workflow:
+
+1. Press `P` or select **Push/Pull** from the toolbar.
+2. Move the cursor over a planar face.
+3. Click the face.
+4. Move the mouse to define the extrusion distance.
+5. Click again to confirm.
+6. Press `Esc` to cancel.
+
+Push/Pull uses Open CASCADE operations internally:
+
+- `BRepPrimAPI_MakePrism`
+- `BRepAlgoAPI_Fuse`
+- `BRepAlgoAPI_Cut`
+
+Positive extrusion extends the solid.
+
+Negative extrusion can create a cut into the existing solid.
+
+> Push/Pull is currently an experimental direct-modeling operation. Integration with the parametric feature history is planned.
+
+## X-Ray / Select Through
+
+ParametricCAD includes an experimental X-Ray mode for working with geometry hidden behind visible faces.
+
+Press:
+
+```text
+X
+```
+
+or use the **X-Ray** button on the toolbar.
+
+When X-Ray is enabled:
+
+- solids become semi-transparent;
+- hidden geometry remains visible;
+- the toolbar clearly shows that X-Ray mode is active;
+- `Alt + Left Click` can cycle through detected faces under the cursor.
+
+Example:
+
+```text
+P
+→ X-Ray
+→ move cursor over the model
+→ Alt + Left Click until the required rear face is highlighted
+→ move mouse
+→ Left Click to confirm Push/Pull
+```
+
+X-Ray can be disabled by pressing `X` again.
+
+## Toolbar
+
+The viewport contains a modeling toolbar with the main interaction modes:
+
+```text
+Object | Edge | Face | Push/Pull | X-Ray | Fit
+```
+
+The toolbar remains synchronized with keyboard shortcuts.
+
+The currently active tool or mode is visually highlighted.
+
+When X-Ray is enabled, an additional visible status indicator is displayed.
+
+## View Navigation
+
+Mouse controls are inspired by common 3D modeling applications.
+
+| Input | Action |
+|---|---|
+| Middle Mouse + drag | Orbit |
+| Shift + Middle Mouse + drag | Pan |
+| Mouse Wheel | Zoom |
+| `F` | Fit model to view |
+
+## Technology Stack
+
+- C++17/20
 - Qt 6
-- Open CASCADE Technology (OCCT)
-- CLion
+- Open CASCADE Technology
+- CMake
+- Ninja / Make
+- OpenGL
 
-### Ubuntu/Debian
+The project currently targets Linux and is being developed and tested primarily on Linux.
 
-Названия пакетов OCCT зависят от версии дистрибутива. Qt обычно:
+## Project Structure
+
+```text
+ParametricCAD/
+├── CMakeLists.txt
+├── src/
+│   ├── app/
+│   │   └── main.cpp
+│   ├── model/
+│   │   ├── Document.cpp
+│   │   └── Feature.cpp
+│   ├── operations/
+│   │   ├── BoxFeature.cpp
+│   │   └── CylinderFeature.cpp
+│   └── viewer/
+│       ├── CadViewer.cpp
+│       ├── CadViewer.h
+│       ├── MainWindow.cpp
+│       └── MainWindow.h
+└── README.md
+```
+
+## Build
+
+### Requirements
+
+Install:
+
+- C++ compiler with C++17 or newer support
+- CMake
+- Qt 6
+- Open CASCADE Technology
+
+Example packages on Debian/Ubuntu-based systems may include:
 
 ```bash
-sudo apt update
-sudo apt install build-essential cmake ninja-build qt6-base-dev libgl1-mesa-dev
+sudo apt install \
+    build-essential \
+    cmake \
+    ninja-build \
+    qt6-base-dev \
+    libocct-foundation-dev \
+    libocct-modeling-data-dev \
+    libocct-modeling-algorithms-dev \
+    libocct-visualization-dev
 ```
 
-Для OCCT найдите доступные пакеты:
+Package names may vary depending on the Linux distribution and Open CASCADE version.
+
+### Configure
 
 ```bash
-apt search opencascade
-apt search occt
+cmake -S . -B build -G Ninja
 ```
 
-На системах, где доступны Debian-пакеты OCCT, потребуются development-пакеты
-модулей Foundation/Modeling/DataExchange/Visualization.
+### Build
 
-Если OCCT установлен вручную, укажите CLion путь к CMake config, например:
-
-```text
--DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/gcc_64;/path/to/occt/install
+```bash
+cmake --build build -j
 ```
 
-или:
+### Run
 
-```text
--DOpenCASCADE_DIR=/path/to/occt/lib/cmake/opencascade
+The executable is currently generated under:
+
+```bash
+./build/src/ParametricCAD
 ```
 
-## Открытие в CLion
+Depending on the selected CMake build directory, for example when using CLion, it may instead be located under:
 
-1. File -> Open.
-2. Выберите каталог `ParametricCAD`.
-3. CLion обнаружит `CMakeLists.txt`.
-4. Settings -> Build, Execution, Deployment -> Toolchains.
-5. Выберите GCC или Clang.
-6. В CMake profile рекомендуется Ninja.
-7. Reload CMake Project.
-8. Запустите target `ParametricCAD`.
-
-## Архитектура
-
-```text
-src/
-├── app/
-│   └── main.cpp
-├── geometry/
-│   ├── Point3D.h
-│   └── Vector3D.h
-├── model/
-│   ├── Document.*
-│   └── Feature.*
-├── operations/
-│   ├── BoxFeature.*
-│   └── CylinderFeature.*
-└── viewer/
-    ├── CadViewer.*
-    └── MainWindow.*
+```bash
+./cmake-build-debug/src/ParametricCAD
 ```
 
-Идея архитектуры:
+## Development Status
 
-```text
-UI
- │
- ▼
-Document ───────► Feature graph
-                    │
-                    ▼
-              OCCT operations
-                    │
-                    ▼
-                TopoDS_Shape
-                    │
-                    ▼
-                 Viewer
-```
+ParametricCAD is an early-stage experimental project.
 
-`Feature` — не QWidget и не viewer object. Это элемент CAD-модели.
-Он хранит параметры и создаёт `TopoDS_Shape`.
+Implemented:
 
-## Первая учебная задача
+- [x] Qt/Open CASCADE viewport integration
+- [x] Box primitive
+- [x] Cylinder primitive
+- [x] Orbit
+- [x] Pan
+- [x] Zoom
+- [x] Object selection
+- [x] Edge selection
+- [x] Face selection
+- [x] Hover highlighting
+- [x] Push/Pull for planar faces
+- [x] Push/Pull preview
+- [x] X-Ray display mode
+- [x] Select-through / cycling detected geometry
+- [x] Modeling toolbar
 
-Поставьте breakpoint в:
+Planned:
 
-```cpp
-BoxFeature::recompute()
-```
-
-и проследите цепочку:
-
-```text
-MainWindow::createBox()
-        ↓
-Document::addFeature()
-        ↓
-BoxFeature::recompute()
-        ↓
-BRepPrimAPI_MakeBox
-        ↓
-TopoDS_Shape
-        ↓
-CadViewer::display()
-```
-
-Это хорошая отправная точка для понимания того, как UI, document model,
-геометрическое ядро и visualization разделяются в CAD.
-
-## Roadmap
-
-### Milestone 1 — Viewer
-- [x] Qt window
-- [x] OCCT viewer
-- [x] Box
-- [x] Cylinder
-- [ ] selection
-- [ ] highlighted face/edge
-- [ ] orthographic/perspective camera
-
-### Milestone 2 — Modeling
-- [ ] primitive parameters dialog
-- [ ] transform feature
-- [ ] Boolean Fuse
-- [ ] Boolean Cut
-- [ ] Boolean Common
-- [ ] Fillet
-- [ ] Chamfer
-
-### Milestone 3 — Parametric model
-- [ ] Feature ID
-- [ ] feature dependencies
-- [ ] dirty flag
-- [ ] topological sort
-- [ ] incremental recompute
-- [ ] failed feature state
-
-### Milestone 4 — Sketch
-- [ ] 2D points
-- [ ] lines/arcs/circles
-- [ ] dimensions
-- [ ] constraints
-- [ ] profile validation
-- [ ] Extrude from Sketch
-
-### Milestone 5 — Exchange
-- [ ] STEP import
-- [ ] STEP export
+- [ ] Parametric Push/Pull feature
+- [ ] Undo / Redo
+- [ ] Feature history
+- [ ] Rectangle tool
+- [ ] Line tool
+- [ ] Circle tool
+- [ ] Sketches on planar faces
+- [ ] Move tool
+- [ ] Rotate tool
+- [ ] Scale tool
+- [ ] Offset
+- [ ] Snapping to endpoints, midpoints and intersections
+- [ ] Dimensions and constraints
+- [ ] Groups / Components
+- [ ] Model tree
+- [ ] STEP import/export
 - [ ] STL export
-- [ ] project serialization
+- [ ] Improved X-Ray and hidden geometry interaction
+
+## Architecture Direction
+
+The long-term goal is to combine two modeling approaches.
+
+### Direct modeling
+
+Fast SketchUp-like interaction:
+
+```text
+Select face
+→ Push/Pull
+→ Move
+→ Cut
+→ Offset
+```
+
+### Parametric modeling
+
+Operations are stored as editable features:
+
+```text
+Document
+└── Body
+    ├── Box
+    ├── Sketch
+    ├── Pad
+    └── Pocket
+```
+
+This should allow simple direct manipulation while preserving an editable CAD feature history.
 
 ## License
 
-Choose a license before publishing the repository. For a learning project,
-MIT or Apache-2.0 are common choices, but check compatibility requirements
-of dependencies and your intended distribution model.
+ParametricCAD is licensed under the MIT License.
+
+See:
+
+```text
+LICENSE
+```
+
+Third-party libraries used by the project retain their respective licenses.
+
+The main external dependencies include:
+
+- Qt 6
+- Open CASCADE Technology
+
+See `THIRD_PARTY_LICENSES.md` for additional information.
+
+## Purpose
+
+This project is developed primarily for:
+
+- learning modern CAD architecture;
+- experimenting with Open CASCADE;
+- implementing interactive 3D modeling tools;
+- studying parametric and direct modeling approaches;
+- demonstrating practical C++ and desktop application development skills.
+
+Contributions, experiments, bug reports and technical discussions are welcome.
