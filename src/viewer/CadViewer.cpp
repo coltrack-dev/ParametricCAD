@@ -2,12 +2,17 @@
 
 #include <cmath>
 
+#include <QAction>
+#include <QActionGroup>
 #include <QCursor>
+#include <QLabel>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QToolBar>
+#include <QToolButton>
 #include <QWheelEvent>
 
 #include <AIS_SelectionScheme.hxx>
@@ -50,6 +55,145 @@ CadViewer::CadViewer(QWidget* parent)
 
     // Force Qt to create the native platform window.
     winId();
+
+    setupToolBar();
+}
+
+
+void CadViewer::setupToolBar()
+{
+    toolBar_ = new QToolBar(this);
+    toolBar_->setObjectName("cadToolBar");
+    toolBar_->setMovable(false);
+    toolBar_->setFloatable(false);
+    toolBar_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    toolBar_->setStyleSheet(
+        "QToolBar#cadToolBar {"
+        "  spacing: 4px;"
+        "  padding: 5px;"
+        "  background: rgba(38, 38, 42, 230);"
+        "  border: 1px solid rgba(255, 255, 255, 45);"
+        "  border-radius: 6px;"
+        "}"
+        "QToolBar#cadToolBar QToolButton {"
+        "  color: #eeeeee;"
+        "  padding: 6px 10px;"
+        "  border: 1px solid transparent;"
+        "  border-radius: 4px;"
+        "}"
+        "QToolBar#cadToolBar QToolButton:hover {"
+        "  background: rgba(255, 255, 255, 28);"
+        "}"
+        "QToolBar#cadToolBar QToolButton:checked {"
+        "  color: white;"
+        "  background: #3569b8;"
+        "  border-color: #6e9ee8;"
+        "}"
+    );
+
+    auto* selectionActions = new QActionGroup(toolBar_);
+    selectionActions->setExclusive(true);
+
+    selectObjectAction_ = toolBar_->addAction("Object [1]");
+    selectObjectAction_->setCheckable(true);
+    selectionActions->addAction(selectObjectAction_);
+    connect(selectObjectAction_, &QAction::triggered, this, [this]() {
+        setSelectionMode(SelectionMode::Object);
+    });
+
+    selectEdgeAction_ = toolBar_->addAction("Edge [2]");
+    selectEdgeAction_->setCheckable(true);
+    selectionActions->addAction(selectEdgeAction_);
+    connect(selectEdgeAction_, &QAction::triggered, this, [this]() {
+        setSelectionMode(SelectionMode::Edge);
+    });
+
+    selectFaceAction_ = toolBar_->addAction("Face [3]");
+    selectFaceAction_->setCheckable(true);
+    selectionActions->addAction(selectFaceAction_);
+    connect(selectFaceAction_, &QAction::triggered, this, [this]() {
+        setSelectionMode(SelectionMode::Face);
+    });
+
+    toolBar_->addSeparator();
+
+    pushPullAction_ = toolBar_->addAction("Push/Pull [P]");
+    pushPullAction_->setCheckable(true);
+    connect(pushPullAction_, &QAction::triggered, this, [this](bool checked) {
+        if (checked) {
+            setSelectionMode(SelectionMode::Face);
+        }
+        setPushPullArmed(checked);
+    });
+
+    xRayAction_ = toolBar_->addAction("X-Ray [X]");
+    xRayAction_->setCheckable(true);
+    connect(xRayAction_, &QAction::triggered, this, [this](bool checked) {
+        setXRayEnabled(checked);
+    });
+
+    xRayStatusLabel_ = new QLabel("X-RAY ON", toolBar_);
+    xRayStatusLabel_->setStyleSheet(
+        "QLabel {"
+        "  color: #1f1400;"
+        "  background: #ffb020;"
+        "  font-weight: 700;"
+        "  padding: 5px 8px;"
+        "  border-radius: 4px;"
+        "}"
+    );
+    xRayStatusLabel_->hide();
+    toolBar_->addWidget(xRayStatusLabel_);
+
+    toolBar_->addSeparator();
+
+    QAction* fitAction = toolBar_->addAction("Fit [F]");
+    connect(fitAction, &QAction::triggered, this, [this]() {
+        fitAll();
+    });
+
+    toolBar_->move(8, 8);
+    toolBar_->raise();
+    syncToolBarState();
+}
+
+void CadViewer::syncToolBarState()
+{
+    if (selectObjectAction_ != nullptr) {
+        selectObjectAction_->setChecked(selectionMode_ == SelectionMode::Object);
+    }
+    if (selectEdgeAction_ != nullptr) {
+        selectEdgeAction_->setChecked(selectionMode_ == SelectionMode::Edge);
+    }
+    if (selectFaceAction_ != nullptr) {
+        selectFaceAction_->setChecked(selectionMode_ == SelectionMode::Face);
+    }
+    if (pushPullAction_ != nullptr) {
+        pushPullAction_->setChecked(pushPullArmed_);
+    }
+    if (xRayAction_ != nullptr) {
+        xRayAction_->setChecked(xRayEnabled_);
+    }
+    if (xRayStatusLabel_ != nullptr) {
+        xRayStatusLabel_->setVisible(xRayEnabled_);
+    }
+}
+
+void CadViewer::setPushPullArmed(bool armed)
+{
+    if (!armed && pushPullActive_) {
+        cancelPushPull();
+    }
+
+    pushPullArmed_ = armed;
+
+    if (pushPullArmed_) {
+        setCursor(Qt::CrossCursor);
+    } else {
+        unsetCursor();
+    }
+
+    syncToolBarState();
 }
 
 QPaintEngine* CadViewer::paintEngine() const
@@ -146,6 +290,11 @@ void CadViewer::resizeEvent(QResizeEvent* event)
     if (initialized_) {
         view_->MustBeResized();
     }
+
+    if (toolBar_ != nullptr) {
+        toolBar_->move(8, 8);
+        toolBar_->raise();
+    }
 }
 
 void CadViewer::display(const TopoDS_Shape& shape)
@@ -206,6 +355,8 @@ void CadViewer::setSelectionMode(SelectionMode mode)
         clearSelection();
         applySelectionMode();
     }
+
+    syncToolBarState();
 }
 
 CadViewer::SelectionMode CadViewer::selectionMode() const
@@ -302,6 +453,7 @@ void CadViewer::setXRayEnabled(bool enabled)
     }
 
     context_->UpdateCurrentViewer();
+    syncToolBarState();
 }
 
 void CadViewer::updateHover(const QPoint& position)
@@ -522,6 +674,7 @@ void CadViewer::commitPushPull()
 
     applySelectionMode();
     context_->UpdateCurrentViewer();
+    syncToolBarState();
 }
 
 void CadViewer::cancelPushPull()
@@ -553,6 +706,7 @@ void CadViewer::cancelPushPull()
 
     applySelectionMode();
     context_->UpdateCurrentViewer();
+    syncToolBarState();
 }
 
 void CadViewer::mousePressEvent(QMouseEvent* event)
@@ -706,17 +860,15 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
         return;
     case Qt::Key_P:
         setSelectionMode(SelectionMode::Face);
-        pushPullArmed_ = true;
-        setCursor(Qt::CrossCursor);
+        setPushPullArmed(true);
         return;
     case Qt::Key_X:
         setXRayEnabled(!xRayEnabled_);
         return;
     case Qt::Key_Escape:
         if (pushPullArmed_) {
-            pushPullArmed_ = false;
+            setPushPullArmed(false);
             clearSelection();
-            unsetCursor();
             return;
         }
         clearSelection();

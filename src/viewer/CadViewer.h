@@ -13,6 +13,9 @@
 #include <TopoDS_Shape.hxx>
 #include <gp_Vec.hxx>
 
+class QAction;
+class QLabel;
+class QToolBar;
 class QKeyEvent;
 class QMouseEvent;
 class QPaintEvent;
@@ -56,6 +59,9 @@ protected:
 
 private:
     void initializeOcc();
+    void setupToolBar();
+    void syncToolBarState();
+    void setPushPullArmed(bool armed);
     void bindWindow();
     void updateHover(const QPoint& position);
     void selectAt(
@@ -72,6 +78,14 @@ private:
     TopoDS_Shape buildPushPullResult(double distance) const;
     void commitPushPull();
     void cancelPushPull();
+
+    QToolBar* toolBar_{nullptr};
+    QLabel* xRayStatusLabel_{nullptr};
+    QAction* selectObjectAction_{nullptr};
+    QAction* selectEdgeAction_{nullptr};
+    QAction* selectFaceAction_{nullptr};
+    QAction* pushPullAction_{nullptr};
+    QAction* xRayAction_{nullptr};
 
     Handle(V3d_Viewer) viewer_;
     Handle(V3d_View) view_;
