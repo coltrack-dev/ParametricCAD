@@ -1,0 +1,30 @@
+{
+    "body": [
+        {
+            "acrossFlats": 30,
+            "height": 12,
+            "id": "hexagon-a96a6635-10ce-4b82-ba74-dbee0d94b1e3",
+            "name": "Hexagon",
+            "type": "Hexagon"
+        },
+        {
+            "height": 12,
+            "id": "cylinder-7df7ad0d-64c3-4b4c-8ff0-872b0ef37723",
+            "name": "Cylinder",
+            "radius": 10,
+            "type": "Cylinder"
+        },
+        {
+            "id": "cut-f133adc9-10b0-4dc7-893a-0cfa814d2bd4",
+            "left": "hexagon-a96a6635-10ce-4b82-ba74-dbee0d94b1e3",
+            "name": "Cut",
+            "operation": "Cut",
+            "right": "cylinder-7df7ad0d-64c3-4b4c-8ff0-872b0ef37723",
+            "type": "Boolean"
+        }
+    ],
+    "features": [
+    ],
+    "format": "ParametricCAD",
+    "version": 1
+}
