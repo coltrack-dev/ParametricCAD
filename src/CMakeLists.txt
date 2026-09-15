@@ -48,6 +48,8 @@ target_link_libraries(ParametricCAD
         TKGeomAlgo
         TKTopAlgo
 
+        TKBO
+
         # Primitive modeling operations
         TKPrim
 

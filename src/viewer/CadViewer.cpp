@@ -1,5 +1,8 @@
 #include "viewer/CadViewer.h"
 
+#include <cmath>
+
+#include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
@@ -9,14 +12,29 @@
 
 #include <AIS_SelectionScheme.hxx>
 #include <Aspect_DisplayConnection.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <GeomAbs_SurfaceType.hxx>
 #include <OpenGl_GraphicDriver.hxx>
+#include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopoDS.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 
 #ifdef _WIN32
 #include <WNT_Window.hxx>
 #else
 #include <Xw_Window.hxx>
 #endif
+
+namespace
+{
+constexpr double PushPullUnitsPerPixel = 0.5;
+constexpr double PushPullTolerance = 1.0e-6;
+}
 
 CadViewer::CadViewer(QWidget* parent)
     : QWidget(parent)
@@ -150,6 +168,7 @@ void CadViewer::clear()
         return;
     }
 
+    cancelPushPull();
     context_->RemoveAll(Standard_True);
 }
 
@@ -166,6 +185,10 @@ void CadViewer::fitAll()
 
 void CadViewer::setSelectionMode(SelectionMode mode)
 {
+    if (pushPullActive_) {
+        cancelPushPull();
+    }
+
     selectionMode_ = mode;
 
     if (initialized_) {
@@ -231,7 +254,7 @@ void CadViewer::applySelectionMode()
 
 void CadViewer::updateHover(const QPoint& position)
 {
-    if (!initialized_) {
+    if (!initialized_ || pushPullActive_) {
         return;
     }
 
@@ -255,11 +278,189 @@ void CadViewer::selectAt(const QPoint& position, bool toggleSelection)
     context_->UpdateCurrentViewer();
 }
 
+bool CadViewer::beginPushPull()
+{
+    if (!initialized_) {
+        return false;
+    }
+
+    const TopoDS_Shape selected = selectedShape();
+
+    if (selected.IsNull() || selected.ShapeType() != TopAbs_FACE) {
+        return false;
+    }
+
+    context_->InitSelected();
+    if (!context_->MoreSelected()) {
+        return false;
+    }
+
+    Handle(AIS_InteractiveObject) selectedInteractive =
+        context_->SelectedInteractive();
+
+    Handle(AIS_Shape) selectedObject =
+        Handle(AIS_Shape)::DownCast(selectedInteractive);
+
+    if (selectedObject.IsNull()) {
+        return false;
+    }
+
+    const TopoDS_Face selectedFace = TopoDS::Face(selected);
+    BRepAdaptor_Surface surface(selectedFace, Standard_True);
+
+    if (surface.GetType() != GeomAbs_Plane) {
+        return false;
+    }
+
+    gp_Dir normal = surface.Plane().Axis().Direction();
+
+    if (selectedFace.Orientation() == TopAbs_REVERSED) {
+        normal.Reverse();
+    }
+
+    pushPullFace_ = selectedFace;
+    pushPullBaseShape_ = selectedObject->Shape();
+    pushPullNormal_ = gp_Vec(normal);
+    pushPullObject_ = selectedObject;
+    pushPullStartPosition_ = mapFromGlobal(QCursor::pos());
+    pushPullDistance_ = 0.0;
+    pushPullActive_ = true;
+
+    context_->ClearSelected(Standard_False);
+    context_->Erase(pushPullObject_, Standard_False);
+    context_->UpdateCurrentViewer();
+
+    setCursor(Qt::SizeVerCursor);
+    return true;
+}
+
+TopoDS_Shape CadViewer::buildPushPullResult(double distance) const
+{
+    if (!pushPullActive_ || std::abs(distance) <= PushPullTolerance) {
+        return pushPullBaseShape_;
+    }
+
+    const gp_Vec extrusionVector = pushPullNormal_ * distance;
+    const TopoDS_Shape prism =
+        BRepPrimAPI_MakePrism(pushPullFace_, extrusionVector).Shape();
+
+    if (distance > 0.0) {
+        BRepAlgoAPI_Fuse fuse(pushPullBaseShape_, prism);
+        fuse.Build();
+        return fuse.IsDone() ? fuse.Shape() : TopoDS_Shape();
+    }
+
+    BRepAlgoAPI_Cut cut(pushPullBaseShape_, prism);
+    cut.Build();
+    return cut.IsDone() ? cut.Shape() : TopoDS_Shape();
+}
+
+void CadViewer::updatePushPullPreview(const QPoint& position)
+{
+    if (!pushPullActive_) {
+        return;
+    }
+
+    pushPullDistance_ =
+        static_cast<double>(pushPullStartPosition_.y() - position.y()) *
+        PushPullUnitsPerPixel;
+
+    const TopoDS_Shape previewShape =
+        buildPushPullResult(pushPullDistance_);
+
+    if (previewShape.IsNull()) {
+        return;
+    }
+
+    if (pushPullPreview_.IsNull()) {
+        pushPullPreview_ = new AIS_Shape(previewShape);
+        context_->Display(pushPullPreview_, Standard_False);
+    } else {
+        pushPullPreview_->SetShape(previewShape);
+        context_->Redisplay(pushPullPreview_, Standard_False);
+    }
+
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::commitPushPull()
+{
+    if (!pushPullActive_) {
+        return;
+    }
+
+    const TopoDS_Shape result =
+        buildPushPullResult(pushPullDistance_);
+
+    if (!result.IsNull() &&
+        std::abs(pushPullDistance_) > PushPullTolerance) {
+
+        pushPullObject_->SetShape(result);
+    }
+
+    if (!pushPullPreview_.IsNull()) {
+        context_->Remove(pushPullPreview_, Standard_False);
+        pushPullPreview_.Nullify();
+    }
+
+    context_->Display(pushPullObject_, Standard_False);
+    context_->Redisplay(pushPullObject_, Standard_False);
+
+    pushPullActive_ = false;
+    pushPullDistance_ = 0.0;
+    pushPullFace_.Nullify();
+    pushPullBaseShape_.Nullify();
+    pushPullObject_.Nullify();
+    unsetCursor();
+
+    applySelectionMode();
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::cancelPushPull()
+{
+    if (!pushPullActive_) {
+        return;
+    }
+
+    if (!pushPullPreview_.IsNull()) {
+        context_->Remove(pushPullPreview_, Standard_False);
+        pushPullPreview_.Nullify();
+    }
+
+    if (!pushPullObject_.IsNull()) {
+        context_->Display(pushPullObject_, Standard_False);
+    }
+
+    pushPullActive_ = false;
+    pushPullDistance_ = 0.0;
+    pushPullFace_.Nullify();
+    pushPullBaseShape_.Nullify();
+    pushPullObject_.Nullify();
+    unsetCursor();
+
+    applySelectionMode();
+    context_->UpdateCurrentViewer();
+}
+
 void CadViewer::mousePressEvent(QMouseEvent* event)
 {
     lastMousePosition_ =
         event->position().toPoint();
     mousePressPosition_ = lastMousePosition_;
+
+    if (pushPullActive_) {
+        if (event->button() == Qt::LeftButton) {
+            updatePushPullPreview(lastMousePosition_);
+            commitPushPull();
+            return;
+        }
+
+        if (event->button() == Qt::RightButton) {
+            cancelPushPull();
+            return;
+        }
+    }
 
     if (initialized_ &&
         event->button() == Qt::MiddleButton &&
@@ -282,6 +483,12 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
     const QPoint currentPosition =
         event->position().toPoint();
+
+    if (pushPullActive_) {
+        updatePushPullPreview(currentPosition);
+        lastMousePosition_ = currentPosition;
+        return;
+    }
 
     if (event->buttons().testFlag(Qt::MiddleButton)) {
 
@@ -314,6 +521,11 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
 void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (pushPullActive_) {
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
+
     if (initialized_ &&
         event->button() == Qt::LeftButton &&
         event->position().toPoint() == mousePressPosition_) {
@@ -344,6 +556,19 @@ void CadViewer::wheelEvent(QWheelEvent* event)
 
 void CadViewer::keyPressEvent(QKeyEvent* event)
 {
+    if (pushPullActive_) {
+        if (event->key() == Qt::Key_Escape) {
+            cancelPushPull();
+            return;
+        }
+
+        if (event->key() == Qt::Key_Return ||
+            event->key() == Qt::Key_Enter) {
+            commitPushPull();
+            return;
+        }
+    }
+
     switch (event->key()) {
     case Qt::Key_1:
         setSelectionMode(SelectionMode::Object);
@@ -353,6 +578,13 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
         return;
     case Qt::Key_3:
         setSelectionMode(SelectionMode::Face);
+        return;
+    case Qt::Key_P:
+        if (selectionMode_ != SelectionMode::Face) {
+            setSelectionMode(SelectionMode::Face);
+        } else {
+            beginPushPull();
+        }
         return;
     case Qt::Key_Escape:
         clearSelection();

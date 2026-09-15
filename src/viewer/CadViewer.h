@@ -7,7 +7,9 @@
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <Aspect_DisplayConnection.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Vec.hxx>
 
 class QKeyEvent;
 class QMouseEvent;
@@ -57,14 +59,29 @@ private:
     void selectAt(const QPoint& position, bool toggleSelection);
     void applySelectionMode();
 
+    bool beginPushPull();
+    void updatePushPullPreview(const QPoint& position);
+    TopoDS_Shape buildPushPullResult(double distance) const;
+    void commitPushPull();
+    void cancelPushPull();
+
     Handle(V3d_Viewer) viewer_;
     Handle(V3d_View) view_;
     Handle(AIS_InteractiveContext) context_;
 
     QPoint lastMousePosition_;
     QPoint mousePressPosition_;
+    QPoint pushPullStartPosition_;
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
+
+    bool pushPullActive_{false};
+    double pushPullDistance_{0.0};
+    TopoDS_Face pushPullFace_;
+    TopoDS_Shape pushPullBaseShape_;
+    gp_Vec pushPullNormal_;
+    Handle(AIS_Shape) pushPullObject_;
+    Handle(AIS_Shape) pushPullPreview_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };
