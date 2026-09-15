@@ -9,6 +9,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -342,7 +343,7 @@ void FeatureEditorPanel::addBoolean(
         return;
     }
 
-    const std::vector<FeaturePtr> features =
+    std::vector<FeaturePtr> features =
         selectedFeatures();
 
     if (features.size() != 2) {
@@ -352,6 +353,57 @@ void FeatureEditorPanel::addBoolean(
             true
         );
         return;
+    }
+
+    // For Cut, make the operation order deterministic:
+    // select the base first, then Ctrl+Click the cutting tool.
+    // QTreeWidget::currentItem() is the last/currently focused item,
+    // so we treat it as the cutting tool and the other selected item
+    // as the base.
+    if (operation == cad::parametric::BooleanOperation::Cut) {
+        QTreeWidgetItem* currentItem = tree_->currentItem();
+
+        if (currentItem == nullptr) {
+            setPanelMessage(
+                "For Cut: select the base, then Ctrl+Click the cutting tool.",
+                true
+            );
+            return;
+        }
+
+        const QString currentId =
+            currentItem->data(0, FeatureIdRole).toString();
+
+        FeaturePtr cuttingTool =
+            body_->findFeature(currentId.toStdString());
+
+        if (!cuttingTool) {
+            setPanelMessage(
+                "Could not determine the cutting tool.",
+                true
+            );
+            return;
+        }
+
+        FeaturePtr baseFeature;
+
+        for (const FeaturePtr& feature : features) {
+            if (feature && feature->id() != cuttingTool->id()) {
+                baseFeature = feature;
+                break;
+            }
+        }
+
+        if (!baseFeature) {
+            setPanelMessage(
+                "Could not determine the base feature.",
+                true
+            );
+            return;
+        }
+
+        features[0] = baseFeature;
+        features[1] = cuttingTool;
     }
 
     const std::string id =
@@ -863,8 +915,33 @@ void FeatureEditorPanel::commitFeatureChange(
 
     body_->markDirtyFrom(feature->id());
 
-    recomputeAndNotify(
-        "Feature updated"
+    if (!body_->recompute()) {
+        setPanelMessage(
+            QString::fromStdString(
+                body_->lastError()
+            ),
+            true
+        );
+    } else {
+        setPanelMessage(
+            "Feature updated",
+            false
+        );
+    }
+
+    if (modelChangedHandler_) {
+        modelChangedHandler_();
+    }
+
+    // Rebuilding Properties synchronously from QDoubleSpinBox::valueChanged
+    // can delete the spin box while it is still emitting the signal.
+    // Queue the refresh until Qt returns to the event loop.
+    QTimer::singleShot(
+        0,
+        this,
+        [this]() {
+            refresh();
+        }
     );
 }
 
