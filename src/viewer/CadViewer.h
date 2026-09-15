@@ -2,6 +2,8 @@
 
 #include <QWidget>
 
+#include <vector>
+
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Shape.hxx>
 #include <V3d_View.hxx>
@@ -56,7 +58,13 @@ private:
     void initializeOcc();
     void bindWindow();
     void updateHover(const QPoint& position);
-    void selectAt(const QPoint& position, bool toggleSelection);
+    void selectAt(
+        const QPoint& position,
+        bool toggleSelection,
+        bool cycleDetected = false
+    );
+    void resetDetectedCycle();
+    void setXRayEnabled(bool enabled);
     void applySelectionMode();
 
     bool beginPushPull();
@@ -74,6 +82,11 @@ private:
     QPoint pushPullStartPosition_;
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
+
+    bool xRayEnabled_{false};
+    bool detectedCycleActive_{false};
+    QPoint detectedCyclePosition_;
+    std::vector<Handle(AIS_Shape)> displayedShapes_;
 
     bool pushPullArmed_{false};
     bool pushPullActive_{false};

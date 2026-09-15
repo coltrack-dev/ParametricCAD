@@ -34,6 +34,8 @@ namespace
 {
 constexpr double PushPullUnitsPerPixel = 0.5;
 constexpr double PushPullTolerance = 1.0e-6;
+constexpr Standard_Real XRayTransparency = 0.65;
+constexpr int DetectedCyclePositionTolerance = 3;
 }
 
 CadViewer::CadViewer(QWidget* parent)
@@ -153,10 +155,15 @@ void CadViewer::display(const TopoDS_Shape& shape)
     Handle(AIS_Shape) interactiveShape =
         new AIS_Shape(shape);
 
+    if (xRayEnabled_) {
+        interactiveShape->SetTransparency(XRayTransparency);
+    }
+
     context_->Display(
         interactiveShape,
         Standard_True
     );
+    displayedShapes_.push_back(interactiveShape);
 
     applySelectionMode();
     fitAll();
@@ -170,6 +177,8 @@ void CadViewer::clear()
 
     cancelPushPull();
     context_->RemoveAll(Standard_True);
+    displayedShapes_.clear();
+    resetDetectedCycle();
 }
 
 void CadViewer::fitAll()
@@ -254,11 +263,54 @@ void CadViewer::applySelectionMode()
     context_->UpdateCurrentViewer();
 }
 
+void CadViewer::resetDetectedCycle()
+{
+    detectedCycleActive_ = false;
+}
+
+void CadViewer::setXRayEnabled(bool enabled)
+{
+    xRayEnabled_ = enabled;
+    resetDetectedCycle();
+
+    if (!initialized_) {
+        return;
+    }
+
+    for (const Handle(AIS_Shape)& shape : displayedShapes_) {
+        if (shape.IsNull()) {
+            continue;
+        }
+
+        if (xRayEnabled_) {
+            shape->SetTransparency(XRayTransparency);
+        } else {
+            shape->UnsetTransparency();
+        }
+
+        context_->Redisplay(shape, Standard_False);
+    }
+
+    if (!pushPullPreview_.IsNull()) {
+        if (xRayEnabled_) {
+            pushPullPreview_->SetTransparency(XRayTransparency);
+        } else {
+            pushPullPreview_->UnsetTransparency();
+        }
+
+        context_->Redisplay(pushPullPreview_, Standard_False);
+    }
+
+    context_->UpdateCurrentViewer();
+}
+
 void CadViewer::updateHover(const QPoint& position)
 {
     if (!initialized_ || pushPullActive_) {
         return;
     }
+
+    resetDetectedCycle();
 
     context_->MoveTo(
         position.x(),
@@ -268,9 +320,40 @@ void CadViewer::updateHover(const QPoint& position)
     );
 }
 
-void CadViewer::selectAt(const QPoint& position, bool toggleSelection)
+void CadViewer::selectAt(
+    const QPoint& position,
+    bool toggleSelection,
+    bool cycleDetected)
 {
-    updateHover(position);
+    if (!initialized_ || pushPullActive_) {
+        return;
+    }
+
+    if (cycleDetected && xRayEnabled_) {
+        const QPoint delta = position - detectedCyclePosition_;
+        const bool samePickPosition =
+            detectedCycleActive_ &&
+            std::abs(delta.x()) <= DetectedCyclePositionTolerance &&
+            std::abs(delta.y()) <= DetectedCyclePositionTolerance;
+
+        if (!samePickPosition) {
+            context_->MoveTo(
+                position.x(),
+                position.y(),
+                view_,
+                Standard_True
+            );
+
+            detectedCyclePosition_ = position;
+            detectedCycleActive_ = true;
+        }
+
+        // MoveTo() highlights the nearest entity. Advance to the next
+        // detected entity so Alt+Click reaches geometry behind it.
+        context_->HilightNextDetected(view_, Standard_True);
+    } else {
+        updateHover(position);
+    }
 
     context_->SelectDetected(
         toggleSelection
@@ -391,6 +474,9 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
         // exists. Only then replace it with the preview result.
         context_->Erase(pushPullObject_, Standard_False);
         pushPullPreview_ = new AIS_Shape(previewShape);
+        if (xRayEnabled_) {
+            pushPullPreview_->SetTransparency(XRayTransparency);
+        }
         context_->Display(pushPullPreview_, Standard_False);
     } else {
         pushPullPreview_->SetShape(previewShape);
@@ -489,7 +575,11 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     }
 
     if (pushPullArmed_ && event->button() == Qt::LeftButton) {
-        selectAt(lastMousePosition_, false);
+        selectAt(
+            lastMousePosition_,
+            false,
+            event->modifiers().testFlag(Qt::AltModifier)
+        );
 
         if (beginPushPull()) {
             return;
@@ -566,7 +656,8 @@ void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 
         selectAt(
             event->position().toPoint(),
-            event->modifiers().testFlag(Qt::ControlModifier)
+            event->modifiers().testFlag(Qt::ControlModifier),
+            event->modifiers().testFlag(Qt::AltModifier)
         );
     }
 
@@ -617,6 +708,9 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
         setSelectionMode(SelectionMode::Face);
         pushPullArmed_ = true;
         setCursor(Qt::CrossCursor);
+        return;
+    case Qt::Key_X:
+        setXRayEnabled(!xRayEnabled_);
         return;
     case Qt::Key_Escape:
         if (pushPullArmed_) {
