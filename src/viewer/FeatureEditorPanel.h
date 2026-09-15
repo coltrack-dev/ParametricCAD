@@ -75,5 +75,4 @@ private:
 
     std::function<void()> modelChangedHandler_;
     std::function<void(const std::string&)> featureSelectedHandler_;
-    int nextFeatureNumber_{1};
 };

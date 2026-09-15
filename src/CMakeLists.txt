@@ -8,6 +8,8 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/CadViewer.h
     model/Document.cpp
     model/Document.h
+    model/ProjectFile.cpp
+    model/ProjectFile.h
     model/Feature.cpp
     model/Feature.h
     model/ParametricFeature.cpp

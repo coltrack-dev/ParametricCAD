@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTimer>
+#include <QUuid>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -262,7 +263,7 @@ void FeatureEditorPanel::addBox()
     }
 
     const std::string id =
-        "box-" + std::to_string(nextFeatureNumber_++);
+        "box-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
     body_->addFeature(
         std::make_shared<
@@ -285,7 +286,7 @@ void FeatureEditorPanel::addCylinder()
     }
 
     const std::string id =
-        "cylinder-" + std::to_string(nextFeatureNumber_++);
+        "cylinder-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
     body_->addFeature(
         std::make_shared<
@@ -307,7 +308,7 @@ void FeatureEditorPanel::addCone()
     }
 
     const std::string id =
-        "cone-" + std::to_string(nextFeatureNumber_++);
+        "cone-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
     body_->addFeature(
         std::make_shared<cad::parametric::ConeFeature>(
@@ -328,7 +329,7 @@ void FeatureEditorPanel::addSphere()
     }
 
     const std::string id =
-        "sphere-" + std::to_string(nextFeatureNumber_++);
+        "sphere-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
     body_->addFeature(
         std::make_shared<cad::parametric::SphereFeature>(
@@ -347,7 +348,7 @@ void FeatureEditorPanel::addTorus()
     }
 
     const std::string id =
-        "torus-" + std::to_string(nextFeatureNumber_++);
+        "torus-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
     body_->addFeature(
         std::make_shared<cad::parametric::TorusFeature>(
@@ -368,7 +369,7 @@ void FeatureEditorPanel::addHexagon()
     }
 
     const std::string id =
-        "hexagon-" + std::to_string(nextFeatureNumber_++);
+        "hexagon-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
     body_->addFeature(
         std::make_shared<cad::parametric::HexagonFeature>(
@@ -456,7 +457,7 @@ void FeatureEditorPanel::addBoolean(
     const std::string id =
         operationName.toLower().toStdString()
         + "-"
-        + std::to_string(nextFeatureNumber_++);
+        + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
     auto booleanFeature =
         std::make_shared<cad::parametric::BooleanFeature>(

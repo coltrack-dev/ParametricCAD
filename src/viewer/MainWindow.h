@@ -17,6 +17,16 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
 private:
+    void closeEvent(QCloseEvent* event) override;
+    void newDocument();
+    void openDocument();
+    bool saveDocument();
+    bool confirmReplacement();
+    bool saveDocumentAs();
+    bool saveTo(const QString& path);
+    void updateTitle();
+    void restoreViewer();
+    QString currentFile_;
     void createActions();
     void createParametricPanel();
     void refreshParametricModel();

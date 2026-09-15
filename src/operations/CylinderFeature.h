@@ -8,6 +8,8 @@ public:
     CylinderFeature(double radius, double height);
 
     void recompute() override;
+    [[nodiscard]] double radius() const noexcept { return radius_; }
+    [[nodiscard]] double height() const noexcept { return height_; }
 
 private:
     double radius_;

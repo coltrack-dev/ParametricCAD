@@ -1,4 +1,5 @@
 #include "viewer/MainWindow.h"
+#include "model/ProjectFile.h"
 
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
@@ -6,6 +7,12 @@
 #include "viewer/FeatureEditorPanel.h"
 
 #include <QAction>
+#include <QCloseEvent>
+#include <QDir>
+#include <QFileDialog>
+#include <QKeySequence>
+#include <QMessageBox>
+#include <QStandardPaths>
 #include <QDockWidget>
 #include <QMenu>
 #include <QMenuBar>
@@ -18,7 +25,7 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
       viewer_(new CadViewer(this))
 {
-    setWindowTitle("ParametricCAD 0.1");
+    updateTitle();
     setCentralWidget(viewer_);
 
     createActions();
@@ -73,13 +80,7 @@ void MainWindow::refreshParametricModel()
         return;
     }
 
-    viewer_->clear();
-
-    if (!parametricBody_.shape().IsNull()) {
-        viewer_->display(
-            parametricBody_.shape()
-        );
-    }
+    restoreViewer();
 
     statusBar()->showMessage(
         "Parametric model recomputed",
@@ -133,6 +134,20 @@ void MainWindow::displayParametricFeature(
 
 void MainWindow::createActions()
 {
+    auto* fileMenu = menuBar()->addMenu("&File");
+    auto* newAction = fileMenu->addAction("&New");
+    newAction->setShortcut(QKeySequence::New);
+    connect(newAction, &QAction::triggered, this, &MainWindow::newDocument);
+    auto* openAction = fileMenu->addAction("&Open...");
+    openAction->setShortcut(QKeySequence::Open);
+    connect(openAction, &QAction::triggered, this, &MainWindow::openDocument);
+    auto* saveAction = fileMenu->addAction("&Save");
+    saveAction->setShortcut(QKeySequence::Save);
+    connect(saveAction, &QAction::triggered, this, [this]() { saveDocument(); });
+    auto* saveAsAction = fileMenu->addAction("Save &As...");
+    saveAsAction->setShortcut(QKeySequence::SaveAs);
+    connect(saveAsAction, &QAction::triggered, this, [this]() { saveDocumentAs(); });
+
     auto* modelingMenu = menuBar()->addMenu("&Modeling");
     auto* viewMenu = menuBar()->addMenu("&View");
 
@@ -179,6 +194,109 @@ void MainWindow::createCylinder()
 void MainWindow::clearDocument()
 {
     document_.clear();
+    parametricBody_ = {};
+    featureEditorPanel_->setBody(&parametricBody_);
     viewer_->clear();
     statusBar()->showMessage("Document cleared", 2000);
+}
+
+void MainWindow::restoreViewer()
+{
+    viewer_->clear();
+    for (const auto& feature : document_.features()) {
+        viewer_->display(feature->shape());
+    }
+    if (!parametricBody_.shape().IsNull()) {
+        viewer_->display(parametricBody_.shape());
+    }
+    viewer_->fitAll();
+}
+
+void MainWindow::updateTitle()
+{
+    setWindowTitle((currentFile_.isEmpty() ? QStringLiteral("Untitled") : currentFile_)
+                   + QStringLiteral(" — ParametricCAD"));
+}
+
+bool MainWindow::saveTo(const QString& path)
+{
+    QString error;
+    if (!ProjectFile::save(path, document_, parametricBody_, error)) {
+        QMessageBox::critical(this, "Save failed", path + "\n" + error);
+        return false;
+    }
+    currentFile_ = path;
+    updateTitle();
+    statusBar()->showMessage("Saved: " + path, 3000);
+    return true;
+}
+
+bool MainWindow::saveDocument()
+{
+    if (!currentFile_.isEmpty()) return saveTo(currentFile_);
+    const QString directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (directory.isEmpty() || !QDir().mkpath(directory)) {
+        QMessageBox::critical(this, "Save failed", "Cannot create application data directory: " + directory);
+        return false;
+    }
+    return saveTo(QDir(directory).filePath("autosave.pcad"));
+}
+
+bool MainWindow::saveDocumentAs()
+{
+    QFileDialog dialog(this, "Save project", currentFile_, "ParametricCAD (*.pcad)");
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setDefaultSuffix("pcad");
+    if (dialog.exec() != QDialog::Accepted) return false;
+    return saveTo(dialog.selectedFiles().first());
+}
+
+void MainWindow::newDocument()
+{
+    if (!confirmReplacement()) return;
+    clearDocument();
+    currentFile_.clear();
+    updateTitle();
+}
+
+void MainWindow::openDocument()
+{
+    const auto path = QFileDialog::getOpenFileName(this, "Open project", currentFile_, "ParametricCAD (*.pcad)");
+    if (path.isEmpty()) return;
+    // Validate first; a failed open must leave the active project intact.
+    Document loaded;
+    cad::parametric::Body loadedBody;
+    QString error;
+    if (!ProjectFile::load(path, loaded, loadedBody, error)) {
+        QMessageBox::critical(this, "Open failed", path + "\n" + error);
+        return;
+    }
+    if (!confirmReplacement()) return;
+    // Saving the active project may have updated the file being opened.
+    if (path == currentFile_ && !ProjectFile::load(path, loaded, loadedBody, error)) {
+        QMessageBox::critical(this, "Open failed", path + "\n" + error);
+        return;
+    }
+    document_ = std::move(loaded);
+    parametricBody_ = std::move(loadedBody);
+    currentFile_ = path;
+    featureEditorPanel_->setBody(&parametricBody_);
+    restoreViewer();
+    updateTitle();
+    statusBar()->showMessage("Opened: " + path, 3000);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    if (saveDocument()) event->accept();
+    else event->ignore();
+}
+
+bool MainWindow::confirmReplacement()
+{
+    if (document_.features().empty() && parametricBody_.features().empty() && currentFile_.isEmpty()) return true;
+    const auto choice = QMessageBox::question(this, "Current project",
+        "Save the current project before replacing it?",
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    return choice == QMessageBox::Discard || (choice == QMessageBox::Save && saveDocument());
 }
