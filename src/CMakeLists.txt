@@ -8,10 +8,18 @@ set(PARAMETRIC_CAD_SOURCES
     model/Document.h
     model/Feature.cpp
     model/Feature.h
+    model/ParametricFeature.cpp
+    model/ParametricFeature.h
+    model/Body.cpp
+    model/Body.h
     operations/BoxFeature.cpp
     operations/BoxFeature.h
     operations/CylinderFeature.cpp
     operations/CylinderFeature.h
+    operations/BasicFeatures.cpp
+    operations/BasicFeatures.h
+    operations/ParametricFeatures.cpp
+    operations/ParametricFeatures.h
     geometry/Point3D.h
     geometry/Vector3D.h
 )
@@ -48,12 +56,11 @@ target_link_libraries(ParametricCAD
         TKGeomAlgo
         TKTopAlgo
 
+        # Modeling operations
+        TKPrim
         TKBO
         TKFillet
         TKOffset
-
-        # Primitive modeling operations
-        TKPrim
 
         # 3D visualization
         TKService
