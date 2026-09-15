@@ -55,10 +55,13 @@ void MainWindow::createParametricPanel()
     );
 
     featureEditorPanel_->setFeatureSelectedHandler(
-        [this](const std::string& featureId) {
-            displayParametricFeature(featureId);
+        [this](const QStringList& featureIds) {
+            selectParametricFeatures(featureIds);
         }
     );
+
+    connect(viewer_, &CadViewer::featureSelectionChanged, featureEditorPanel_,
+        &FeatureEditorPanel::selectFeatures);
 
     dockWidget->setWidget(featureEditorPanel_);
 
@@ -89,47 +92,9 @@ void MainWindow::refreshParametricModel()
 }
 
 
-void MainWindow::displayParametricFeature(
-    const std::string& featureId
-)
+void MainWindow::selectParametricFeatures(const QStringList& featureIds)
 {
-    viewer_->clear();
-
-    if (featureId.empty()) {
-        if (!parametricBody_.shape().IsNull()) {
-            viewer_->display(
-                parametricBody_.shape()
-            );
-        }
-
-        statusBar()->showMessage(
-            "Body",
-            1500
-        );
-        return;
-    }
-
-    const auto feature =
-        parametricBody_.findFeature(featureId);
-
-    if (!feature || feature->shape().IsNull()) {
-        statusBar()->showMessage(
-            "Selected feature has no shape",
-            2500
-        );
-        return;
-    }
-
-    viewer_->display(
-        feature->shape()
-    );
-
-    statusBar()->showMessage(
-        QString::fromStdString(
-            feature->name()
-        ),
-        1500
-    );
+    viewer_->selectFeatures(featureIds);
 }
 
 void MainWindow::createActions()
@@ -206,9 +171,13 @@ void MainWindow::restoreViewer()
     for (const auto& feature : document_.features()) {
         viewer_->display(feature->shape());
     }
-    if (!parametricBody_.shape().IsNull()) {
-        viewer_->display(parametricBody_.shape());
+    // Create feature presentations only when the model changes or is loaded.
+    for (const auto& feature : parametricBody_.features()) {
+        if (!feature->shape().IsNull()) {
+            viewer_->display(feature->shape(), QString::fromStdString(feature->id()));
+        }
     }
+    viewer_->selectFeatures(featureEditorPanel_->selectedFeatureIds());
     viewer_->fitAll();
 }
 

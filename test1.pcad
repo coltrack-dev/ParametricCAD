@@ -21,6 +21,14 @@
             "operation": "Cut",
             "right": "cylinder-7df7ad0d-64c3-4b4c-8ff0-872b0ef37723",
             "type": "Boolean"
+        },
+        {
+            "depth": 70,
+            "height": 30,
+            "id": "box-07e396e3-cff5-48a2-a2ab-c29dcc95eb9f",
+            "name": "Box",
+            "type": "Box",
+            "width": 100
         }
     ],
     "features": [

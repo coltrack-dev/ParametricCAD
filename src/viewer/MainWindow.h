@@ -30,7 +30,7 @@ private:
     void createActions();
     void createParametricPanel();
     void refreshParametricModel();
-    void displayParametricFeature(const std::string& featureId);
+    void selectParametricFeatures(const QStringList& featureIds);
     void createBox();
     void createCylinder();
     void clearDocument();

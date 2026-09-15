@@ -11,6 +11,8 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QUuid>
+#include <QSignalBlocker>
+#include <QTreeWidgetItemIterator>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -60,7 +62,7 @@ void FeatureEditorPanel::setModelChangedHandler(
 }
 
 void FeatureEditorPanel::setFeatureSelectedHandler(
-    std::function<void(const std::string&)> handler
+    std::function<void(const QStringList&)> handler
 )
 {
     featureSelectedHandler_ = std::move(handler);
@@ -224,34 +226,18 @@ void FeatureEditorPanel::createUi()
 
     connect(
         tree_,
-        &QTreeWidget::currentItemChanged,
+        &QTreeWidget::itemSelectionChanged,
         this,
-        [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
-            if (current == nullptr) {
-                clearProperties();
-                return;
-            }
-
-            const QString id =
-                current->data(0, FeatureIdRole).toString();
-
-            if (id.isEmpty()) {
-                clearProperties();
-
-                if (featureSelectedHandler_) {
-                    featureSelectedHandler_(std::string{});
-                }
-
-                return;
-            }
-
-            showFeature(id.toStdString());
-
+        [this]() {
+            updateSelectedProperties();
             if (featureSelectedHandler_) {
-                featureSelectedHandler_(id.toStdString());
+                featureSelectedHandler_(selectedFeatureIds());
             }
         }
     );
+
+    connect(tree_, &QTreeWidget::currentItemChanged, this,
+        [this](QTreeWidgetItem*, QTreeWidgetItem*) { updateSelectedProperties(); });
 
     clearProperties();
 }
@@ -515,6 +501,8 @@ FeatureEditorPanel::selectedFeatures() const
 
 void FeatureEditorPanel::refresh()
 {
+    const QSignalBlocker blocker(tree_);
+    const auto selectedIds = selectedFeatureIds();
     QString currentId;
 
     if (tree_->currentItem() != nullptr) {
@@ -569,13 +557,15 @@ void FeatureEditorPanel::refresh()
             id
         );
 
+        item->setSelected(selectedIds.contains(id));
         if (id == currentId) {
             currentItemToRestore = item;
         }
     }
 
     if (currentItemToRestore != nullptr) {
-        tree_->setCurrentItem(currentItemToRestore);
+        tree_->setCurrentItem(currentItemToRestore, 0, QItemSelectionModel::NoUpdate);
+        updateSelectedProperties();
     } else {
         clearProperties();
     }
@@ -1098,4 +1088,43 @@ void FeatureEditorPanel::setPanelMessage(
     );
 
     messageLabel_->setVisible(!message.isEmpty());
+}
+
+QStringList FeatureEditorPanel::selectedFeatureIds() const
+{
+    QStringList ids;
+    for (auto* item : tree_->selectedItems()) {
+        const auto id = item->data(0, FeatureIdRole).toString();
+        if (!id.isEmpty()) ids.append(id);
+    }
+    return ids;
+}
+
+void FeatureEditorPanel::updateSelectedProperties()
+{
+    auto* item = tree_->currentItem();
+    if (!item || !item->isSelected()) {
+        const auto items = tree_->selectedItems();
+        item = items.isEmpty() ? nullptr : items.first();
+    }
+    showFeature(item ? item->data(0, FeatureIdRole).toString().toStdString() : std::string{});
+}
+
+void FeatureEditorPanel::selectFeatures(const QStringList& featureIds)
+{
+    // Viewer-to-tree updates must not reselect whole objects in the viewer:
+    // doing so would discard a picked face/edge and recurse through the signals.
+    const QSignalBlocker blocker(tree_);
+    auto* current = tree_->currentItem();
+    QTreeWidgetItem* first = nullptr;
+    for (QTreeWidgetItemIterator it(tree_); *it; ++it) {
+        auto* item = *it;
+        const auto id = item->data(0, FeatureIdRole).toString();
+        const bool selected = !id.isEmpty() && featureIds.contains(id);
+        item->setSelected(selected);
+        if (selected && !first) first = item;
+    }
+    if (!current || !current->isSelected()) current = first;
+    tree_->setCurrentItem(current, 0, QItemSelectionModel::NoUpdate);
+    updateSelectedProperties();
 }

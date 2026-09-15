@@ -46,10 +46,22 @@ After changing C++ code:
 4. Run:
    `git status --short`
 
-Do not commit automatically.
+## Git policy
+- NEVER create Git commits automatically.
+- Do not run `git commit` unless the user explicitly asks to perform the commit in the current task.
+- Do not amend, squash, rebase, reset, push, or create tags unless explicitly requested.
+- It is allowed to run read-only Git commands such as:
+   - `git status`
+   - `git diff`
+   - `git log`
+   - `git show`
+- Leave all code changes uncommitted so the user can review them first.
+- After completing a meaningful code change, suggest a concise Git commit message for the user to run manually.
+- The suggested commit message should describe only the changes made in the current task.
 
 ## Scope
 Before editing:
 - inspect the relevant existing files;
 - prefer modifying the smallest number of files necessary;
 - do not inspect or modify unrelated modules unless required.
+

@@ -297,7 +297,7 @@ void CadViewer::resizeEvent(QResizeEvent* event)
     }
 }
 
-void CadViewer::display(const TopoDS_Shape& shape)
+void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId)
 {
     initializeOcc();
 
@@ -313,6 +313,9 @@ void CadViewer::display(const TopoDS_Shape& shape)
         Standard_True
     );
     displayedShapes_.push_back(interactiveShape);
+    if (!featureId.isEmpty()) {
+        featureObjects_[featureId] = interactiveShape;
+    }
 
     applySelectionMode();
     fitAll();
@@ -327,6 +330,7 @@ void CadViewer::clear()
     cancelPushPull();
     context_->RemoveAll(Standard_True);
     displayedShapes_.clear();
+    featureObjects_.clear();
     resetDetectedCycle();
 }
 
@@ -386,6 +390,7 @@ void CadViewer::clearSelection()
     }
 
     context_->ClearSelected(Standard_True);
+    notifyFeatureSelection();
 }
 
 void CadViewer::applySelectionMode()
@@ -513,6 +518,7 @@ void CadViewer::selectAt(
             : AIS_SelectionScheme_Replace
     );
     context_->UpdateCurrentViewer();
+    notifyFeatureSelection();
 }
 
 bool CadViewer::beginPushPull()
@@ -881,4 +887,37 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
     }
 
     QWidget::keyPressEvent(event);
+}
+
+void CadViewer::selectFeatures(const QStringList& featureIds)
+{
+    if (!initialized_) return;
+
+    // Only change AIS selection. Keep presentations, camera and selection mode.
+    // This is the tree-to-viewer path; do not echo a selection notification.
+    context_->ClearSelected(Standard_False);
+    for (const auto& [id, object] : featureObjects_) {
+        if (featureIds.contains(id)) {
+            context_->AddOrRemoveSelected(object, Standard_False);
+        }
+    }
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::notifyFeatureSelection()
+{
+    QStringList ids;
+    if (initialized_) {
+        for (context_->InitSelected(); context_->MoreSelected(); context_->NextSelected()) {
+            // SelectedInteractive also identifies the parent of a picked face/edge.
+            const auto object = context_->SelectedInteractive();
+            for (const auto& [id, presentation] : featureObjects_) {
+                if (presentation == object && !ids.contains(id)) {
+                    ids.append(id);
+                    break;
+                }
+            }
+        }
+    }
+    emit featureSelectionChanged(ids);
 }

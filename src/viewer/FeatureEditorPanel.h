@@ -3,6 +3,7 @@
 #include "model/Body.h"
 
 #include <QWidget>
+#include <QStringList>
 
 #include <functional>
 #include <memory>
@@ -26,15 +27,18 @@ public:
     void setBody(cad::parametric::Body* body);
     void setModelChangedHandler(std::function<void()> handler);
     void setFeatureSelectedHandler(
-        std::function<void(const std::string&)> handler
+        std::function<void(const QStringList&)> handler
     );
     void refresh();
+    QStringList selectedFeatureIds() const;
+    void selectFeatures(const QStringList& featureIds);
 
 private:
     using FeaturePtr =
         std::shared_ptr<cad::parametric::ParametricFeature>;
 
     void createUi();
+    void updateSelectedProperties();
 
     void addBox();
     void addCylinder();
@@ -74,5 +78,5 @@ private:
     QLabel* messageLabel_{nullptr};
 
     std::function<void()> modelChangedHandler_;
-    std::function<void(const std::string&)> featureSelectedHandler_;
+    std::function<void(const QStringList&)> featureSelectedHandler_;
 };

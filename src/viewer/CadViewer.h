@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QWidget>
+#include <QStringList>
+#include <map>
 
 #include <vector>
 
@@ -37,7 +39,8 @@ public:
 
     explicit CadViewer(QWidget* parent = nullptr);
 
-    void display(const TopoDS_Shape& shape);
+    void display(const TopoDS_Shape& shape, const QString& featureId = {});
+    void selectFeatures(const QStringList& featureIds);
     void clear();
     void fitAll();
 
@@ -45,6 +48,9 @@ public:
     SelectionMode selectionMode() const;
     TopoDS_Shape selectedShape() const;
     void clearSelection();
+
+signals:
+    void featureSelectionChanged(const QStringList& featureIds);
 
 protected:
     QPaintEngine* paintEngine() const override;
@@ -59,6 +65,7 @@ protected:
 
 private:
     void initializeOcc();
+    void notifyFeatureSelection();
     void setupToolBar();
     void syncToolBarState();
     void setPushPullArmed(bool armed);
@@ -101,6 +108,7 @@ private:
     bool detectedCycleActive_{false};
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
+    std::map<QString, Handle(AIS_Shape)> featureObjects_;
 
     bool pushPullArmed_{false};
     bool pushPullActive_{false};
