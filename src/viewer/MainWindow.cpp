@@ -79,8 +79,11 @@ void MainWindow::createParametricPanel()
         }
     );
 
-    connect(viewer_, &CadViewer::featureSelectionChanged, featureEditorPanel_,
-        &FeatureEditorPanel::selectFeatures);
+    connect(viewer_, &CadViewer::featureSelectionChanged, this, [this](const QStringList& ids) {
+        featureEditorPanel_->selectFeatures(ids);
+        selectedObjectIds_ = ids;
+        deleteAction_->setEnabled(ids.size() == 1);
+    });
 
     dockWidget->setWidget(featureEditorPanel_);
 
@@ -108,7 +111,12 @@ void MainWindow::refreshParametricModel()
     }
     viewer_->retainFeatures(present);
     updateParametricVisibility();
-    viewer_->selectFeatures(featureEditorPanel_->selectedFeatureIds());
+    QStringList surviving;
+    for (const auto& id : selectedObjectIds_) {
+        if (present.contains(id) || parametricBody_.findFeature(id.toStdString())) surviving.append(id);
+    }
+    if (surviving != selectedObjectIds_) featureEditorPanel_->selectFeatures(surviving);
+    selectParametricFeatures(surviving);
     statusBar()->showMessage(rebuilt ? "Model updated" : QString::fromStdString(parametricBody_.lastError()), 3000);
 }
 
@@ -124,6 +132,8 @@ void MainWindow::updateParametricVisibility()
 void MainWindow::selectParametricFeatures(const QStringList& featureIds)
 {
     viewer_->selectFeatures(featureIds);
+    selectedObjectIds_ = featureIds;
+    deleteAction_->setEnabled(featureIds.size() == 1);
 }
 
 void MainWindow::createActions()
@@ -155,13 +165,16 @@ void MainWindow::createActions()
     redoAction->setShortcuts(redoKeys);
     editMenu->addAction(redoAction);
     editMenu->addSeparator();
-    auto* deleteAction = editMenu->addAction("Delete Feature");
-    connect(deleteAction, &QAction::triggered, this, &MainWindow::deleteFeature);
+    deleteAction_ = editMenu->addAction("Delete");
+    deleteAction_->setShortcut(QKeySequence(Qt::Key_Delete));
+    deleteAction_->setEnabled(false);
+    connect(deleteAction_, &QAction::triggered, this, &MainWindow::deleteFeature);
 
     auto* modelingMenu = menuBar()->addMenu("&Modeling");
     auto* viewMenu = menuBar()->addMenu("&View");
 
     auto* toolBar = addToolBar("Modeling");
+    toolBar->addAction(deleteAction_);
 
     auto* boxAction = new QAction("Box", this);
     connect(boxAction, &QAction::triggered, this, &MainWindow::createBox);
@@ -242,13 +255,29 @@ void MainWindow::createExtrude()
 
 void MainWindow::deleteFeature()
 {
-    const auto ids = featureEditorPanel_->selectedFeatureIds();
-    if (ids.size() != 1) {
-        QMessageBox::information(this, "Delete Feature", "Select exactly one feature in the model tree.");
-        return;
-    }
+    featureEditorPanel_->commitPendingEdits();
+    if (selectedObjectIds_.size() != 1) return;
+    const auto id = selectedObjectIds_.front();
     try {
-        undoStack_.push(new cad::commands::RemoveFeatureCommand(parametricBody_, ids.front().toStdString()));
+        std::unique_ptr<QUndoCommand> command;
+        if (parametricBody_.findFeature(id.toStdString())) {
+            auto removal = std::make_unique<cad::commands::RemoveFeatureCommand>(parametricBody_, id.toStdString());
+            const auto names = removal->dependentNames();
+            if (!names.isEmpty() && QMessageBox::question(this, "Delete Feature",
+                QString("Delete %1?\nDependent features will also be deleted:\n%2")
+                    .arg(id, names.join("\n")), QMessageBox::Yes | QMessageBox::Cancel,
+                    QMessageBox::Cancel) != QMessageBox::Yes) return;
+            command = std::move(removal);
+        } else {
+            bool valid = false;
+            const auto position = id.mid(7).toULongLong(&valid);
+            if (!id.startsWith("legacy:") || !valid) throw std::invalid_argument("Cannot delete unknown feature");
+            command = std::make_unique<cad::commands::RemoveDocumentFeatureCommand>(document_, position);
+        }
+        featureEditorPanel_->selectFeatures({});
+        selectParametricFeatures({});
+        undoStack_.push(command.release());
+        featureEditorPanel_->refresh();
     } catch (const std::exception& error) {
         QMessageBox::warning(this, "Delete Feature", QString::fromUtf8(error.what()));
     }
@@ -262,7 +291,7 @@ void MainWindow::addParametricFeature(const cad::parametric::ParametricFeature::
         const auto id = QString::fromStdString(feature->id());
         featureEditorPanel_->refresh();
         featureEditorPanel_->selectFeatures({id});
-        viewer_->selectFeatures({id});
+        selectParametricFeatures({id});
     } catch (const std::exception& error) {
         QMessageBox::warning(this, "Cannot create feature", QString::fromUtf8(error.what()));
     }
@@ -276,6 +305,7 @@ void MainWindow::clearDocument()
 
 void MainWindow::restoreViewer(bool fitView)
 {
+    selectParametricFeatures({});
     viewer_->clear();
     // Create feature presentations only when the model changes or is loaded.
     refreshParametricModel();

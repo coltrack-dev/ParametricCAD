@@ -47,6 +47,8 @@ private:
     cad::parametric::Body parametricBody_;
     QUndoStack undoStack_;
     bool resettingProject_{false};
+    QAction* deleteAction_{nullptr};
+    QStringList selectedObjectIds_;
     CadViewer* viewer_{nullptr};
     FeatureEditorPanel* featureEditorPanel_{nullptr};
 };
