@@ -2,6 +2,11 @@
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
+#include <TopExp_Explorer.hxx>
+#include <BRep_Tool.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -28,6 +33,7 @@
 #include <gp_Circ.hxx>
 #include <gp_Pnt.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -213,6 +219,9 @@ TopoDS_Wire BasicFeatures::circleWire(
 TopoDS_Face BasicFeatures::face(const TopoDS_Wire& wire)
 {
     requireNonNull(wire, "wire");
+    if (!BRep_Tool::IsClosed(wire) || !BRepCheck_Analyzer(wire).IsValid()) {
+        throw std::invalid_argument("Face requires a valid closed wire");
+    }
 
     BRepBuilderAPI_MakeFace builder(wire);
     if (!builder.IsDone()) {
@@ -291,7 +300,23 @@ TopoDS_Shape BasicFeatures::cut(
     requireNonNull(tool, "tool");
 
     BRepAlgoAPI_Cut builder(base, tool);
-    return checkedShape(builder, "Cut");
+    const TopoDS_Shape result = checkedShape(builder, "Cut");
+    if (TopExp_Explorer(base, TopAbs_SOLID).More()) {
+        GProp_GProps baseProperties;
+        GProp_GProps resultProperties;
+        BRepGProp::VolumeProperties(base, baseProperties);
+        BRepGProp::VolumeProperties(result, resultProperties);
+        const double baseVolume = std::abs(baseProperties.Mass());
+        const double resultVolume = std::abs(resultProperties.Mass());
+        const double tolerance = std::max(1.0e-9, baseVolume * 1.0e-10);
+        if (baseVolume - resultVolume <= tolerance) {
+            throw std::runtime_error("Cut tool does not intersect the base volume");
+        }
+        if (!TopExp_Explorer(result, TopAbs_SOLID).More() || resultVolume <= tolerance) {
+            throw std::runtime_error("Cut tool removes the entire base; reduce the cylinder radius or adjust the tool");
+        }
+    }
+    return result;
 }
 
 TopoDS_Shape BasicFeatures::common(

@@ -438,6 +438,12 @@ void FeatureEditorPanel::addBoolean(
 
         features[0] = baseFeature;
         features[1] = cuttingTool;
+
+        // For the Hexagon/Cylinder workflow, always use the cylinder as the tool.
+        if (std::dynamic_pointer_cast<cad::parametric::CylinderParametricFeature>(features[0])
+            && std::dynamic_pointer_cast<cad::parametric::HexagonFeature>(features[1])) {
+            std::swap(features[0], features[1]);
+        }
     }
 
     const std::string id =
@@ -457,11 +463,34 @@ void FeatureEditorPanel::addBoolean(
         operationName.toStdString()
     );
 
+    if (operation == cad::parametric::BooleanOperation::Cut) {
+        int sequence = 1;
+        QString name;
+        bool exists;
+        do {
+            name = QString("Cut%1").arg(sequence++, 3, 10, QLatin1Char('0'));
+            exists = false;
+            for (const auto& feature : body_->features()) {
+                if (feature->name() == name.toStdString()) exists = true;
+            }
+        } while (exists);
+        booleanFeature->setName(name.toStdString());
+    }
+
+    if (!booleanFeature->recompute()) {
+        setPanelMessage(QString::fromStdString(booleanFeature->error()), true);
+        return;
+    }
+
     body_->addFeature(booleanFeature);
 
     recomputeAndNotify(
         operationName + " added"
     );
+    if (booleanFeature->state() == cad::parametric::FeatureState::UpToDate) {
+        selectFeatures({QString::fromStdString(booleanFeature->id())});
+        if (featureSelectedHandler_) featureSelectedHandler_(selectedFeatureIds());
+    }
 }
 
 std::vector<FeatureEditorPanel::FeaturePtr>
@@ -629,6 +658,28 @@ void FeatureEditorPanel::rebuildProperties(
             "Error",
             errorLabel
         );
+    }
+
+    if (auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature)) {
+        auto* width = makeLengthEditor(propertiesWidget_, sketch->width());
+        auto* height = makeLengthEditor(propertiesWidget_, sketch->height());
+        const auto apply = [this, sketch, width, height]() {
+            if (sketch->width() == width->value() && sketch->height() == height->value()) return;
+            sketch->setSize(width->value(), height->value());
+            commitFeatureChange(sketch);
+        };
+        connect(width, &QDoubleSpinBox::editingFinished, this, apply);
+        connect(height, &QDoubleSpinBox::editingFinished, this, apply);
+        propertiesLayout_->addRow("Width", width);
+        propertiesLayout_->addRow("Height", height);
+        propertiesLayout_->addRow("Plane", new QLabel("XY", propertiesWidget_));
+        return;
+    }
+
+    if (auto face = std::dynamic_pointer_cast<cad::parametric::FaceFeature>(feature)) {
+        propertiesLayout_->addRow("Source Sketch",
+            new QLabel(QString::fromStdString(face->sourceFeatureId()), propertiesWidget_));
+        return;
     }
 
     if (auto box =

@@ -25,14 +25,18 @@ private:
     bool saveDocumentAs();
     bool saveTo(const QString& path);
     void updateTitle();
-    void restoreViewer();
+    void restoreViewer(bool fitView = true);
     QString currentFile_;
     void createActions();
     void createParametricPanel();
     void refreshParametricModel();
+    void updateParametricVisibility();
     void selectParametricFeatures(const QStringList& featureIds);
     void createBox();
     void createCylinder();
+    void createRectangleSketch();
+    void createFace();
+    void addParametricFeature(const cad::parametric::ParametricFeature::Ptr& feature);
     void clearDocument();
 
     Document document_;

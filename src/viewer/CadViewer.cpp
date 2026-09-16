@@ -15,6 +15,7 @@
 #include <QToolButton>
 #include <QWheelEvent>
 
+#include <AIS_DisplayMode.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -23,6 +24,9 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <OpenGl_GraphicDriver.hxx>
+#include <Prs3d_Drawer.hxx>
+#include <Prs3d_LineAspect.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopoDS.hxx>
@@ -297,12 +301,24 @@ void CadViewer::resizeEvent(QResizeEvent* event)
     }
 }
 
-void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId)
+void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, bool fitView)
 {
     initializeOcc();
 
     Handle(AIS_Shape) interactiveShape =
         new AIS_Shape(shape);
+
+    if (!shape.IsNull()) {
+        if (shape.ShapeType() == TopAbs_FACE || TopExp_Explorer(shape, TopAbs_FACE).More()) {
+            interactiveShape->SetDisplayMode(AIS_Shaded);
+            const auto& drawer = interactiveShape->Attributes();
+            drawer->SetFaceBoundaryDraw(Standard_True);
+            drawer->SetFaceBoundaryAspect(
+                new Prs3d_LineAspect(Quantity_NOC_BLACK, Aspect_TOL_SOLID, 1.2));
+        } else if (shape.ShapeType() == TopAbs_WIRE) {
+            interactiveShape->SetDisplayMode(AIS_WireFrame);
+        }
+    }
 
     if (xRayEnabled_) {
         interactiveShape->SetTransparency(XRayTransparency);
@@ -318,7 +334,46 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId)
     }
 
     applySelectionMode();
-    fitAll();
+    if (fitView) {
+        fitAll();
+    }
+}
+
+void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureId)
+{
+    if (shape.IsNull()) return;
+    const auto found = featureObjects_.find(featureId);
+    if (found == featureObjects_.end()) {
+        display(shape, featureId, false);
+        return;
+    }
+    const auto& object = found->second;
+    if (object->Shape().IsEqual(shape)) return;
+
+    cancelPushPull();
+    resetDetectedCycle();
+    object->SetShape(shape);
+    context_->Redisplay(object, Standard_True);
+}
+
+void CadViewer::setHiddenFeatures(const QStringList& featureIds)
+{
+    if (!initialized_) return;
+    bool changed = false;
+    for (const auto& [id, object] : featureObjects_) {
+        const bool visible = !featureIds.contains(id);
+        if (visible == bool(context_->IsDisplayed(object))) continue;
+        if (visible) {
+            context_->Display(object, Standard_False);
+        } else {
+            context_->Erase(object, Standard_False);
+        }
+        changed = true;
+    }
+    if (changed) {
+        resetDetectedCycle();
+        context_->UpdateCurrentViewer();
+    }
 }
 
 void CadViewer::clear()
@@ -332,6 +387,11 @@ void CadViewer::clear()
     displayedShapes_.clear();
     featureObjects_.clear();
     resetDetectedCycle();
+}
+
+bool CadViewer::hasDisplayedShapes() const
+{
+    return !displayedShapes_.empty();
 }
 
 void CadViewer::fitAll()
@@ -897,7 +957,7 @@ void CadViewer::selectFeatures(const QStringList& featureIds)
     // This is the tree-to-viewer path; do not echo a selection notification.
     context_->ClearSelected(Standard_False);
     for (const auto& [id, object] : featureObjects_) {
-        if (featureIds.contains(id)) {
+        if (featureIds.contains(id) && context_->IsDisplayed(object)) {
             context_->AddOrRemoveSelected(object, Standard_False);
         }
     }

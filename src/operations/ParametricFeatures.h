@@ -14,6 +14,37 @@
 
 namespace cad::parametric {
 
+class SketchFeature final : public ParametricFeature
+{
+public:
+    SketchFeature(std::string id, double width, double height);
+    void setSize(double width, double height);
+    double width() const noexcept;
+    double height() const noexcept;
+
+protected:
+    TopoDS_Shape build() const override;
+
+private:
+    double width_;
+    double height_;
+};
+
+class FaceFeature final : public ParametricFeature
+{
+public:
+    FaceFeature(std::string id, const Ptr& source);
+    const std::string& sourceFeatureId() const noexcept;
+    Ptr source() const;
+
+protected:
+    TopoDS_Shape build() const override;
+
+private:
+    std::string sourceFeatureId_;
+    std::weak_ptr<ParametricFeature> source_;
+};
+
 class BoxParametricFeature final : public ParametricFeature
 {
 public:

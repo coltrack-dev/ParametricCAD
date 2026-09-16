@@ -6,6 +6,8 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <TopoDS.hxx>
 
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
@@ -35,6 +37,66 @@ void requireFeature(
 }
 
 } // namespace
+
+SketchFeature::SketchFeature(std::string id, double width, double height)
+    : ParametricFeature(std::move(id), "Rectangle Sketch"),
+      width_(width), height_(height)
+{
+}
+
+void SketchFeature::setSize(double width, double height)
+{
+    width_ = width;
+    height_ = height;
+    markDirty();
+}
+
+double SketchFeature::width() const noexcept { return width_; }
+double SketchFeature::height() const noexcept { return height_; }
+
+TopoDS_Shape SketchFeature::build() const
+{
+    return cad::modeling::BasicFeatures::rectangleWire(width_, height_);
+}
+
+FaceFeature::FaceFeature(std::string id, const Ptr& source)
+    : ParametricFeature(std::move(id), "Face"), source_(source)
+{
+    requireFeature(source, "Sketch source");
+    if (!std::dynamic_pointer_cast<SketchFeature>(source)) {
+        throw std::invalid_argument("Face source must be a Rectangle Sketch");
+    }
+    sourceFeatureId_ = source->id();
+    addDependency(source);
+}
+
+const std::string& FaceFeature::sourceFeatureId() const noexcept
+{
+    return sourceFeatureId_;
+}
+
+ParametricFeature::Ptr FaceFeature::source() const
+{
+    return source_.lock();
+}
+
+TopoDS_Shape FaceFeature::build() const
+{
+    const auto sketch = source();
+    if (!sketch) {
+        throw std::runtime_error("Missing Sketch source '" + sourceFeatureId_ + "'");
+    }
+    if (sketch->state() != FeatureState::UpToDate || sketch->shape().IsNull()
+        || sketch->shape().ShapeType() != TopAbs_WIRE) {
+        throw std::runtime_error("Sketch '" + sourceFeatureId_ + "' must be rebuilt into a valid closed wire");
+    }
+    // BasicFeatures validates the wire and constructs the face with BRepBuilderAPI_MakeFace.
+    const auto face = cad::modeling::BasicFeatures::face(TopoDS::Wire(sketch->shape()));
+    if (!BRepCheck_Analyzer(face).IsValid()) {
+        throw std::runtime_error("Sketch '" + sourceFeatureId_ + "' produced an invalid face");
+    }
+    return face;
+}
 
 BoxParametricFeature::BoxParametricFeature(
     std::string id,

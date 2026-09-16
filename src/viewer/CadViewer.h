@@ -39,9 +39,12 @@ public:
 
     explicit CadViewer(QWidget* parent = nullptr);
 
-    void display(const TopoDS_Shape& shape, const QString& featureId = {});
+    void display(const TopoDS_Shape& shape, const QString& featureId = {}, bool fitView = true);
+    void updateFeature(const TopoDS_Shape& shape, const QString& featureId);
     void selectFeatures(const QStringList& featureIds);
+    void setHiddenFeatures(const QStringList& featureIds);
     void clear();
+    bool hasDisplayedShapes() const;
     void fitAll();
 
     void setSelectionMode(SelectionMode mode);

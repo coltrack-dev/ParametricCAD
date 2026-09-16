@@ -36,7 +36,19 @@ QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
 {
     QJsonObject o{{"id", QString::fromStdString(feature->id())},
                   {"name", QString::fromStdString(feature->name())}};
-    if (auto f = std::dynamic_pointer_cast<BoxParametricFeature>(feature)) {
+    if (auto f = std::dynamic_pointer_cast<SketchFeature>(feature)) {
+        require(std::isfinite(f->width()) && f->width() > 0
+                && std::isfinite(f->height()) && f->height() > 0, "Invalid Sketch dimensions");
+        o.insert("type", "Sketch"); o.insert("plane", "XY");
+        o.insert("width", f->width()); o.insert("height", f->height());
+    } else if (auto f = std::dynamic_pointer_cast<FaceFeature>(feature)) {
+        if (!f->source() || preceding.findFeature(f->sourceFeatureId()) != f->source()) {
+            throw std::runtime_error("Face '" + f->id() + "' references missing or forward Sketch '"
+                                     + f->sourceFeatureId() + "'");
+        }
+        o.insert("type", "Face");
+        o.insert("sourceFeatureId", QString::fromStdString(f->sourceFeatureId()));
+    } else if (auto f = std::dynamic_pointer_cast<BoxParametricFeature>(feature)) {
         o.insert("type", "Box"); o.insert("width", f->width());
         o.insert("depth", f->depth()); o.insert("height", f->height());
     } else if (auto f = std::dynamic_pointer_cast<CylinderParametricFeature>(feature)) {
@@ -70,7 +82,18 @@ ParametricFeature::Ptr decode(const QJsonObject& o, const Body& body)
     require(!id.empty(), "Empty feature id");
     const auto type = string(o, "type");
     ParametricFeature::Ptr f;
-    if (type == "Box") f = std::make_shared<BoxParametricFeature>(id, number(o,"width"), number(o,"depth"), number(o,"height"));
+    if (type == "Sketch") {
+        require(string(o, "plane") == "XY", "Unsupported Sketch plane (expected XY)");
+        f = std::make_shared<SketchFeature>(id, number(o, "width"), number(o, "height"));
+    } else if (type == "Face") {
+        const auto sourceId = string(o, "sourceFeatureId");
+        const auto source = body.findFeature(sourceId);
+        if (!std::dynamic_pointer_cast<SketchFeature>(source)) {
+            throw std::runtime_error("Face '" + id + "' references missing, forward or non-Sketch source '"
+                                     + sourceId + "'");
+        }
+        f = std::make_shared<FaceFeature>(id, source);
+    } else if (type == "Box") f = std::make_shared<BoxParametricFeature>(id, number(o,"width"), number(o,"depth"), number(o,"height"));
     else if (type == "Cylinder") f = std::make_shared<CylinderParametricFeature>(id, number(o,"radius"), number(o,"height"));
     else if (type == "Cone") f = std::make_shared<ConeFeature>(id, number(o,"bottomRadius"), number(o,"topRadius"), number(o,"height"));
     else if (type == "Sphere") f = std::make_shared<SphereFeature>(id, number(o,"radius"));

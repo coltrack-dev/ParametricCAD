@@ -3,32 +3,24 @@
         {
             "acrossFlats": 30,
             "height": 12,
-            "id": "hexagon-a96a6635-10ce-4b82-ba74-dbee0d94b1e3",
+            "id": "hexagon-a85d32e4-c0b1-41f6-a749-d6079b39d02c",
             "name": "Hexagon",
             "type": "Hexagon"
         },
         {
             "height": 12,
-            "id": "cylinder-7df7ad0d-64c3-4b4c-8ff0-872b0ef37723",
+            "id": "cylinder-f9518688-68b7-4d52-9f29-c8fb9eea2333",
             "name": "Cylinder",
-            "radius": 10,
+            "radius": 8,
             "type": "Cylinder"
         },
         {
-            "id": "cut-f133adc9-10b0-4dc7-893a-0cfa814d2bd4",
-            "left": "hexagon-a96a6635-10ce-4b82-ba74-dbee0d94b1e3",
-            "name": "Cut",
+            "id": "cut-6abdc6db-35c1-4d2f-b0d2-fe04bd6cdbd4",
+            "left": "hexagon-a85d32e4-c0b1-41f6-a749-d6079b39d02c",
+            "name": "Cut001",
             "operation": "Cut",
-            "right": "cylinder-7df7ad0d-64c3-4b4c-8ff0-872b0ef37723",
+            "right": "cylinder-f9518688-68b7-4d52-9f29-c8fb9eea2333",
             "type": "Boolean"
-        },
-        {
-            "depth": 70,
-            "height": 30,
-            "id": "box-07e396e3-cff5-48a2-a2ab-c29dcc95eb9f",
-            "name": "Box",
-            "type": "Box",
-            "width": 100
         }
     ],
     "features": [

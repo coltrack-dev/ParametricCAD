@@ -1,5 +1,6 @@
 #include "model/ParametricFeature.h"
 
+#include <Standard_Failure.hxx>
 #include <stdexcept>
 #include <utility>
 
@@ -100,6 +101,11 @@ bool ParametricFeature::recompute()
         state_ = FeatureState::UpToDate;
         error_.clear();
         return true;
+    } catch (const Standard_Failure& exception) {
+        shape_.Nullify();
+        state_ = FeatureState::Failed;
+        error_ = exception.GetMessageString();
+        return false;
     } catch (const std::exception& exception) {
         shape_.Nullify();
         state_ = FeatureState::Failed;

@@ -94,6 +94,7 @@ int main()
         history[2] = operation;
         bad.insert("body", history);
         reject(QJsonDocument(bad).toJson());
+        check(error.contains("reference"), "broken dependency error explains the reference problem");
         bad = root;
         history = bad.value("body").toArray();
         history.append(history[0]);

@@ -3,6 +3,7 @@
 
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
+#include "operations/ParametricFeatures.h"
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
 
@@ -18,6 +19,7 @@
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QToolBar>
+#include <QUuid>
 
 #include <memory>
 
@@ -73,17 +75,16 @@ void MainWindow::createParametricPanel()
 
 void MainWindow::refreshParametricModel()
 {
-    if (!parametricBody_.recompute()) {
-        statusBar()->showMessage(
-            QString::fromStdString(
-                parametricBody_.lastError()
-            ),
-            5000
-        );
+    const bool rebuilt = parametricBody_.recompute();
+    for (const auto& feature : parametricBody_.features()) {
+        viewer_->updateFeature(feature->shape(), QString::fromStdString(feature->id()));
+    }
+    updateParametricVisibility();
+    viewer_->selectFeatures(featureEditorPanel_->selectedFeatureIds());
+    if (!rebuilt) {
+        statusBar()->showMessage(QString::fromStdString(parametricBody_.lastError()), 5000);
         return;
     }
-
-    restoreViewer();
 
     statusBar()->showMessage(
         "Parametric model recomputed",
@@ -91,6 +92,22 @@ void MainWindow::refreshParametricModel()
     );
 }
 
+
+void MainWindow::updateParametricVisibility()
+{
+    QStringList hidden;
+    for (const auto& feature : parametricBody_.features()) {
+        const auto cut = std::dynamic_pointer_cast<cad::parametric::BooleanFeature>(feature);
+        if (!cut || cut->operation() != cad::parametric::BooleanOperation::Cut) continue;
+        if (cut->state() == cad::parametric::FeatureState::UpToDate && !cut->shape().IsNull()) {
+            hidden.append(QString::fromStdString(cut->left()->id()));
+            hidden.append(QString::fromStdString(cut->right()->id()));
+        } else {
+            hidden.append(QString::fromStdString(cut->id()));
+        }
+    }
+    viewer_->setHiddenFeatures(hidden);
+}
 
 void MainWindow::selectParametricFeatures(const QStringList& featureIds)
 {
@@ -129,6 +146,11 @@ void MainWindow::createActions()
     toolBar->addAction(cylinderAction);
 
     modelingMenu->addSeparator();
+    auto* sketchAction = modelingMenu->addAction("Add Rectangle Sketch");
+    connect(sketchAction, &QAction::triggered, this, &MainWindow::createRectangleSketch);
+    auto* faceAction = modelingMenu->addAction("Create Face");
+    connect(faceAction, &QAction::triggered, this, &MainWindow::createFace);
+    modelingMenu->addSeparator();
 
     auto* clearAction = new QAction("Clear", this);
     connect(clearAction, &QAction::triggered, this, &MainWindow::clearDocument);
@@ -156,6 +178,49 @@ void MainWindow::createCylinder()
     statusBar()->showMessage("Cylinder created", 2000);
 }
 
+void MainWindow::createRectangleSketch()
+{
+    const auto id = "sketch-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    addParametricFeature(std::make_shared<cad::parametric::SketchFeature>(id, 100.0, 60.0));
+}
+
+void MainWindow::createFace()
+{
+    const auto ids = featureEditorPanel_->selectedFeatureIds();
+    const auto sketch = ids.size() == 1
+        ? std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+              parametricBody_.findFeature(ids.front().toStdString()))
+        : nullptr;
+    if (!sketch) {
+        QMessageBox::information(this, "Create Face",
+            "Select exactly one Rectangle Sketch in the model tree or viewport, then choose Create Face.");
+        return;
+    }
+    const auto id = "face-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    addParametricFeature(std::make_shared<cad::parametric::FaceFeature>(id, sketch));
+}
+
+void MainWindow::addParametricFeature(const cad::parametric::ParametricFeature::Ptr& feature)
+{
+    if (!feature->recompute()) {
+        QMessageBox::warning(this, "Cannot create feature", QString::fromStdString(feature->error()));
+        return;
+    }
+    parametricBody_.addFeature(feature);
+    if (!parametricBody_.recompute()) {
+        const auto error = QString::fromStdString(parametricBody_.lastError());
+        parametricBody_.removeFeature(feature->id());
+        QMessageBox::warning(this, "Cannot create feature", error);
+        return;
+    }
+    const auto id = QString::fromStdString(feature->id());
+    featureEditorPanel_->refresh();
+    featureEditorPanel_->selectFeatures({id});
+    viewer_->display(feature->shape(), id, false);
+    viewer_->selectFeatures({id});
+    statusBar()->showMessage(QString::fromStdString(feature->name()) + " created", 2000);
+}
+
 void MainWindow::clearDocument()
 {
     document_.clear();
@@ -165,20 +230,23 @@ void MainWindow::clearDocument()
     statusBar()->showMessage("Document cleared", 2000);
 }
 
-void MainWindow::restoreViewer()
+void MainWindow::restoreViewer(bool fitView)
 {
     viewer_->clear();
     for (const auto& feature : document_.features()) {
-        viewer_->display(feature->shape());
+        viewer_->display(feature->shape(), {}, false);
     }
     // Create feature presentations only when the model changes or is loaded.
     for (const auto& feature : parametricBody_.features()) {
         if (!feature->shape().IsNull()) {
-            viewer_->display(feature->shape(), QString::fromStdString(feature->id()));
+            viewer_->display(feature->shape(), QString::fromStdString(feature->id()), false);
         }
     }
+    updateParametricVisibility();
     viewer_->selectFeatures(featureEditorPanel_->selectedFeatureIds());
-    viewer_->fitAll();
+    if (fitView) {
+        viewer_->fitAll();
+    }
 }
 
 void MainWindow::updateTitle()

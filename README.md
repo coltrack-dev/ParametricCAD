@@ -4,6 +4,18 @@ ParametricCAD is a simple desktop CAD application written in C++ using Qt 6 and 
 
 The project is intended as a public portfolio project for exploring CAD architecture, B-Rep geometry, interactive 3D modeling, parametric operations, and SketchUp-like direct modeling workflows.
 
+## Architecture
+
+`Document` stores feature definitions and their generated geometry. The current model
+is split: legacy primitives belong to `Document`, while `Body` owns the newer
+parametric history, IDs and dependencies. `Feature` represents a parametric
+operation; `CadViewer` handles visualization and selection, and
+`FeatureEditorPanel` edits parameters. `.pcad` stores parameters and supported
+dependencies, rather than only `TopoDS_Shape`.
+
+See [AGENTS.md](AGENTS.md), [parametric architecture](docs/PARAMETRIC_FEATURES.md),
+[.pcad format](docs/PCAD_FORMAT.md), and [roadmap](docs/ROADMAP.md).
+
 ## Current Features
 
 ### Primitive geometry
@@ -116,7 +128,7 @@ Mouse controls are inspired by common 3D modeling applications.
 
 ## Technology Stack
 
-- C++17/20
+- C++20
 - Qt 6
 - Open CASCADE Technology
 - CMake
@@ -153,7 +165,7 @@ ParametricCAD/
 
 Install:
 
-- C++ compiler with C++17 or newer support
+- C++ compiler with C++20 support
 - CMake
 - Qt 6
 - Open CASCADE Technology
@@ -184,6 +196,17 @@ cmake -S . -B build -G Ninja
 
 ```bash
 cmake --build build -j
+```
+
+### Tests (headless)
+
+Qt Test is included with the Qt development packages. Tests are enabled by default
+and can be disabled with `-DPARAMETRIC_CAD_BUILD_TESTS=OFF`.
+
+```bash
+cmake -S . -B build
+cmake --build build -j
+ctest --test-dir build --output-on-failure
 ```
 
 ### Run
@@ -221,12 +244,18 @@ Implemented:
 - [x] X-Ray display mode
 - [x] Select-through / cycling detected geometry
 - [x] Modeling toolbar
+- [x] Parametric feature tree and properties editor for supported primitives
+- [x] Modeling -> Add Rectangle Sketch / Create Face, editable Sketch dimensions and .pcad persistence
+- [x] Version 1 .pcad save/load with supported dependency references
+- [x] Save on close (autosave.pcad fallback for unnamed projects)
+
+See the [roadmap](docs/ROADMAP.md) for implementation limits and manual smoke tests.
 
 Planned:
 
 - [ ] Parametric Push/Pull feature
 - [ ] Undo / Redo
-- [ ] Feature history
+- [ ] Unified Document/Body feature history
 - [ ] Rectangle tool
 - [ ] Line tool
 - [ ] Circle tool
@@ -238,7 +267,7 @@ Planned:
 - [ ] Snapping to endpoints, midpoints and intersections
 - [ ] Dimensions and constraints
 - [ ] Groups / Components
-- [ ] Model tree
+- [ ] Dependency visualization in the model tree
 - [ ] STEP import/export
 - [ ] STL export
 - [ ] Improved X-Ray and hidden geometry interaction
