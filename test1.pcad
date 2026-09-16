@@ -21,6 +21,22 @@
             "operation": "Cut",
             "right": "cylinder-f9518688-68b7-4d52-9f29-c8fb9eea2333",
             "type": "Boolean"
+        },
+        {
+            "depth": 70,
+            "height": 30,
+            "id": "box-1551884c-374d-48b8-8473-d34c2a56c41b",
+            "name": "Box",
+            "type": "Box",
+            "width": 100
+        },
+        {
+            "id": "fuse-8a667930-89f1-4962-8f10-aae2235ae8d3",
+            "left": "hexagon-a85d32e4-c0b1-41f6-a749-d6079b39d02c",
+            "name": "Fuse",
+            "operation": "Fuse",
+            "right": "box-1551884c-374d-48b8-8473-d34c2a56c41b",
+            "type": "Boolean"
         }
     ],
     "features": [
