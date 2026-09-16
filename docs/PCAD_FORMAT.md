@@ -15,7 +15,7 @@
 
 - `features` contains legacy Box/Cylinder parameters without IDs.
 - `body` contains ID/name/type plus parameters for Box, Cylinder, Cone, Sphere,
-  Torus, Hexagon, Boolean, Sketch and Face. Type names are case-sensitive.
+  Torus, Hexagon, Boolean, Sketch, Face and Extrude. Type names are case-sensitive.
 - Boolean dependencies are stored as `left`/`right` IDs and `operation`
   (`Fuse`, `Cut`, `Common`); sources must precede the dependent entry.
 - Other body parameters: Cylinder (`radius`, `height`), Cone (`bottomRadius`,
@@ -28,7 +28,10 @@
   Face uses `type: "Face"` and `sourceFeatureId`, referencing a preceding Sketch in `body`.
   IDs, names and editable dependencies survive loading. Missing, forward and wrong-type
   Face references are rejected with both IDs in the error message.
-- Extrude is not supported by this serializer. No migration to version 2 is implemented.
+- Extrude uses `type: "Extrude"`, `sourceFeatureId` (preceding profile) and
+  `vectorX`/`vectorY`/`vectorZ`. The Length editor scales this vector.
+- Undo history is not serialized. Save marks the undo stack clean without clearing it;
+  successful Open clears history. No migration to version 2 is implemented.
   Geometry and viewer-only Push/Pull edits are not stored.
 - Save and close use the current filename or the AppDataLocation `autosave.pcad`
   fallback. There is no periodic autosave timer or recovery UI.

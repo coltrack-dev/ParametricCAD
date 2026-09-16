@@ -1,6 +1,7 @@
 #include "viewer/CadViewer.h"
 
 #include <cmath>
+#include <algorithm>
 
 #include <QAction>
 #include <QActionGroup>
@@ -368,6 +369,27 @@ void CadViewer::setHiddenFeatures(const QStringList& featureIds)
         } else {
             context_->Erase(object, Standard_False);
         }
+        changed = true;
+    }
+    if (changed) {
+        resetDetectedCycle();
+        context_->UpdateCurrentViewer();
+    }
+}
+
+void CadViewer::retainFeatures(const QStringList& featureIds)
+{
+    if (!initialized_) return;
+    bool changed = false;
+    for (auto it = featureObjects_.begin(); it != featureObjects_.end();) {
+        if (featureIds.contains(it->first)) {
+            ++it;
+            continue;
+        }
+        cancelPushPull();
+        context_->Remove(it->second, Standard_False);
+        std::erase(displayedShapes_, it->second);
+        it = featureObjects_.erase(it);
         changed = true;
     }
     if (changed) {

@@ -18,6 +18,8 @@ public:
     Document& operator=(Document&&) noexcept = default;
 
     Feature& addFeature(std::unique_ptr<Feature> feature);
+    Feature& insertFeature(std::size_t position, std::unique_ptr<Feature> feature);
+    std::unique_ptr<Feature> takeFeature(std::size_t position);
     void clear();
 
     [[nodiscard]]

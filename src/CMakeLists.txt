@@ -1,5 +1,9 @@
 set(PARAMETRIC_CAD_SOURCES
     app/main.cpp
+    commands/FeatureCommands.cpp
+    commands/FeatureCommands.h
+    model/FeatureVisibility.cpp
+    model/FeatureVisibility.h
     viewer/MainWindow.cpp
     viewer/MainWindow.h
     viewer/FeatureEditorPanel.cpp

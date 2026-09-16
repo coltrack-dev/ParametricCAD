@@ -6,6 +6,8 @@ The project is intended as a public portfolio project for exploring CAD architec
 
 ## Architecture
 
+Undo/Redo architecture and checks: [docs/UNDO_REDO.md](docs/UNDO_REDO.md).
+
 `Document` stores feature definitions and their generated geometry. The current model
 is split: legacy primitives belong to `Document`, while `Body` owns the newer
 parametric history, IDs and dependencies. `Feature` represents a parametric
@@ -248,13 +250,13 @@ Implemented:
 - [x] Modeling -> Add Rectangle Sketch / Create Face, editable Sketch dimensions and .pcad persistence
 - [x] Version 1 .pcad save/load with supported dependency references
 - [x] Save on close (autosave.pcad fallback for unnamed projects)
+- [x] Undo / Redo for model creation, parameter edits, Body deletion and project clearing
 
 See the [roadmap](docs/ROADMAP.md) for implementation limits and manual smoke tests.
 
 Planned:
 
 - [ ] Parametric Push/Pull feature
-- [ ] Undo / Redo
 - [ ] Unified Document/Body feature history
 - [ ] Rectangle tool
 - [ ] Line tool

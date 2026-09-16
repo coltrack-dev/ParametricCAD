@@ -48,6 +48,11 @@ QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
         }
         o.insert("type", "Face");
         o.insert("sourceFeatureId", QString::fromStdString(f->sourceFeatureId()));
+    } else if (auto f = std::dynamic_pointer_cast<ExtrudeFeature>(feature)) {
+        require(f->profile() && preceding.findFeature(f->profile()->id()) == f->profile(), "Invalid Extrude source reference");
+        o.insert("type", "Extrude");
+        o.insert("sourceFeatureId", QString::fromStdString(f->profile()->id()));
+        o.insert("vectorX", f->vector().X()); o.insert("vectorY", f->vector().Y()); o.insert("vectorZ", f->vector().Z());
     } else if (auto f = std::dynamic_pointer_cast<BoxParametricFeature>(feature)) {
         o.insert("type", "Box"); o.insert("width", f->width());
         o.insert("depth", f->depth()); o.insert("height", f->height());
@@ -93,6 +98,12 @@ ParametricFeature::Ptr decode(const QJsonObject& o, const Body& body)
                                      + sourceId + "'");
         }
         f = std::make_shared<FaceFeature>(id, source);
+    } else if (type == "Extrude") {
+        const auto sourceId = string(o, "sourceFeatureId");
+        const auto source = body.findFeature(sourceId);
+        if (!source) throw std::runtime_error("Extrude '" + id + "' references missing source '" + sourceId + "'");
+        f = std::make_shared<ExtrudeFeature>(id, source,
+            gp_Vec(number(o, "vectorX"), number(o, "vectorY"), number(o, "vectorZ")));
     } else if (type == "Box") f = std::make_shared<BoxParametricFeature>(id, number(o,"width"), number(o,"depth"), number(o,"height"));
     else if (type == "Cylinder") f = std::make_shared<CylinderParametricFeature>(id, number(o,"radius"), number(o,"height"));
     else if (type == "Cone") f = std::make_shared<ConeFeature>(id, number(o,"bottomRadius"), number(o,"topRadius"), number(o,"height"));

@@ -43,6 +43,7 @@ public:
     void updateFeature(const TopoDS_Shape& shape, const QString& featureId);
     void selectFeatures(const QStringList& featureIds);
     void setHiddenFeatures(const QStringList& featureIds);
+    void retainFeatures(const QStringList& featureIds);
     void clear();
     bool hasDisplayedShapes() const;
     void fitAll();

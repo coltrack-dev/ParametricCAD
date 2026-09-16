@@ -3,6 +3,8 @@
 #include "model/Body.h"
 
 #include <QWidget>
+#include <QPointer>
+#include <QUndoStack>
 #include <QStringList>
 
 #include <functional>
@@ -25,6 +27,9 @@ public:
     explicit FeatureEditorPanel(QWidget* parent = nullptr);
 
     void setBody(cad::parametric::Body* body);
+    void setUndoStack(QUndoStack* stack);
+    void scheduleRefresh();
+    void commitPendingEdits();
     void setModelChangedHandler(std::function<void()> handler);
     void setFeatureSelectedHandler(
         std::function<void(const QStringList&)> handler
@@ -32,6 +37,9 @@ public:
     void refresh();
     QStringList selectedFeatureIds() const;
     void selectFeatures(const QStringList& featureIds);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     using FeaturePtr =
@@ -59,7 +67,7 @@ private:
     void rebuildProperties(const FeaturePtr& feature);
     void clearProperties();
 
-    void commitFeatureChange(const FeaturePtr& feature);
+    void addFeature(const FeaturePtr& feature);
 
     void recomputeAndNotify(
         const QString& successMessage
@@ -71,6 +79,9 @@ private:
     );
 
     cad::parametric::Body* body_{nullptr};
+    QPointer<QUndoStack> undoStack_;
+    bool refreshPending_{false};
+    bool updatingProperties_{false};
 
     QTreeWidget* tree_{nullptr};
     QWidget* propertiesWidget_{nullptr};

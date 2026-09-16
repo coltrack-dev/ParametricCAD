@@ -35,17 +35,16 @@ Sketch/Face construction uses the existing Body architecture; Boolean Cut is not
 - Rectangle SketchFeature with editable width/height and Sketch -> Wire rebuild.
 - FaceFeature from a selected Sketch, via Modeling -> Create Face.
 - Sketch/Face .pcad persistence, sourceFeatureId validation and editable round-trip.
+- Face -> Extrude creation, positive Length editor and v1 dependency/vector persistence.
+- QUndoStack commands for create/edit/delete/clear; selective dependency rebuild.
 
 **In progress**
 
-- ExtrudeFeature exists with a profile pointer and gp_Vec, without editor or persistence support.
-- Dependency rebuild: explicit markDirtyFrom() dirties the history suffix, then
-  recompute() runs in insertion order. Setters alone do not propagate dirtiness.
+- Direct model callers must explicitly call markDirtyFrom()/recompute(); UI commands
+  already propagate changes to registered dependents without rebuilding unrelated branches.
 
 **Planned**
 
-- Face -> Extrude with positive length, UI creation/editing and stable source IDs.
-- Extrude persistence and complete Sketch/Face/Extrude editable round-trip after load.
 - Automatic dependency propagation, topological ordering and cycle detection.
 - Rebuild only affected dependents; define safe source deletion behavior.
 - Reassess ownership only when needed; keep new feature integration in Body for now.
@@ -109,9 +108,13 @@ Further Boolean work is deferred until Phase 2 is reliable.
 
 ## Phase 8 — Editing infrastructure
 
+**Done**
+
+- Undo/Redo and command history for model operations; see [UNDO_REDO.md](UNDO_REDO.md).
+- Cut operand visibility derives from active history and follows Undo/Redo.
+
 **Planned**
 
-- Undo/Redo and command history.
 - Dependency visualization.
 - Feature suppression.
 - Reorder feature history if dependency validation and architecture permit.
@@ -140,18 +143,17 @@ Further Boolean work is deferred until Phase 2 is reliable.
 
 - Model ownership is split between Document/Feature and Body/ParametricFeature.
   Only the latter has IDs, dependency registration and error states.
-- Dependencies are pointers in memory, not resolved sourceFeatureId fields. Removal
-  does not guard dependents, and insertion order is not a validated dependency graph.
-- markDirtyFrom() rebuilds unrelated later features; automatic graph propagation is missing.
+- Dependencies remain pointers in memory with stable persisted IDs. Insertion validates
+  source order, and removal rejects sources with active dependents.
+- markDirtyFrom() now marks only the source and its registered dependents.
 - ParametricFeature now handles both standard and OCCT exceptions as failed rebuilds.
-- A failed Body recompute stops at the first error. MainWindow returns before refreshing
-  presentations, so stale geometry can remain visible. Define error isolation behavior.
-- Parameter refresh updates changed AIS shapes in place; a future deletion UI will need
-  a matching incremental presentation-removal API.
+- A failed Body recompute stops at the first error; invalid/dirty presentations are removed.
+  Further error isolation across independent dirty branches remains future work.
+- Parameter refresh updates changed AIS shapes in place and removes absent presentations.
 - Viewer Push/Pull edits are not reflected in the parametric model or .pcad.
 - Face reference errors include both IDs; older Boolean reference errors remain generic.
-- Save encodes parameters without rebuilding/validating every feature first; add
-  explicit pre-save validation to prevent writing a model that cannot be loaded.
+- UI Save rebuilds the Body before serialization. Low-level ProjectFile::save callers
+  should also validate their model before writing.
 
 ## Automated verification
 
@@ -176,9 +178,9 @@ ctest --test-dir build --output-on-failure
   expired/wrong sources, mixed legacy primitive and Sketch/Face round-trip, editing after
   load, and broken sourceFeatureId rejection without replacing the active document.
 
-TODO: complete Sketch001 -> Face001 -> Extrude001 persistence and positive scalar
-extrusion length tests when that API is implemented. The older ProfileFixture isolates
-ExtrudeFeature tests; production Sketch/Face coverage lives in sketch_face_tests.
+- undo_tests: stable IDs, add/remove/clear, ordered restoration, typed parameter edits,
+  Sketch/Face/Extrude dependency rebuild, Cut visibility, clean state and save/load.
+- undo_panel_tests: offscreen editingFinished grouping and Ctrl+Z/Ctrl+Y in editors.
 GUI camera behavior requires the manual check below; it is not covered by CTest.
 
 ## Manual smoke test
@@ -204,8 +206,7 @@ GUI camera behavior requires the manual check below; it is not covered by CTest.
 
 ### Target Sketch -> Face -> Extrude workflow
 
-Blocked until Phase 2 supplies the missing features, UI and persistence. Do not
-report this scenario as passed on the current implementation.
+Implemented through Body; run this manual scenario to verify viewport behavior.
 
 1. Start ParametricCAD.
 2. Create Rectangle Sketch.

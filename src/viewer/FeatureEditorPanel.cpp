@@ -1,9 +1,14 @@
 #include "viewer/FeatureEditorPanel.h"
 
 #include "model/ParametricFeature.h"
+#include "commands/FeatureCommands.h"
 #include "operations/ParametricFeatures.h"
 
 #include <QAbstractItemView>
+#include <QApplication>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QScopedValueRollback>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -52,6 +57,66 @@ void FeatureEditorPanel::setBody(cad::parametric::Body* body)
 {
     body_ = body;
     refresh();
+}
+
+void FeatureEditorPanel::commitPendingEdits()
+{
+    if (refreshPending_) return;
+    auto* focus = QApplication::focusWidget();
+    if (!focus || !propertiesWidget_->isAncestorOf(focus)) return;
+    auto* editor = qobject_cast<QDoubleSpinBox*>(focus);
+    if (!editor) editor = qobject_cast<QDoubleSpinBox*>(focus->parentWidget());
+    if (!editor) return;
+    editor->interpretText();
+    QMetaObject::invokeMethod(editor, "editingFinished", Qt::DirectConnection);
+}
+
+bool FeatureEditorPanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (undoStack_ && (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress)) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        const bool undo = key->matches(QKeySequence::Undo)
+            || (key->modifiers() == Qt::ControlModifier && key->key() == Qt::Key_Z);
+        const bool redo = key->matches(QKeySequence::Redo)
+            || (key->modifiers() == Qt::ControlModifier && key->key() == Qt::Key_Y);
+        if (undo || redo) {
+            event->accept();
+            if (event->type() == QEvent::KeyPress) {
+                commitPendingEdits();
+                if (undo) undoStack_->undo();
+                else undoStack_->redo();
+                scheduleRefresh();
+            }
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void FeatureEditorPanel::setUndoStack(QUndoStack* stack)
+{
+    undoStack_ = stack;
+}
+
+void FeatureEditorPanel::addFeature(const FeaturePtr& feature)
+{
+    if (!body_ || !undoStack_) return;
+    try {
+        QString text = "Create " + QString::fromStdString(feature->name());
+        if (const auto boolean = std::dynamic_pointer_cast<cad::parametric::BooleanFeature>(feature)) {
+            switch (boolean->operation()) {
+            case cad::parametric::BooleanOperation::Cut: text = "Boolean Cut"; break;
+            case cad::parametric::BooleanOperation::Fuse: text = "Boolean Fuse"; break;
+            case cad::parametric::BooleanOperation::Common: text = "Boolean Common"; break;
+            }
+        }
+        undoStack_->push(new cad::commands::AddFeatureCommand(*body_, feature, text));
+        refresh();
+        selectFeatures({QString::fromStdString(feature->id())});
+        if (featureSelectedHandler_) featureSelectedHandler_(selectedFeatureIds());
+    } catch (const std::exception& error) {
+        setPanelMessage(QString::fromUtf8(error.what()), true);
+    }
 }
 
 void FeatureEditorPanel::setModelChangedHandler(
@@ -251,7 +316,7 @@ void FeatureEditorPanel::addBox()
     const std::string id =
         "box-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
-    body_->addFeature(
+    addFeature(
         std::make_shared<
             cad::parametric::BoxParametricFeature
         >(
@@ -274,7 +339,7 @@ void FeatureEditorPanel::addCylinder()
     const std::string id =
         "cylinder-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
-    body_->addFeature(
+    addFeature(
         std::make_shared<
             cad::parametric::CylinderParametricFeature
         >(
@@ -296,7 +361,7 @@ void FeatureEditorPanel::addCone()
     const std::string id =
         "cone-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
-    body_->addFeature(
+    addFeature(
         std::make_shared<cad::parametric::ConeFeature>(
             id,
             30.0,
@@ -317,7 +382,7 @@ void FeatureEditorPanel::addSphere()
     const std::string id =
         "sphere-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
-    body_->addFeature(
+    addFeature(
         std::make_shared<cad::parametric::SphereFeature>(
             id,
             35.0
@@ -336,7 +401,7 @@ void FeatureEditorPanel::addTorus()
     const std::string id =
         "torus-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
-    body_->addFeature(
+    addFeature(
         std::make_shared<cad::parametric::TorusFeature>(
             id,
             45.0,
@@ -357,7 +422,7 @@ void FeatureEditorPanel::addHexagon()
     const std::string id =
         "hexagon-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 
-    body_->addFeature(
+    addFeature(
         std::make_shared<cad::parametric::HexagonFeature>(
             id,
             30.0,
@@ -482,7 +547,7 @@ void FeatureEditorPanel::addBoolean(
         return;
     }
 
-    body_->addFeature(booleanFeature);
+    addFeature(booleanFeature);
 
     recomputeAndNotify(
         operationName + " added"
@@ -530,6 +595,7 @@ FeatureEditorPanel::selectedFeatures() const
 
 void FeatureEditorPanel::refresh()
 {
+    const QScopedValueRollback guard(updatingProperties_, true);
     const QSignalBlocker blocker(tree_);
     const auto selectedIds = selectedFeatureIds();
     QString currentId;
@@ -618,6 +684,7 @@ void FeatureEditorPanel::rebuildProperties(
     const FeaturePtr& feature
 )
 {
+    const QScopedValueRollback guard(updatingProperties_, true);
     clearProperties();
 
     if (!feature) {
@@ -660,313 +727,86 @@ void FeatureEditorPanel::rebuildProperties(
         );
     }
 
-    if (auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature)) {
-        auto* width = makeLengthEditor(propertiesWidget_, sketch->width());
-        auto* height = makeLengthEditor(propertiesWidget_, sketch->height());
-        const auto apply = [this, sketch, width, height]() {
-            if (sketch->width() == width->value() && sketch->height() == height->value()) return;
-            sketch->setSize(width->value(), height->value());
-            commitFeatureChange(sketch);
-        };
-        connect(width, &QDoubleSpinBox::editingFinished, this, apply);
-        connect(height, &QDoubleSpinBox::editingFinished, this, apply);
-        propertiesLayout_->addRow("Width", width);
-        propertiesLayout_->addRow("Height", height);
+    const auto addParameter = [this]<class T, class Getter, class Setter>(
+        const std::shared_ptr<T>& target, const QString& label, Getter getter, Setter setter) {
+        QDoubleSpinBox* editor = makeLengthEditor(propertiesWidget_, getter(*target));
+        editor->installEventFilter(this);
+        if (auto* lineEdit = editor->findChild<QLineEdit*>()) lineEdit->installEventFilter(this);
+        propertiesLayout_->addRow(label, editor);
+        connect(editor, &QDoubleSpinBox::editingFinished, this,
+            [this, target, label, getter, setter, editor]() {
+                if (updatingProperties_ || refreshPending_ || !body_ || !undoStack_ || body_->findFeature(target->id()) != target) return;
+                const double before = getter(*target);
+                const double after = editor->value();
+                if (before == after) return;
+                undoStack_->push(new cad::commands::ChangeFeatureParameterCommand<T, double>(
+                    *body_, target, before, after, setter,
+                    "Change " + QString::fromStdString(target->name()) + " " + label));
+                scheduleRefresh();
+            });
+    };
+
+    using namespace cad::parametric;
+    if (auto sketch = std::dynamic_pointer_cast<SketchFeature>(feature)) {
+        addParameter(sketch, "Width", [](auto& f) { return f.width(); },
+            [](auto& f, double v) { f.setSize(v, f.height()); });
+        addParameter(sketch, "Height", [](auto& f) { return f.height(); },
+            [](auto& f, double v) { f.setSize(f.width(), v); });
         propertiesLayout_->addRow("Plane", new QLabel("XY", propertiesWidget_));
         return;
     }
-
-    if (auto face = std::dynamic_pointer_cast<cad::parametric::FaceFeature>(feature)) {
+    if (auto face = std::dynamic_pointer_cast<FaceFeature>(feature)) {
         propertiesLayout_->addRow("Source Sketch",
             new QLabel(QString::fromStdString(face->sourceFeatureId()), propertiesWidget_));
         return;
     }
-
-    if (auto box =
-            std::dynamic_pointer_cast<
-                cad::parametric::BoxParametricFeature
-            >(feature)) {
-
-        auto* width =
-            makeLengthEditor(
-                propertiesWidget_,
-                box->width()
-            );
-        auto* depth =
-            makeLengthEditor(
-                propertiesWidget_,
-                box->depth()
-            );
-        auto* height =
-            makeLengthEditor(
-                propertiesWidget_,
-                box->height()
-            );
-
-        const auto apply =
-            [this, box, width, depth, height]() {
-                box->setSize(
-                    width->value(),
-                    depth->value(),
-                    height->value()
-                );
-
-                commitFeatureChange(box);
-            };
-
-        connect(
-            width,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [apply]() { apply(); }
-        );
-
-        connect(
-            depth,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [apply]() { apply(); }
-        );
-
-        connect(
-            height,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [apply]() { apply(); }
-        );
-
-        propertiesLayout_->addRow("Width", width);
-        propertiesLayout_->addRow("Depth", depth);
-        propertiesLayout_->addRow("Height", height);
+    if (auto box = std::dynamic_pointer_cast<BoxParametricFeature>(feature)) {
+        addParameter(box, "Width", [](auto& f) { return f.width(); },
+            [](auto& f, double v) { f.setSize(v, f.depth(), f.height()); });
+        addParameter(box, "Depth", [](auto& f) { return f.depth(); },
+            [](auto& f, double v) { f.setSize(f.width(), v, f.height()); });
+        addParameter(box, "Height", [](auto& f) { return f.height(); },
+            [](auto& f, double v) { f.setSize(f.width(), f.depth(), v); });
         return;
     }
-
-    if (auto cylinder =
-            std::dynamic_pointer_cast<
-                cad::parametric::CylinderParametricFeature
-            >(feature)) {
-
-        auto* radius =
-            makeLengthEditor(
-                propertiesWidget_,
-                cylinder->radius()
-            );
-        auto* height =
-            makeLengthEditor(
-                propertiesWidget_,
-                cylinder->height()
-            );
-
-        connect(
-            radius,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, cylinder, radius]() {
-                cylinder->setRadius(radius->value());
-                commitFeatureChange(cylinder);
-            }
-        );
-
-        connect(
-            height,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, cylinder, height]() {
-                cylinder->setHeight(height->value());
-                commitFeatureChange(cylinder);
-            }
-        );
-
-        propertiesLayout_->addRow("Radius", radius);
-        propertiesLayout_->addRow("Height", height);
+    if (auto cylinder = std::dynamic_pointer_cast<CylinderParametricFeature>(feature)) {
+        addParameter(cylinder, "Radius", [](auto& f) { return f.radius(); },
+            [](auto& f, double v) { f.setRadius(v); });
+        addParameter(cylinder, "Height", [](auto& f) { return f.height(); },
+            [](auto& f, double v) { f.setHeight(v); });
         return;
     }
-
-    if (auto cone =
-            std::dynamic_pointer_cast<
-                cad::parametric::ConeFeature
-            >(feature)) {
-
-        auto* bottomRadius =
-            makeLengthEditor(
-                propertiesWidget_,
-                cone->bottomRadius()
-            );
-        auto* topRadius =
-            makeLengthEditor(
-                propertiesWidget_,
-                cone->topRadius()
-            );
-        auto* height =
-            makeLengthEditor(
-                propertiesWidget_,
-                cone->height()
-            );
-
-        connect(
-            bottomRadius,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, cone, bottomRadius]() {
-                cone->setBottomRadius(bottomRadius->value());
-                commitFeatureChange(cone);
-            }
-        );
-
-        connect(
-            topRadius,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, cone, topRadius]() {
-                cone->setTopRadius(topRadius->value());
-                commitFeatureChange(cone);
-            }
-        );
-
-        connect(
-            height,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, cone, height]() {
-                cone->setHeight(height->value());
-                commitFeatureChange(cone);
-            }
-        );
-
-        propertiesLayout_->addRow(
-            "Bottom radius",
-            bottomRadius
-        );
-        propertiesLayout_->addRow(
-            "Top radius",
-            topRadius
-        );
-        propertiesLayout_->addRow(
-            "Height",
-            height
-        );
+    if (auto cone = std::dynamic_pointer_cast<ConeFeature>(feature)) {
+        addParameter(cone, "Bottom Radius", [](auto& f) { return f.bottomRadius(); },
+            [](auto& f, double v) { f.setBottomRadius(v); });
+        addParameter(cone, "Top Radius", [](auto& f) { return f.topRadius(); },
+            [](auto& f, double v) { f.setTopRadius(v); });
+        addParameter(cone, "Height", [](auto& f) { return f.height(); },
+            [](auto& f, double v) { f.setHeight(v); });
         return;
     }
-
-    if (auto sphere =
-            std::dynamic_pointer_cast<
-                cad::parametric::SphereFeature
-            >(feature)) {
-
-        auto* radius =
-            makeLengthEditor(
-                propertiesWidget_,
-                sphere->radius()
-            );
-
-        connect(
-            radius,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, sphere, radius]() {
-                sphere->setRadius(radius->value());
-                commitFeatureChange(sphere);
-            }
-        );
-
-        propertiesLayout_->addRow("Radius", radius);
+    if (auto sphere = std::dynamic_pointer_cast<SphereFeature>(feature)) {
+        addParameter(sphere, "Radius", [](auto& f) { return f.radius(); },
+            [](auto& f, double v) { f.setRadius(v); });
         return;
     }
-
-    if (auto torus =
-            std::dynamic_pointer_cast<
-                cad::parametric::TorusFeature
-            >(feature)) {
-
-        auto* majorRadius =
-            makeLengthEditor(
-                propertiesWidget_,
-                torus->majorRadius()
-            );
-        auto* minorRadius =
-            makeLengthEditor(
-                propertiesWidget_,
-                torus->minorRadius()
-            );
-
-        connect(
-            majorRadius,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, torus, majorRadius]() {
-                torus->setMajorRadius(majorRadius->value());
-                commitFeatureChange(torus);
-            }
-        );
-
-        connect(
-            minorRadius,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, torus, minorRadius]() {
-                torus->setMinorRadius(minorRadius->value());
-                commitFeatureChange(torus);
-            }
-        );
-
-        propertiesLayout_->addRow(
-            "Major radius",
-            majorRadius
-        );
-        propertiesLayout_->addRow(
-            "Minor radius",
-            minorRadius
-        );
+    if (auto torus = std::dynamic_pointer_cast<TorusFeature>(feature)) {
+        addParameter(torus, "Major Radius", [](auto& f) { return f.majorRadius(); },
+            [](auto& f, double v) { f.setMajorRadius(v); });
+        addParameter(torus, "Minor Radius", [](auto& f) { return f.minorRadius(); },
+            [](auto& f, double v) { f.setMinorRadius(v); });
         return;
     }
-
-    if (auto hexagon =
-            std::dynamic_pointer_cast<
-                cad::parametric::HexagonFeature
-            >(feature)) {
-
-        auto* acrossFlats =
-            makeLengthEditor(
-                propertiesWidget_,
-                hexagon->acrossFlats()
-            );
-
-        auto* height =
-            makeLengthEditor(
-                propertiesWidget_,
-                hexagon->height()
-            );
-
-        connect(
-            acrossFlats,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, hexagon, acrossFlats]() {
-                hexagon->setAcrossFlats(acrossFlats->value());
-                commitFeatureChange(hexagon);
-            }
-        );
-
-        connect(
-            height,
-            &QDoubleSpinBox::editingFinished,
-            this,
-            [this, hexagon, height]() {
-                hexagon->setHeight(height->value());
-                commitFeatureChange(hexagon);
-            }
-        );
-
-        propertiesLayout_->addRow(
-            "Across flats",
-            acrossFlats
-        );
-
-        propertiesLayout_->addRow(
-            "Height",
-            height
-        );
-
+    if (auto hexagon = std::dynamic_pointer_cast<HexagonFeature>(feature)) {
+        addParameter(hexagon, "Across Flats", [](auto& f) { return f.acrossFlats(); },
+            [](auto& f, double v) { f.setAcrossFlats(v); });
+        addParameter(hexagon, "Height", [](auto& f) { return f.height(); },
+            [](auto& f, double v) { f.setHeight(v); });
+        return;
+    }
+    if (auto extrude = std::dynamic_pointer_cast<ExtrudeFeature>(feature)) {
+        addParameter(extrude, "Length", [](auto& f) { return f.vector().Magnitude(); },
+            [](auto& f, double v) { f.setVector(f.vector().Normalized() * v); });
         return;
     }
 
@@ -1044,34 +884,10 @@ void FeatureEditorPanel::clearProperties()
     propertiesLayout_->addRow(label);
 }
 
-void FeatureEditorPanel::commitFeatureChange(
-    const FeaturePtr& feature
-)
+void FeatureEditorPanel::scheduleRefresh()
 {
-    if (body_ == nullptr || !feature) {
-        return;
-    }
-
-    body_->markDirtyFrom(feature->id());
-
-    if (!body_->recompute()) {
-        setPanelMessage(
-            QString::fromStdString(
-                body_->lastError()
-            ),
-            true
-        );
-    } else {
-        setPanelMessage(
-            "Feature updated",
-            false
-        );
-    }
-
-    if (modelChangedHandler_) {
-        modelChangedHandler_();
-    }
-
+    if (refreshPending_) return;
+    refreshPending_ = true;
     // Rebuilding Properties synchronously from QDoubleSpinBox::valueChanged
     // can delete the spin box while it is still emitting the signal.
     // Queue the refresh until Qt returns to the event loop.
@@ -1079,6 +895,7 @@ void FeatureEditorPanel::commitFeatureChange(
         0,
         this,
         [this]() {
+            refreshPending_ = false;
             refresh();
         }
     );

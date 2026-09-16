@@ -8,17 +8,19 @@ implemented APIs. Current code has two model layers:
 - `Document` owns legacy `Feature` primitives (Box/Cylinder), without IDs or dependencies.
 - `Body` owns `ParametricFeature` history with stable string IDs, lookup, duplicate-ID
   rejection, dependency pointers and Dirty/UpToDate/Failed states.
-- Callers explicitly use `Body::markDirtyFrom()` before `recompute()`. It dirties
-  the whole history suffix, including unrelated features; there is no graph traversal.
+- Commands call `Body::markDirtyFrom()` and `recompute()` to update only the source
+  and registered dependents. Body insertion validates dependency order.
 - SketchFeature builds an XY rectangle wire; FaceFeature depends on a Sketch through
   the existing dependency mechanism. Both live in Body, have menu actions and editor
   support, and persist in .pcad v1 (Face stores sourceFeatureId).
-- ExtrudeFeature still takes a profile pointer and vector, without editor or persistence support.
+- ExtrudeFeature uses a profile pointer/vector, with Face-based creation, a Length
+  editor and v1 persistence. Model edits use the shared QUndoStack; see [UNDO_REDO.md](UNDO_REDO.md).
 - Tree selection updates existing AIS selection without rebuilding the scene.
   Parameter edits update changed AIS shapes in place without Fit All or scene clearing.
 
 See [ROADMAP.md](ROADMAP.md) for the missing integration and test coverage.
-The Sketch -> Face -> Extrude acceptance scenario below remains a planned milestone.
+Sketch -> Face -> Extrude is implemented through Body; the numbered sections retain
+conceptual APIs for the longer-term architecture.
 
 ## 1. Purpose
 

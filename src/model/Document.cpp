@@ -8,16 +8,25 @@ Document::~Document() = default;
 
 Feature& Document::addFeature(std::unique_ptr<Feature> feature)
 {
-    if (!feature) {
-        throw std::invalid_argument("Feature must not be null");
-    }
+    return insertFeature(features_.size(), std::move(feature));
+}
 
-    feature->recompute();
-
+Feature& Document::insertFeature(std::size_t position, std::unique_ptr<Feature> feature)
+{
+    if (!feature) throw std::invalid_argument("Feature must not be null");
+    if (position > features_.size()) throw std::out_of_range("Invalid feature position");
+    if (feature->shape().IsNull()) feature->recompute();
     Feature& reference = *feature;
-    features_.push_back(std::move(feature));
-
+    features_.insert(features_.begin() + static_cast<std::ptrdiff_t>(position), std::move(feature));
     return reference;
+}
+
+std::unique_ptr<Feature> Document::takeFeature(std::size_t position)
+{
+    if (position >= features_.size()) throw std::out_of_range("Invalid feature position");
+    auto feature = std::move(features_[position]);
+    features_.erase(features_.begin() + static_cast<std::ptrdiff_t>(position));
+    return feature;
 }
 
 void Document::clear()
