@@ -13,7 +13,10 @@
 }
 ```
 
-- `features` contains legacy Box/Cylinder parameters without IDs.
+- `features` is a backward-compatible input section for legacy Box/Cylinder
+  parameters without IDs. The loader converts these records into canonical Body
+  features with deterministic generated IDs (`legacy-box-N` or
+  `legacy-cylinder-N`). New saves write this array empty.
 - `body` contains ID/name/type plus parameters for Box, Cylinder, Cone, Sphere,
   Torus, Hexagon, Boolean, Sketch, Face and Extrude. Type names are case-sensitive.
 - Boolean dependencies are stored as `left`/`right` IDs and `operation`
@@ -22,8 +25,11 @@
   `topRadius`, `height`), Sphere (`radius`), Torus (`majorRadius`, `minorRadius`),
   Hexagon (`acrossFlats`, `height`).
 - Loading validates the root, fields, IDs and supported references and rebuilds
-  temporary models before replacing the active Document/Body. Unknown versions
-  and unsupported types are rejected. Saving uses `QSaveFile` for atomic replacement.
+  a temporary canonical Body before replacing the active Document/Body. Legacy
+  `features` entries are converted into `BoxParametricFeature` or
+  `CylinderParametricFeature`; they are not retained as runtime `Feature`
+  objects. Unknown versions and unsupported types are rejected. Saving uses
+  `QSaveFile` for atomic replacement and serializes the canonical Body only.
 - Sketch uses `type: "Sketch"`, `plane: "XY"`, `width` and `height`.
   Face uses `type: "Face"` and `sourceFeatureId`, referencing a preceding Sketch in `body`.
   IDs, names and editable dependencies survive loading. Missing, forward and wrong-type

@@ -8,12 +8,12 @@ The project is intended as a public portfolio project for exploring CAD architec
 
 Undo/Redo architecture and checks: [docs/UNDO_REDO.md](docs/UNDO_REDO.md).
 
-`Document` stores feature definitions and their generated geometry. The current model
-is split: legacy primitives belong to `Document`, while `Body` owns the newer
-parametric history, IDs and dependencies. `Feature` represents a parametric
-operation; `CadViewer` handles visualization and selection, and
-`FeatureEditorPanel` edits parameters. `.pcad` stores parameters and supported
-dependencies, rather than only `TopoDS_Shape`.
+`Body` stores the canonical parametric history, including stable IDs, dependencies,
+parameters and generated geometry. The legacy `Document`/`Feature` API remains for
+compatibility with older callers and `.pcad` input; legacy Box/Cylinder records are
+converted into canonical Body features when loaded. `CadViewer` handles
+visualization and selection, and `FeatureEditorPanel` edits parameters. `.pcad`
+stores parameters and supported dependencies, rather than only `TopoDS_Shape`.
 
 See [AGENTS.md](AGENTS.md), [parametric architecture](docs/PARAMETRIC_FEATURES.md),
 [.pcad format](docs/PCAD_FORMAT.md), and [roadmap](docs/ROADMAP.md).

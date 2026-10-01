@@ -47,11 +47,15 @@ int main()
         Document loaded;
         Body loadedBody;
         check(ProjectFile::load(path, loaded, loadedBody, error), "load");
-        check(loaded.features().size() == 2 && loadedBody.features().size() == 7, "feature count");
-        const auto* loadedBox = dynamic_cast<const BoxFeature*>(loaded.features()[0].get());
-        const auto* loadedCylinder = dynamic_cast<const CylinderFeature*>(loaded.features()[1].get());
-        check(loadedBox && loadedBox->width() == 11 && loadedBox->depth() == 12 && loadedBox->height() == 13, "box dimensions");
-        check(loadedCylinder && loadedCylinder->radius() == 7 && loadedCylinder->height() == 15, "cylinder dimensions");
+        check(loaded.features().empty() && loadedBody.features().size() == 9, "feature count");
+        const auto loadedBox = std::dynamic_pointer_cast<BoxParametricFeature>(
+            loadedBody.findFeature("legacy-box-0"));
+        const auto loadedCylinder = std::dynamic_pointer_cast<CylinderParametricFeature>(
+            loadedBody.findFeature("legacy-cylinder-1"));
+        check(loadedBox && loadedBox->width() == 11 && loadedBox->depth() == 12
+            && loadedBox->height() == 13, "box dimensions");
+        check(loadedCylinder && loadedCylinder->radius() == 7
+            && loadedCylinder->height() == 15, "cylinder dimensions");
         GProp_GProps props;
         BRepGProp::VolumeProperties(loadedBox->shape(), props);
         check(std::abs(props.Mass() - 11*12*13) < 1e-6, "rebuilt volume");
@@ -73,7 +77,7 @@ int main()
             check(file.write(bytes) == bytes.size(), "write bytes");
             file.close();
             check(!ProjectFile::load(path, loaded, loadedBody, error) && !error.isEmpty(), "reject bad project");
-            check(loaded.features().size() == 2 && loadedBody.findFeature("box-1") == editable,
+            check(loaded.features().empty() && loadedBody.findFeature("box-1"),
                   "failed load preserves current model");
         };
         reject("{broken");
@@ -82,16 +86,59 @@ int main()
         reject(QJsonDocument(bad).toJson());
         bad = root;
         auto features = bad.value("features").toArray();
-        auto primitive = features[0].toObject();
+        check(features.isEmpty(), "canonical saves do not write legacy features");
+        auto legacyRoot = QJsonObject{
+            {"format", "ParametricCAD"},
+            {"version", 1},
+            {"features", QJsonArray{
+                QJsonObject{{"type", "Box"}, {"width", 2}, {"depth", 3}, {"height", 4}},
+                QJsonObject{{"type", "Cylinder"}, {"radius", 5}, {"height", 6}}
+            }},
+            {"body", QJsonArray{}}
+        };
+        const auto legacyPath = directory.filePath("legacy.pcad");
+        check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write legacy file");
+        check(file.fileName() == path, "test file is open");
+        check(file.write(QJsonDocument(legacyRoot).toJson()) > 0, "write legacy JSON");
+        file.close();
+        check(ProjectFile::load(path, loaded, loadedBody, error), "load legacy file");
+        check(loaded.features().empty() && loadedBody.features().size() == 2,
+              "legacy features convert into Body");
+        check(loadedBody.findFeature("legacy-box-0")
+                  && loadedBody.findFeature("legacy-cylinder-1"),
+              "legacy features receive stable IDs");
+        check(ProjectFile::save(legacyPath, loaded, loadedBody, error), "save migrated legacy file");
+        file.setFileName(legacyPath);
+        check(file.open(QIODevice::ReadOnly), "read migrated legacy file");
+        const auto migratedRoot = QJsonDocument::fromJson(file.readAll()).object();
+        file.close();
+        check(migratedRoot.value("features").toArray().isEmpty()
+                  && migratedRoot.value("body").toArray().size() == 2,
+              "migrated save is canonical");
+
+        auto primitive = legacyRoot.value("features").toArray()[0].toObject();
         primitive.insert("width", -1);
-        features[0] = primitive;
-        bad.insert("features", features);
-        reject(QJsonDocument(bad).toJson());
+        auto invalidLegacy = legacyRoot.value("features").toArray();
+        invalidLegacy[0] = primitive;
+        legacyRoot.insert("features", invalidLegacy);
+        file.setFileName(path);
+        check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write invalid legacy file");
+        check(file.write(QJsonDocument(legacyRoot).toJson()) > 0, "write invalid legacy JSON");
+        file.close();
+        check(!ProjectFile::load(path, loaded, loadedBody, error), "reject invalid legacy feature");
+        check(error.contains("positive"), "invalid legacy dimensions explain the error");
+
+        file.setFileName(path);
+        check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "restore canonical file");
+        check(file.write(valid) == valid.size(), "restore canonical JSON");
+        file.close();
+        check(ProjectFile::load(path, loaded, loadedBody, error), "reload canonical model");
+
         bad = root;
         auto history = bad.value("body").toArray();
-        auto operation = history[2].toObject();
+        auto operation = history[4].toObject();
         operation.insert("left", "missing");
-        history[2] = operation;
+        history[4] = operation;
         bad.insert("body", history);
         reject(QJsonDocument(bad).toJson());
         check(error.contains("reference"), "broken dependency error explains the reference problem");

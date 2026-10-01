@@ -17,7 +17,8 @@ Sketch/Face construction uses the existing Body architecture; Boolean Cut is not
 
 **In progress**
 
-- Split Document/Body ownership is retained; unify only if a concrete requirement warrants it.
+- New Box/Cylinder creation and legacy-file loading use the canonical Body model;
+  legacy Document/Feature classes remain only for compatibility.
 - Autosave: close-time saving exists; periodic saving and recovery do not.
 
 **Planned**
@@ -141,8 +142,9 @@ Further Boolean work is deferred until Phase 2 is reliable.
 
 ## Audit findings and TODOs
 
-- Model ownership is split between Document/Feature and Body/ParametricFeature.
-  Only the latter has IDs, dependency registration and error states.
+- Body/ParametricFeature is the canonical runtime model. Document/Feature and its
+  legacy Box/Cylinder classes remain only for compatibility with existing callers
+  and serialized input; legacy file entries are converted during load.
 - Dependencies remain pointers in memory with stable persisted IDs. Insertion validates
   source order, and removal rejects sources with active dependents.
 - markDirtyFrom() now marks only the source and its registered dependents.

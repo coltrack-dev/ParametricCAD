@@ -3,8 +3,6 @@
 #include "model/FeatureVisibility.h"
 #include "commands/FeatureCommands.h"
 
-#include "operations/BoxFeature.h"
-#include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
@@ -97,12 +95,6 @@ void MainWindow::refreshParametricModel()
 {
     const bool rebuilt = parametricBody_.recompute();
     QStringList present;
-    std::size_t index = 0;
-    for (const auto& feature : document_.features()) {
-        const auto id = QString("legacy:%1").arg(index++);
-        present.append(id);
-        viewer_->updateFeature(feature->shape(), id);
-    }
     for (const auto& feature : parametricBody_.features()) {
         if (feature->state() != cad::parametric::FeatureState::UpToDate || feature->shape().IsNull()) continue;
         const auto id = QString::fromStdString(feature->id());
@@ -207,14 +199,31 @@ void MainWindow::createActions()
 
 void MainWindow::createBox()
 {
-    undoStack_.push(new cad::commands::AddDocumentFeatureCommand(document_,
-        std::make_unique<BoxFeature>(100.0, 70.0, 30.0), "Create Box"));
+    const auto id =
+        "box-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+
+    addParametricFeature(
+        std::make_shared<cad::parametric::BoxParametricFeature>(
+            id,
+            100.0,
+            70.0,
+            30.0
+        )
+    );
 }
 
 void MainWindow::createCylinder()
 {
-    undoStack_.push(new cad::commands::AddDocumentFeatureCommand(document_,
-        std::make_unique<CylinderFeature>(25.0, 60.0), "Create Cylinder"));
+    const auto id =
+        "cylinder-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+
+    addParametricFeature(
+        std::make_shared<cad::parametric::CylinderParametricFeature>(
+            id,
+            25.0,
+            60.0
+        )
+    );
 }
 
 void MainWindow::createRectangleSketch()
@@ -269,10 +278,7 @@ void MainWindow::deleteFeature()
                     QMessageBox::Cancel) != QMessageBox::Yes) return;
             command = std::move(removal);
         } else {
-            bool valid = false;
-            const auto position = id.mid(7).toULongLong(&valid);
-            if (!id.startsWith("legacy:") || !valid) throw std::invalid_argument("Cannot delete unknown feature");
-            command = std::make_unique<cad::commands::RemoveDocumentFeatureCommand>(document_, position);
+            throw std::invalid_argument("Cannot delete unknown feature");
         }
         featureEditorPanel_->selectFeatures({});
         selectParametricFeatures({});

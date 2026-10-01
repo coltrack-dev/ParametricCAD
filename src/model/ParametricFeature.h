@@ -18,9 +18,8 @@ enum class FeatureState
 /**
  * Base class for the new parametric modeling layer.
  *
- * It intentionally lives next to the existing learning-oriented Feature class
- * instead of replacing it. Existing BoxFeature/CylinderFeature can be migrated
- * gradually after the feature graph is stable.
+ * It remains next to the legacy Feature class for source and file compatibility;
+ * the application runtime uses ParametricFeature for canonical model features.
  */
 class ParametricFeature
 {

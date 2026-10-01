@@ -143,10 +143,12 @@ private slots:
         Document loaded;
         Body loadedBody;
         QVERIFY2(ProjectFile::load(path, loaded, loadedBody, error), qPrintable(error));
-        QCOMPARE(loaded.features().size(), std::size_t{2});
-        QVERIFY(dynamic_cast<BoxFeature*>(loaded.features()[0].get()));
-        QVERIFY(dynamic_cast<CylinderFeature*>(loaded.features()[1].get()));
-        QCOMPARE(loadedBody.features().size(), std::size_t{2});
+        QVERIFY(loaded.features().empty());
+        QCOMPARE(loadedBody.features().size(), std::size_t{4});
+        QVERIFY(std::dynamic_pointer_cast<BoxParametricFeature>(
+            loadedBody.findFeature("legacy-box-0")));
+        QVERIFY(std::dynamic_pointer_cast<CylinderParametricFeature>(
+            loadedBody.findFeature("legacy-cylinder-1")));
         const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature("sketch-001"));
         const auto loadedFace = std::dynamic_pointer_cast<FaceFeature>(loadedBody.findFeature("face-001"));
         QVERIFY(loadedSketch && loadedFace);
@@ -170,13 +172,13 @@ private slots:
         file.close();
         const auto root = QJsonDocument::fromJson(validBytes).object();
         const auto history = root.value("body").toArray();
-        QCOMPARE(history[1].toObject().value("sourceFeatureId").toString(), QString("sketch-001"));
+        QCOMPARE(history[3].toObject().value("sourceFeatureId").toString(), QString("sketch-001"));
         for (const auto& sourceId : {QString("missing"), QString("face-001")}) {
             auto bad = root;
             auto entries = history;
-            auto record = entries[1].toObject();
+            auto record = entries[3].toObject();
             record.insert("sourceFeatureId", sourceId);
-            entries[1] = record;
+            entries[3] = record;
             bad.insert("body", entries);
             QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
             const auto bytes = QJsonDocument(bad).toJson();
@@ -185,7 +187,7 @@ private slots:
             QVERIFY(!ProjectFile::load(path, loaded, loadedBody, error));
             QVERIFY2(error.contains(sourceId) && error.contains("face-001"), qPrintable(error));
             QCOMPARE(loadedBody.findFeature("sketch-001").get(), loadedSketch.get());
-            QCOMPARE(loaded.features().size(), std::size_t{2});
+            QVERIFY(loaded.features().empty());
         }
         Body missingSource;
         QVERIFY_EXCEPTION_THROWN(missingSource.addFeature(loadedFace), std::invalid_argument);

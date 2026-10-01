@@ -5,9 +5,13 @@
 The numbered sections below describe the target architecture, not a list of
 implemented APIs. Current code has two model layers:
 
-- `Document` owns legacy `Feature` primitives (Box/Cylinder), without IDs or dependencies.
-- `Body` owns `ParametricFeature` history with stable string IDs, lookup, duplicate-ID
-  rejection, dependency pointers and Dirty/UpToDate/Failed states.
+- `Body` is the canonical runtime owner of `ParametricFeature` history with stable
+  string IDs, lookup, duplicate-ID rejection, dependency pointers and
+  Dirty/UpToDate/Failed states.
+- `Document` and the legacy `Feature` primitives remain as compatibility APIs for
+  old callers and old `.pcad` input. Legacy serialized Box/Cylinder records are
+  converted into Body-owned `BoxParametricFeature` and `CylinderParametricFeature`
+  instances during loading.
 - Commands call `Body::markDirtyFrom()` and `recompute()` to update only the source
   and registered dependents. Body insertion validates dependency order.
 - SketchFeature builds an XY rectangle wire; FaceFeature depends on a Sketch through

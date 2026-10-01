@@ -16,6 +16,14 @@
 
 namespace {
 using namespace cad::parametric;
+
+std::string legacyFeatureId(const QJsonArray& features, const int index)
+{
+    const auto type = features.at(index).toObject().value("type").toString();
+    return (type == "Box" ? "legacy-box-" : "legacy-cylinder-")
+        + std::to_string(index);
+}
+
 void require(bool ok, const char* message)
 {
     if (!ok) throw std::runtime_error(message);
@@ -130,16 +138,28 @@ bool ProjectFile::save(const QString& path, const Document& document,
     error.clear();
     try {
         QJsonArray features;
-        for (const auto& feature : document.features()) {
-            if (auto f = dynamic_cast<const BoxFeature*>(feature.get())) {
-                features.append(QJsonObject{{"type", "Box"}, {"width", f->width()}, {"depth", f->depth()}, {"height", f->height()}});
-            } else if (auto f = dynamic_cast<const CylinderFeature*>(feature.get())) {
-                features.append(QJsonObject{{"type", "Cylinder"}, {"radius", f->radius()}, {"height", f->height()}});
-            } else throw std::runtime_error("Unsupported document feature type");
-        }
         QJsonArray history;
+
+        Body canonical;
+        for (std::size_t index = 0; index < document.features().size(); ++index) {
+            const auto& feature = document.features()[index];
+            if (const auto* box = dynamic_cast<const BoxFeature*>(feature.get())) {
+                canonical.addFeature(std::make_shared<BoxParametricFeature>(
+                    "legacy-box-" + std::to_string(index),
+                    box->width(), box->depth(), box->height()));
+            } else if (const auto* cylinder =
+                       dynamic_cast<const CylinderFeature*>(feature.get())) {
+                canonical.addFeature(std::make_shared<CylinderParametricFeature>(
+                    "legacy-cylinder-" + std::to_string(index),
+                    cylinder->radius(), cylinder->height()));
+            } else {
+                throw std::runtime_error("Unsupported document feature type");
+            }
+        }
+        for (const auto& feature : body.features()) canonical.addFeature(feature);
+
         Body preceding;
-        for (const auto& feature : body.features()) {
+        for (const auto& feature : canonical.features()) {
             history.append(encode(feature, preceding));
             preceding.addFeature(feature);
         }
@@ -170,21 +190,30 @@ bool ProjectFile::load(const QString& path, Document& document,
         const auto root = json.object();
         require(string(root,"format") == "ParametricCAD" && number(root,"version") == 1, "Unsupported project format or version");
         require(root.value("features").isArray() && root.value("body").isArray(), "Missing feature arrays");
-        Document loaded;
         Body loadedBody;
-        for (const auto& value : root.value("features").toArray()) {
+        const auto legacyFeatures = root.value("features").toArray();
+        for (int index = 0; index < legacyFeatures.size(); ++index) {
+            const auto& value = legacyFeatures.at(index);
             require(value.isObject(), "Invalid feature entry");
             const auto o = value.toObject();
             const auto type = string(o,"type");
-            if (type == "Box") loaded.addFeature(std::make_unique<BoxFeature>(number(o,"width"), number(o,"depth"), number(o,"height")));
-            else if (type == "Cylinder") loaded.addFeature(std::make_unique<CylinderFeature>(number(o,"radius"), number(o,"height")));
-            else throw std::runtime_error("Unsupported document feature type");
+            const auto id = legacyFeatureId(legacyFeatures, index);
+            if (type == "Box") {
+                loadedBody.addFeature(std::make_shared<BoxParametricFeature>(
+                    id, number(o,"width"), number(o,"depth"), number(o,"height")));
+            } else if (type == "Cylinder") {
+                loadedBody.addFeature(std::make_shared<CylinderParametricFeature>(
+                    id, number(o,"radius"), number(o,"height")));
+            } else {
+                throw std::runtime_error("Unsupported document feature type");
+            }
         }
         for (const auto& value : root.value("body").toArray()) {
             require(value.isObject(), "Invalid body feature entry");
             loadedBody.addFeature(decode(value.toObject(), loadedBody));
         }
         if (!loadedBody.recompute()) throw std::runtime_error(loadedBody.lastError());
+        Document loaded;
         document = std::move(loaded);
         body = std::move(loadedBody);
         return true;
