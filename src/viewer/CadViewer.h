@@ -59,7 +59,6 @@ public:
 
     void setSelectionMode(SelectionMode mode);
     SelectionMode selectionMode() const;
-    TopoDS_Shape selectedShape() const;
     void clearSelection();
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler

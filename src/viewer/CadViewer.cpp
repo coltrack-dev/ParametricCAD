@@ -35,8 +35,6 @@
 #include <Prs3d_Drawer.hxx>
 #include <Prs3d_LineAspect.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopExp.hxx>
-#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopoDS.hxx>
@@ -851,21 +849,6 @@ void CadViewer::setSelectionMode(SelectionMode mode)
 CadViewer::SelectionMode CadViewer::selectionMode() const
 {
     return selectionMode_;
-}
-
-TopoDS_Shape CadViewer::selectedShape() const
-{
-    if (!initialized_) {
-        return {};
-    }
-
-    context_->InitSelected();
-
-    if (!context_->MoreSelected() || !context_->HasSelectedShape()) {
-        return {};
-    }
-
-    return context_->SelectedShape();
 }
 
 void CadViewer::setPushPullCommittedHandler(
