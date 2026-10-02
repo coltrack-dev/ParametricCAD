@@ -57,6 +57,7 @@ using cad::viewer::ViewRay;
 namespace
 {
 constexpr double PushPullTolerance = 1.0e-6;
+constexpr double TransformPreviewTolerance = 1.0e-9;
 constexpr Standard_Real XRayTransparency = 0.65;
 constexpr int DetectedCyclePositionTolerance = 3;
 
@@ -86,6 +87,20 @@ bool makeViewRay(
     return true;
 }
 
+QPointF projectWorldPoint(
+    const Handle(V3d_View)& view,
+    const gp_Pnt& point,
+    const Standard_Integer width,
+    const Standard_Integer height
+)
+{
+    const gp_Pnt ndc = view->Camera()->Project(point);
+    return QPointF(
+        (ndc.X() + 1.0) * 0.5 * width,
+        (1.0 - ndc.Y()) * 0.5 * height
+    );
+}
+
 gp_Pnt shapeCenter(const TopoDS_Shape& shape)
 {
     Bnd_Box bounds;
@@ -102,6 +117,19 @@ gp_Pnt shapeCenter(const TopoDS_Shape& shape)
         (ymin + ymax) * 0.5,
         (zmin + zmax) * 0.5
     );
+}
+
+bool transformsClose(const gp_Trsf& first, const gp_Trsf& second)
+{
+    for (int row = 1; row <= 3; ++row) {
+        for (int column = 1; column <= 4; ++column) {
+            if (std::abs(first.Value(row, column) - second.Value(row, column))
+                > TransformPreviewTolerance) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 }
 
@@ -357,15 +385,12 @@ void CadViewer::beginTransform(
     }
     transformSnapCandidates_ = snapManager_.buildCandidates(
         transformSourceReferences_, transformTargetReferences_);
+    Standard_Integer windowWidth = 0;
     Standard_Integer windowHeight = 0;
-    Standard_Integer ignoredWidth = 0;
-    view_->Window()->Size(ignoredWidth, windowHeight);
+    view_->Window()->Size(windowWidth, windowHeight);
     for (auto& candidate : transformSnapCandidates_) {
-        Standard_Integer x = 0;
-        Standard_Integer y = 0;
-        view_->Convert(candidate.targetPoint.X(), candidate.targetPoint.Y(),
-                       candidate.targetPoint.Z(), x, y);
-        candidate.target.screenPoint = QPointF(x, windowHeight - y);
+        candidate.target.screenPoint = projectWorldPoint(
+            view_, candidate.targetPoint, windowWidth, windowHeight);
     }
     if (!makeViewRay(position, transformStartRay_)) return;
 
@@ -406,14 +431,11 @@ void CadViewer::invalidateSnapReferenceCache()
 
 void CadViewer::updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot)
 {
+    Standard_Integer width = 0;
     Standard_Integer height = 0;
-    Standard_Integer ignoredWidth = 0;
-    view_->Window()->Size(ignoredWidth, height);
-    const auto project = [this, height](const gp_Pnt& point) {
-        Standard_Integer x = 0;
-        Standard_Integer y = 0;
-        view_->Convert(point.X(), point.Y(), point.Z(), x, y);
-        return QPointF(x, height - y);
+    view_->Window()->Size(width, height);
+    const auto project = [this, width, height](const gp_Pnt& point) {
+        return projectWorldPoint(view_, point, width, height);
     };
     QElapsedTimer snapTimer;
     snapTimer.start();
@@ -481,16 +503,23 @@ void CadViewer::updateTransformPreview(const QPoint& position)
             *angle);
     }
 
+    const gp_Trsf previousDelta = transformDelta_;
     transformDelta_ = delta;
     gp_Pnt movedPivot = transformPivot_;
     updateTransformSnap(delta, movedPivot);
+    if (transformsClose(previousDelta, delta)) {
+        return;
+    }
     transformDelta_ = delta;
-    TopoDS_Shape preview = transformOriginalShape_;
-    preview.Move(TopLoc_Location(delta));
-    transformObject_->SetShape(preview);
+    QElapsedTimer locationTimer;
+    locationTimer.start();
+    context_->SetLocation(transformObject_, TopLoc_Location(delta));
+    if (locationTimer.elapsed() > 2) {
+        qWarning() << "Transform preview SetLocation took"
+                   << locationTimer.elapsed() << "ms";
+    }
     QElapsedTimer redrawTimer;
     redrawTimer.start();
-    context_->Redisplay(transformObject_, Standard_False);
     context_->UpdateCurrentViewer();
     if (redrawTimer.elapsed() > 2) {
         qWarning() << "Transform preview viewer update took" << redrawTimer.elapsed() << "ms";
@@ -509,11 +538,13 @@ void CadViewer::commitTransform()
         transformGizmo_->setSnapActive(false);
         transformGizmo_->setSnapTarget(std::nullopt, view_);
     }
+    if (!transformObject_.IsNull()) {
+        context_->ResetLocation(transformObject_);
+    }
     if (delta.Form() != gp_Identity && transformCommittedHandler_) {
         transformCommittedHandler_(id, delta);
     } else if (!transformObject_.IsNull()) {
-        transformObject_->SetShape(transformOriginalShape_);
-        context_->Redisplay(transformObject_, Standard_False);
+        context_->ResetLocation(transformObject_);
     }
     transformObject_.Nullify();
     transformFeatureId_.clear();
@@ -527,8 +558,7 @@ void CadViewer::cancelTransform()
 {
     if (!transformDragging_) return;
     if (!transformObject_.IsNull()) {
-        transformObject_->SetShape(transformOriginalShape_);
-        context_->Redisplay(transformObject_, Standard_False);
+        context_->ResetLocation(transformObject_);
     }
     transformDragging_ = false;
     transformHandle_ = TransformHandle::None;
