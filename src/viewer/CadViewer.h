@@ -16,6 +16,8 @@
 #include <TopoDS_Shape.hxx>
 #include <gp_Vec.hxx>
 
+#include "viewer/PushPullDrag.h"
+
 class QAction;
 class QLabel;
 class QToolBar;
@@ -108,7 +110,6 @@ private:
 
     QPoint lastMousePosition_;
     QPoint mousePressPosition_;
-    QPoint pushPullStartPosition_;
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
 
@@ -123,6 +124,7 @@ private:
     double pushPullDistance_{0.0};
     TopoDS_Face pushPullFace_;
     TopoDS_Shape pushPullBaseShape_;
+    cad::viewer::PushPullDragState pushPullDragState_;
     gp_Vec pushPullNormal_;
     QString pushPullFeatureId_;
     int pushPullFaceIndex_{0};

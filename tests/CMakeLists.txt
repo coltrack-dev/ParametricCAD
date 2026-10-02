@@ -15,6 +15,15 @@ endif()
 
 add_test(NAME geometry_tests COMMAND geometry_tests)
 
+add_executable(push_pull_drag_tests
+    push_pull_drag_tests.cpp
+    ../src/viewer/PushPullDrag.cpp
+)
+target_include_directories(push_pull_drag_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_include_directories(push_pull_drag_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+target_link_libraries(push_pull_drag_tests PRIVATE TKernel TKMath)
+add_test(NAME push_pull_drag_tests COMMAND push_pull_drag_tests)
+
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
 add_library(model_test_support STATIC
@@ -31,6 +40,7 @@ add_library(model_test_support STATIC
     ../src/operations/CylinderFeature.cpp
     ../src/operations/BasicFeatures.cpp
     ../src/operations/ParametricFeatures.cpp
+    ../src/viewer/PushPullDrag.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(model_test_support SYSTEM PUBLIC ${OpenCASCADE_INCLUDE_DIR})

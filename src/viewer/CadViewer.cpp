@@ -5,7 +5,6 @@
 
 #include <QAction>
 #include <QActionGroup>
-#include <QCursor>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -20,10 +19,12 @@
 #include <AIS_SelectionScheme.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepGProp.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <GProp_GProps.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <Prs3d_Drawer.hxx>
 #include <Prs3d_LineAspect.hxx>
@@ -44,10 +45,35 @@
 
 namespace
 {
-constexpr double PushPullUnitsPerPixel = 0.5;
 constexpr double PushPullTolerance = 1.0e-6;
 constexpr Standard_Real XRayTransparency = 0.65;
 constexpr int DetectedCyclePositionTolerance = 3;
+
+bool makeViewRay(
+    const Handle(V3d_View)& view,
+    const QPoint& position,
+    gp_Pnt& origin,
+    gp_Dir& direction
+)
+{
+    Standard_Real x = 0.0;
+    Standard_Real y = 0.0;
+    Standard_Real z = 0.0;
+    Standard_Real vx = 0.0;
+    Standard_Real vy = 0.0;
+    Standard_Real vz = 0.0;
+    view->ConvertWithProj(
+        position.x(), position.y(),
+        x, y, z, vx, vy, vz
+    );
+    const gp_Vec rayDirection(vx, vy, vz);
+    if (rayDirection.Magnitude() <= 1.0e-9) {
+        return false;
+    }
+    origin.SetCoord(x, y, z);
+    direction = gp_Dir(rayDirection);
+    return true;
+}
 }
 
 CadViewer::CadViewer(QWidget* parent)
@@ -674,13 +700,45 @@ bool CadViewer::beginPushPull()
         normal.Reverse();
     }
 
+    gp_Pnt anchor;
+    bool anchorFound = false;
+    gp_Pnt rayOrigin;
+    gp_Dir rayDirection;
+    if (makeViewRay(view_, lastMousePosition_, rayOrigin, rayDirection)) {
+        const auto hit = cad::viewer::intersectRayWithPlane(
+            rayOrigin,
+            rayDirection,
+            surface.Plane()
+        );
+        if (hit) {
+            anchor = *hit;
+            anchorFound = true;
+        }
+    }
+    if (!anchorFound) {
+        GProp_GProps properties;
+        BRepGProp::SurfaceProperties(selectedFace, properties);
+        anchor = properties.CentreOfMass();
+    }
+
+    const auto dragState = cad::viewer::makePushPullDragState(
+        anchor,
+        normal,
+        view_->Camera()->Direction(),
+        view_->Camera()->Up(),
+        view_->Camera()->SideRight()
+    );
+    if (!dragState) {
+        return false;
+    }
+
     pushPullFace_ = selectedFace;
     pushPullBaseShape_ = selectedObject->Shape();
+    pushPullDragState_ = *dragState;
     pushPullNormal_ = gp_Vec(normal);
     pushPullFeatureId_ = featureId;
     pushPullFaceIndex_ = faceIndex;
     pushPullObject_ = selectedObject;
-    pushPullStartPosition_ = mapFromGlobal(QCursor::pos());
     pushPullDistance_ = 0.0;
     pushPullActive_ = true;
 
@@ -717,9 +775,21 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
         return;
     }
 
-    pushPullDistance_ =
-        static_cast<double>(pushPullStartPosition_.y() - position.y()) *
-        PushPullUnitsPerPixel;
+    gp_Pnt rayOrigin;
+    gp_Dir rayDirection;
+    if (!makeViewRay(view_, position, rayOrigin, rayDirection)) {
+        return;
+    }
+
+    const auto distance = cad::viewer::computePushPullDistance(
+        pushPullDragState_,
+        rayOrigin,
+        rayDirection
+    );
+    if (!distance) {
+        return;
+    }
+    pushPullDistance_ = *distance;
 
     if (std::abs(pushPullDistance_) <= PushPullTolerance) {
         if (!pushPullPreview_.IsNull()) {

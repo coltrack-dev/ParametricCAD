@@ -13,6 +13,8 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/MainWindow.h
     viewer/ModelPresenter.cpp
     viewer/ModelPresenter.h
+    viewer/PushPullDrag.cpp
+    viewer/PushPullDrag.h
     viewer/FeatureEditorPanel.cpp
     viewer/FeatureEditorPanel.h
     viewer/CadViewer.cpp
