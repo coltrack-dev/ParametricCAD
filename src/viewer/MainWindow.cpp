@@ -70,7 +70,7 @@ void MainWindow::createParametricPanel()
     );
 
     connect(viewer_, &CadViewer::featureSelectionChanged, this, [this](const QStringList& ids) {
-        applySelection(ids);
+        applySelection(ids, false);
     });
 
     dockWidget->setWidget(featureEditorPanel_);
@@ -97,9 +97,14 @@ void MainWindow::refreshModelView(const bool fitView)
     statusBar()->showMessage(result.rebuilt ? "Model updated" : QString::fromStdString(result.error), 3000);
 }
 
-void MainWindow::applySelection(const QStringList& featureIds)
+void MainWindow::applySelection(
+    const QStringList& featureIds,
+    const bool updateViewer
+)
 {
-    viewer_->selectFeatures(featureIds);
+    if (updateViewer) {
+        viewer_->selectFeatures(featureIds);
+    }
     selectedObjectIds_ = featureIds;
     featureEditorPanel_->selectFeatures(featureIds);
     updateActionState();

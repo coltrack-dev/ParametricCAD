@@ -599,6 +599,10 @@ void FeatureEditorPanel::selectFeatures(const QStringList& featureIds)
 {
     // Viewer-to-tree updates must not reselect whole objects in the viewer:
     // doing so would discard a picked face/edge and recurse through the signals.
+    if (selectedFeatureIds() == featureIds) {
+        return;
+    }
+
     const QSignalBlocker blocker(tree_);
     auto* current = tree_->currentItem();
     QTreeWidgetItem* first = nullptr;

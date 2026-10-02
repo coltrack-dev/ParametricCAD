@@ -30,7 +30,7 @@ private:
     void createActions();
     void createParametricPanel();
     void refreshModelView(bool fitView = false);
-    void applySelection(const QStringList& featureIds);
+    void applySelection(const QStringList& featureIds, bool updateViewer = true);
     void updateActionState();
     void reportResult(const cad::application::ModelingResult& result);
     std::vector<std::string> selectedIds() const;
