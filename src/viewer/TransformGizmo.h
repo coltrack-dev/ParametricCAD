@@ -62,6 +62,7 @@ private:
     TransformHandle hovered_{TransformHandle::None};
     bool snapActive_{false};
     Handle(AIS_Shape) snapTargetPresentation_;
+    std::optional<gp_Pnt> snapTargetPoint_;
 };
 
 } // namespace cad::viewer

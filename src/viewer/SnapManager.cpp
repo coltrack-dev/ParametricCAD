@@ -8,10 +8,13 @@
 #include <BRep_Tool.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <Geom_Circle.hxx>
+#include <QDebug>
+#include <QElapsedTimer>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 
 #include <cmath>
+#include <algorithm>
 #include <limits>
 
 namespace cad::viewer {
@@ -127,6 +130,8 @@ std::vector<SnapReference> SnapManager::collectReferences(
 )
 {
     std::vector<SnapReference> result;
+    QElapsedTimer vertexTimer;
+    vertexTimer.start();
     int index = 0;
     for (TopExp_Explorer explorer(shape, TopAbs_VERTEX); explorer.More(); explorer.Next()) {
         ++index;
@@ -135,6 +140,12 @@ std::vector<SnapReference> SnapManager::collectReferences(
                           SnapReferenceType::Vertex, vertex, BRep_Tool::Pnt(vertex),
                           std::nullopt, std::nullopt, {}});
     }
+    if (vertexTimer.elapsed() > 2) {
+        qWarning() << "SnapManager vertex extraction took"
+                   << vertexTimer.elapsed() << "ms";
+    }
+    QElapsedTimer edgeTimer;
+    edgeTimer.start();
     index = 0;
     for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
         ++index;
@@ -154,6 +165,12 @@ std::vector<SnapReference> SnapManager::collectReferences(
                               gp_Ax1(data.Location(), data.Axis().Direction()), {}});
         }
     }
+    if (edgeTimer.elapsed() > 2) {
+        qWarning() << "SnapManager edge extraction/OCCT geometry access took"
+                   << edgeTimer.elapsed() << "ms";
+    }
+    QElapsedTimer faceTimer;
+    faceTimer.start();
     index = 0;
     for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
         ++index;
@@ -176,6 +193,10 @@ std::vector<SnapReference> SnapManager::collectReferences(
                               SnapReferenceType::Axis, face, axis.Location(),
                               std::nullopt, axis, {}});
         }
+    }
+    if (faceTimer.elapsed() > 2) {
+        qWarning() << "SnapManager face extraction/frame construction took"
+                   << faceTimer.elapsed() << "ms";
     }
     return result;
 }
@@ -208,6 +229,43 @@ std::vector<SnapReference> SnapManager::transformReferences(
     return result;
 }
 
+std::vector<SnapCandidate> SnapManager::buildCandidates(
+    const std::vector<SnapReference>& sources,
+    const std::vector<SnapReference>& targets
+) const
+{
+    QElapsedTimer timer;
+    timer.start();
+    std::vector<SnapCandidate> result;
+    std::size_t sourceIndex = 0;
+    for (const auto& source : sources) {
+        for (const auto& target : targets) {
+            const auto kind = compatible(source, target);
+            if (!kind) continue;
+            const auto targetPoint = closestPoint(source.point, target);
+            if (!targetPoint) continue;
+            auto cachedTarget = target;
+            cachedTarget.point = *targetPoint;
+            result.push_back({
+                source,
+                cachedTarget,
+                *kind,
+                *targetPoint,
+                gp_Trsf(),
+                0.0,
+                specificity(*kind),
+                sourceIndex
+            });
+        }
+        ++sourceIndex;
+    }
+    if (timer.elapsed() > 2) {
+        qWarning() << "SnapManager candidate collection/OCCT projection took"
+                   << timer.elapsed() << "ms for" << result.size() << "candidates";
+    }
+    return result;
+}
+
 std::optional<SnapCandidate> SnapManager::findCandidate(
     const std::vector<SnapReference>& sources,
     const std::vector<SnapReference>& targets,
@@ -215,37 +273,104 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
     const std::function<QPointF(const gp_Pnt&)>& project
 ) const
 {
+    const auto candidates = buildCandidates(sources, targets);
+    return findCandidate(candidates, gp_Trsf(), project, active);
+}
+
+std::optional<SnapCandidate> SnapManager::findCandidate(
+    const std::vector<SnapCandidate>& candidates,
+    const gp_Trsf& previewTransform,
+    const std::function<QPointF(const gp_Pnt&)>& project,
+    const std::optional<SnapCandidate>& active
+) const
+{
+    QElapsedTimer totalTimer;
+    totalTimer.start();
     const double limit = active
         ? ActivationTolerancePixels * HysteresisMultiplier
         : ActivationTolerancePixels;
+    QElapsedTimer projectionTimer;
+    projectionTimer.start();
+    std::size_t sourceCount = 0;
+    for (const auto& candidate : candidates) {
+        sourceCount = std::max(sourceCount, candidate.sourceIndex + 1);
+    }
+    std::vector<QPointF> sourceScreens(sourceCount);
+    std::vector<bool> sourceProjected(sourceCount, false);
+    for (const auto& candidate : candidates) {
+        if (sourceProjected[candidate.sourceIndex]) continue;
+        if (project) {
+            gp_Pnt sourcePoint = candidate.source.point;
+            sourcePoint.Transform(previewTransform);
+            sourceScreens[candidate.sourceIndex] = project(sourcePoint);
+        } else {
+            sourceScreens[candidate.sourceIndex] = candidate.source.screenPoint;
+        }
+        sourceProjected[candidate.sourceIndex] = true;
+    }
+    if (projectionTimer.elapsed() > 2) {
+        qWarning() << "SnapManager source projection phase took"
+                   << projectionTimer.elapsed() << "ms for" << sourceCount << "sources";
+    }
+
+    QElapsedTimer distanceTimer;
+    distanceTimer.start();
     std::optional<SnapCandidate> result;
-    for (const auto& source : sources) {
-        for (const auto& target : targets) {
-            const auto kind = compatible(source, target);
-            if (!kind) continue;
-            const auto targetPoint = closestPoint(source.point, target);
-            if (!targetPoint) continue;
-            const QPointF targetScreen = project
-                ? project(*targetPoint)
-                : target.screenPoint;
+    for (const auto& cached : candidates) {
+            const QPointF sourceScreen = sourceScreens[cached.sourceIndex];
+            const QPointF targetScreen = cached.target.screenPoint;
             const double distance = std::hypot(
-                source.screenPoint.x() - targetScreen.x(),
-                source.screenPoint.y() - targetScreen.y());
+                sourceScreen.x() - targetScreen.x(),
+                sourceScreen.y() - targetScreen.y());
             if (distance > limit) continue;
-            auto scoredTarget = target;
-            scoredTarget.point = *targetPoint;
-            scoredTarget.screenPoint = targetScreen;
-            SnapCandidate candidate{
-                source, scoredTarget, *kind, *targetPoint,
-                correctionFor(source, target, source.point, *targetPoint),
-                distance, specificity(*kind)};
-            if (active && candidate.id() == active->id() && distance <= limit) return candidate;
+            SnapCandidate candidate = cached;
+            candidate.screenDistance = distance;
+            if (active && candidate.id() == active->id()) {
+                result = std::move(candidate);
+                break;
+            }
             if (!result || distance + TieTolerance < result->screenDistance
                 || (std::abs(distance - result->screenDistance) <= TieTolerance
                     && candidate.specificity > result->specificity)) {
                 result = std::move(candidate);
             }
+    }
+    if (distanceTimer.elapsed() > 2) {
+        qWarning() << "SnapManager nearest-distance phase took"
+                   << distanceTimer.elapsed() << "ms for" << candidates.size() << "candidates";
+    }
+    if (result) {
+        QElapsedTimer correctionTimer;
+        correctionTimer.start();
+        auto source = result->source;
+        source.point.Transform(previewTransform);
+        if (source.frame) {
+            gp_Pnt origin = source.frame->Location();
+            origin.Transform(previewTransform);
+            gp_Dir normal = source.frame->Direction();
+            gp_Dir xDirection = source.frame->XDirection();
+            normal.Transform(previewTransform);
+            xDirection.Transform(previewTransform);
+            source.frame = gp_Ax3(origin, normal, xDirection);
         }
+        if (source.axis) {
+            gp_Pnt origin = source.axis->Location();
+            origin.Transform(previewTransform);
+            gp_Dir direction = source.axis->Direction();
+            direction.Transform(previewTransform);
+            source.axis = gp_Ax1(origin, direction);
+        }
+        result->source = source;
+        result->correction = correctionFor(
+            source, result->target, source.point, result->targetPoint);
+        if (correctionTimer.elapsed() > 2) {
+            qWarning() << "SnapManager candidate correction phase took"
+                       << correctionTimer.elapsed() << "ms";
+        }
+    }
+    if (totalTimer.elapsed() > 2) {
+        qWarning() << "SnapManager::findCandidate total took"
+                   << totalTimer.elapsed() << "ms";
     }
     return result;
 }

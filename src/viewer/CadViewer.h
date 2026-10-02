@@ -94,6 +94,7 @@ private:
     void commitTransform();
     void cancelTransform();
     void updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot);
+    void invalidateSnapReferenceCache();
     bool makeViewRay(const QPoint& position, cad::viewer::ViewRay& ray) const;
     void bindWindow();
     void updateHover(const QPoint& position);
@@ -166,6 +167,8 @@ private:
     std::optional<cad::viewer::SnapCandidate> activeSnap_;
     std::vector<cad::viewer::SnapReference> transformSourceReferences_;
     std::vector<cad::viewer::SnapReference> transformTargetReferences_;
+    std::vector<cad::viewer::SnapCandidate> transformSnapCandidates_;
+    std::map<QString, std::vector<cad::viewer::SnapReference>> snapReferenceCache_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };

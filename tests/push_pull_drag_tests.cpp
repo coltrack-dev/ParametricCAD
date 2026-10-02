@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <QElapsedTimer>
+#include <iostream>
 
 namespace
 {
@@ -165,6 +167,18 @@ int main()
     auto edgeCandidate = snapManager.findCandidate(
         {sourceVertex}, {edgeTarget}, std::nullopt);
     assert(edgeCandidate && edgeCandidate->kind == SnapKind::VertexToEdge);
+    const auto cachedCandidates = snapManager.buildCandidates(
+        {sourceVertex}, {edgeTarget});
+    QElapsedTimer cachedTimer;
+    cachedTimer.start();
+    for (int iteration = 0; iteration < 1000; ++iteration) {
+        const auto cachedResult = snapManager.findCandidate(
+            cachedCandidates, gp_Trsf(), {}, std::nullopt);
+        assert(cachedResult);
+    }
+    std::cout << "cached SnapManager::findCandidate x1000: "
+              << cachedTimer.elapsed() << " ms\n";
+    assert(cachedTimer.elapsed() < 1000);
     auto faceTarget = *face;
     faceTarget.screenPoint = QPointF(0.0, 0.0);
     auto faceCandidate = snapManager.findCandidate(

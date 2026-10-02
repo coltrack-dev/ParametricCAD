@@ -54,6 +54,7 @@ struct SnapCandidate
     gp_Trsf correction;
     double screenDistance{0.0};
     int specificity{0};
+    std::size_t sourceIndex{0};
 
     QString id() const
     {
@@ -74,6 +75,18 @@ public:
         const std::vector<SnapReference>& references,
         const gp_Trsf& transform
     );
+
+    std::vector<SnapCandidate> buildCandidates(
+        const std::vector<SnapReference>& sources,
+        const std::vector<SnapReference>& targets
+    ) const;
+
+    std::optional<SnapCandidate> findCandidate(
+        const std::vector<SnapCandidate>& candidates,
+        const gp_Trsf& previewTransform,
+        const std::function<QPointF(const gp_Pnt&)>& project,
+        const std::optional<SnapCandidate>& active
+    ) const;
 
     std::optional<SnapCandidate> findCandidate(
         const std::vector<SnapReference>& sources,

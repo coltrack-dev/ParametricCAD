@@ -56,6 +56,7 @@ void TransformGizmo::clearPresentations()
         context_->Remove(snapTargetPresentation_, Standard_False);
         snapTargetPresentation_.Nullify();
     }
+    snapTargetPoint_.reset();
 }
 
 void TransformGizmo::show(const gp_Pnt& pivot, const Handle(V3d_View)& view)
@@ -192,12 +193,14 @@ TransformHandle TransformGizmo::hitTest(
 
 void TransformGizmo::setHovered(const TransformHandle handle)
 {
+    if (hovered_ == handle) return;
     hovered_ = handle;
     recolor();
 }
 
 void TransformGizmo::setSnapActive(const bool active)
 {
+    if (snapActive_ == active) return;
     snapActive_ = active;
     recolor();
 }
@@ -207,6 +210,14 @@ void TransformGizmo::setSnapTarget(
     const Handle(V3d_View)& view
 )
 {
+    if (point && snapTargetPoint_
+        && snapTargetPoint_->Distance(*point) <= 1.0e-7) return;
+    if (!point && !snapTargetPresentation_.IsNull()) {
+        context_->Remove(snapTargetPresentation_, Standard_False);
+        snapTargetPresentation_.Nullify();
+        snapTargetPoint_.reset();
+        return;
+    }
     if (!snapTargetPresentation_.IsNull()) {
         context_->Remove(snapTargetPresentation_, Standard_False);
         snapTargetPresentation_.Nullify();
@@ -218,8 +229,9 @@ void TransformGizmo::setSnapTarget(
         snapTargetPresentation_->SetColor(Quantity_Color(Quantity_NOC_YELLOW));
         context_->Display(snapTargetPresentation_, Standard_False);
         context_->Deactivate(snapTargetPresentation_);
+        snapTargetPoint_ = point;
     }
-    if (!view.IsNull()) context_->UpdateCurrentViewer();
+    Q_UNUSED(view);
 }
 
 void TransformGizmo::deactivateSelection()
