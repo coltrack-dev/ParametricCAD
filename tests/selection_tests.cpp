@@ -11,6 +11,7 @@ using cad::viewer::OcctSelectionAdapter;
 using cad::viewer::SelectionHit;
 using cad::viewer::SelectionItem;
 using cad::viewer::SelectionKind;
+using cad::viewer::SelectionState;
 
 int main()
 {
@@ -40,6 +41,18 @@ int main()
     assert(faceHit.hasSameTransientIdentity(replacementPresentationHit));
     assert(faceHit.hasSubshape());
     assert(!faceHit.hasSameTransientIdentity(SelectionHit{otherFace, {}, {}}));
+
+    SelectionState state;
+    state.hovered = faceHit;
+    state.rebuildSelected({faceHit, replacementPresentationHit});
+    assert(state.selected.size() == 2);
+    assert(state.primary && *state.primary == face);
+    assert(state.hovered && state.hovered->hasSameTransientIdentity(faceHit));
+    state.hovered.reset();
+    state.rebuildSelected({});
+    assert(state.selected.empty());
+    assert(!state.primary);
+    assert(!state.hovered);
 
     SelectionItem invalid;
     assert(!invalid.isValid());

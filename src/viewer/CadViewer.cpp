@@ -722,6 +722,7 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
         featureObjects_[featureId] = interactiveShape;
     }
     invalidateSnapReferenceCache();
+    selectionState_.hovered.reset();
 
     applySelectionMode();
     if (fitView) {
@@ -743,8 +744,10 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     cancelPushPull();
     resetDetectedCycle();
     invalidateSnapReferenceCache();
+    selectionState_.hovered.reset();
     object->SetShape(shape);
     context_->Redisplay(object, Standard_True);
+    syncSelectionStateFromOcct();
 }
 
 void CadViewer::setHiddenFeatures(const QStringList& featureIds)
@@ -764,6 +767,8 @@ void CadViewer::setHiddenFeatures(const QStringList& featureIds)
     if (changed) {
         invalidateSnapReferenceCache();
         resetDetectedCycle();
+        selectionState_.hovered.reset();
+        syncSelectionStateFromOcct();
         context_->UpdateCurrentViewer();
     }
 }
@@ -786,6 +791,8 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
     if (changed) {
         invalidateSnapReferenceCache();
         resetDetectedCycle();
+        selectionState_.hovered.reset();
+        syncSelectionStateFromOcct();
         context_->UpdateCurrentViewer();
     }
 }
@@ -802,6 +809,7 @@ void CadViewer::clear()
     featureObjects_.clear();
     invalidateSnapReferenceCache();
     resetDetectedCycle();
+    selectionState_ = {};
 }
 
 bool CadViewer::hasDisplayedShapes() const
@@ -958,12 +966,21 @@ void CadViewer::updateHover(const QPoint& position)
         selectionAdapter_->moveTo(position, view_, true);
         const auto detected = selectionAdapter_->detectedHit();
         if (!detected) {
-            hoveredSelectionHit_.reset();
-        } else if (!hoveredSelectionHit_
-                   || !hoveredSelectionHit_->hasSameTransientIdentity(*detected)) {
-            hoveredSelectionHit_ = detected;
+            selectionState_.hovered.reset();
+        } else if (!selectionState_.hovered
+                   || !selectionState_.hovered->hasSameTransientIdentity(*detected)) {
+            selectionState_.hovered = detected;
         }
     }
+}
+
+void CadViewer::syncSelectionStateFromOcct()
+{
+    if (!selectionAdapter_) {
+        selectionState_.rebuildSelected({});
+        return;
+    }
+    selectionState_.rebuildSelected(selectionAdapter_->selectedHits());
 }
 
 void CadViewer::selectAt(
@@ -1517,17 +1534,17 @@ void CadViewer::selectFeatures(const QStringList& featureIds)
         }
     }
     context_->UpdateCurrentViewer();
+    syncSelectionStateFromOcct();
     updateTransformGizmo();
 }
 
 void CadViewer::notifyFeatureSelection()
 {
+    syncSelectionStateFromOcct();
     QStringList ids;
-    if (initialized_ && selectionAdapter_) {
-        for (const auto& hit : selectionAdapter_->selectedHits()) {
-            if (!ids.contains(hit.item.featureId)) {
-                ids.append(hit.item.featureId);
-            }
+    for (const auto& item : selectionState_.selected) {
+        if (!ids.contains(item.featureId)) {
+            ids.append(item.featureId);
         }
     }
     emit featureSelectionChanged(ids);

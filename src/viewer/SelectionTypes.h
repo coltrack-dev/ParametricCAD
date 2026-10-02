@@ -5,6 +5,7 @@
 #include <TopoDS_Shape.hxx>
 
 #include <optional>
+#include <vector>
 
 namespace cad::viewer {
 
@@ -69,6 +70,29 @@ struct SelectionHit
     bool hasSameTransientIdentity(const SelectionHit& other) const noexcept
     {
         return item == other.item;
+    }
+};
+
+struct SelectionState
+{
+    std::vector<SelectionItem> selected;
+    std::optional<SelectionItem> primary;
+    std::optional<SelectionHit> hovered;
+
+    // OCCT selected iteration order is preserved. The first selected item is
+    // the temporary primary item; this is a snapshot convention, not a focus
+    // or persistent selection policy.
+    void rebuildSelected(const std::vector<SelectionHit>& hits)
+    {
+        selected.clear();
+        selected.reserve(hits.size());
+        for (const auto& hit : hits) {
+            if (hit.item.isValid()) selected.push_back(hit.item);
+        }
+
+        primary = selected.empty()
+            ? std::nullopt
+            : std::optional<SelectionItem>(selected.front());
     }
 };
 

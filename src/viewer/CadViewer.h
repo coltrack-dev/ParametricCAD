@@ -99,6 +99,7 @@ private:
     bool makeViewRay(const QPoint& position, cad::viewer::ViewRay& ray) const;
     void bindWindow();
     void updateHover(const QPoint& position);
+    void syncSelectionStateFromOcct();
     void selectAt(
         const QPoint& position,
         bool toggleSelection,
@@ -172,7 +173,7 @@ private:
     std::map<QString, std::vector<cad::viewer::SnapReference>> snapReferenceCache_;
 
     std::unique_ptr<cad::viewer::OcctSelectionAdapter> selectionAdapter_;
-    std::optional<cad::viewer::SelectionHit> hoveredSelectionHit_;
+    cad::viewer::SelectionState selectionState_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };
