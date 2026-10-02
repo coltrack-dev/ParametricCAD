@@ -26,10 +26,14 @@ bool hidden(const Body& body, const std::string& id)
     const auto ids = hiddenFeatureIds(body);
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
-void changeWidth(QUndoStack& stack, Body& body, const std::shared_ptr<SketchFeature>& sketch, double width)
+void changeWidth(QUndoStack& stack, Body& body, const ParametricFeature::Ptr& sketch, double width)
 {
-    stack.push(new ChangeFeatureParameterCommand<SketchFeature, double>(body, sketch,
-        sketch->width(), width, [](auto& f, double v) { f.setSize(v, f.height()); }, "Change Sketch Width"));
+    const auto properties = sketch->properties();
+    const auto widthProperty = std::find_if(properties.begin(), properties.end(),
+        [](const auto& property) { return property.key == "width"; });
+    Q_ASSERT(widthProperty != properties.end());
+    stack.push(new ChangeParametricPropertyCommand(body, sketch, "width",
+        std::get<double>(widthProperty->value), width, "Change Sketch Width"));
 }
 }
 
@@ -37,6 +41,27 @@ class UndoTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void genericPropertyCommandUndoRedo()
+    {
+        Body body;
+        QUndoStack stack;
+        auto box = std::make_shared<BoxParametricFeature>("box", 2, 3, 4);
+        stack.push(new AddFeatureCommand(body, box, "Create Box"));
+
+        stack.push(new ChangeParametricPropertyCommand(
+            body, box, "width", 2.0, 5.0, "Change Box Width"));
+        QCOMPARE(box->properties()[0].value, FeatureProperty::Value{5.0});
+        QVERIFY(std::abs(volume(box->shape()) - 60.0) < 1e-7);
+
+        stack.undo();
+        QCOMPARE(box->properties()[0].value, FeatureProperty::Value{2.0});
+        QVERIFY(std::abs(volume(box->shape()) - 24.0) < 1e-7);
+
+        stack.redo();
+        QCOMPARE(box->properties()[0].value, FeatureProperty::Value{5.0});
+        QVERIFY(std::abs(volume(box->shape()) - 60.0) < 1e-7);
+    }
+
     void addStableIdentityAndSequentialHistory()
     {
         Body body;
@@ -90,8 +115,8 @@ private slots:
         QVERIFY(unrelated->shape().IsSame(originalUnrelated));
         stack.redo();
         QVERIFY(std::abs(volume(extrude->shape()) - 450) < 1e-7);
-        stack.push(new ChangeFeatureParameterCommand<ExtrudeFeature, double>(body, extrude, 5, 8,
-            [](auto& f, double v) { f.setVector(f.vector().Normalized() * v); }, "Change Extrude Length"));
+        stack.push(new ChangeParametricPropertyCommand(
+            body, extrude, "length", 5.0, 8.0, "Change Extrude Length"));
         QVERIFY(std::abs(volume(extrude->shape()) - 720) < 1e-7);
         stack.undo();
         QVERIFY(std::abs(volume(extrude->shape()) - 450) < 1e-7);
