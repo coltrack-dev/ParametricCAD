@@ -8,6 +8,7 @@
 #include <gp_Pnt.hxx>
 
 #include <array>
+#include <optional>
 #include <vector>
 
 namespace cad::viewer {
@@ -35,6 +36,7 @@ public:
     TransformHandle hitTest(const QPoint& position, const Handle(V3d_View)& view) const;
     void setHovered(TransformHandle handle);
     void setSnapActive(bool active);
+    void setSnapTarget(const std::optional<gp_Pnt>& point, const Handle(V3d_View)& view);
     void deactivateSelection();
 
     const gp_Pnt& pivot() const noexcept;
@@ -59,6 +61,7 @@ private:
     double size_{1.0};
     TransformHandle hovered_{TransformHandle::None};
     bool snapActive_{false};
+    Handle(AIS_Shape) snapTargetPresentation_;
 };
 
 } // namespace cad::viewer

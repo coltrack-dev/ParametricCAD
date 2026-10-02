@@ -52,6 +52,10 @@ void TransformGizmo::clearPresentations()
         }
     }
     parts_.clear();
+    if (!snapTargetPresentation_.IsNull()) {
+        context_->Remove(snapTargetPresentation_, Standard_False);
+        snapTargetPresentation_.Nullify();
+    }
 }
 
 void TransformGizmo::show(const gp_Pnt& pivot, const Handle(V3d_View)& view)
@@ -196,6 +200,26 @@ void TransformGizmo::setSnapActive(const bool active)
 {
     snapActive_ = active;
     recolor();
+}
+
+void TransformGizmo::setSnapTarget(
+    const std::optional<gp_Pnt>& point,
+    const Handle(V3d_View)& view
+)
+{
+    if (!snapTargetPresentation_.IsNull()) {
+        context_->Remove(snapTargetPresentation_, Standard_False);
+        snapTargetPresentation_.Nullify();
+    }
+    if (point) {
+        const double radius = std::max(0.5, size_ * 0.07);
+        snapTargetPresentation_ = new AIS_Shape(
+            BRepPrimAPI_MakeSphere(*point, radius).Shape());
+        snapTargetPresentation_->SetColor(Quantity_Color(Quantity_NOC_YELLOW));
+        context_->Display(snapTargetPresentation_, Standard_False);
+        context_->Deactivate(snapTargetPresentation_);
+    }
+    if (!view.IsNull()) context_->UpdateCurrentViewer();
 }
 
 void TransformGizmo::deactivateSelection()

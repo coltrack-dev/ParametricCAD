@@ -24,7 +24,8 @@ add_executable(push_pull_drag_tests
 )
 target_include_directories(push_pull_drag_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(push_pull_drag_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-target_link_libraries(push_pull_drag_tests PRIVATE Qt6::Gui TKernel TKMath)
+target_link_libraries(push_pull_drag_tests PRIVATE Qt6::Gui
+    TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO)
 add_test(NAME push_pull_drag_tests COMMAND push_pull_drag_tests)
 
 find_package(Qt6 REQUIRED COMPONENTS Test)

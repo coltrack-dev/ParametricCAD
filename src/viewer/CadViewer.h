@@ -93,8 +93,7 @@ private:
     void updateTransformPreview(const QPoint& position);
     void commitTransform();
     void cancelTransform();
-    void updateTransformSnap(const gp_Trsf& delta, gp_Pnt& pivot);
-    std::vector<cad::viewer::SnapTarget> snapTargets() const;
+    void updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot);
     bool makeViewRay(const QPoint& position, cad::viewer::ViewRay& ray) const;
     void bindWindow();
     void updateHover(const QPoint& position);
@@ -165,6 +164,8 @@ private:
     cad::viewer::PushPullDragState transformTranslationDrag_;
     std::optional<gp_Pnt> transformRotationStartPoint_;
     std::optional<cad::viewer::SnapCandidate> activeSnap_;
+    std::vector<cad::viewer::SnapReference> transformSourceReferences_;
+    std::vector<cad::viewer::SnapReference> transformTargetReferences_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };

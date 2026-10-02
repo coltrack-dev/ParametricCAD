@@ -49,7 +49,6 @@
 
 using cad::viewer::SnapCandidate;
 using cad::viewer::SnapKind;
-using cad::viewer::SnapTarget;
 using cad::viewer::TransformHandle;
 using cad::viewer::ViewRay;
 
@@ -338,6 +337,15 @@ void CadViewer::beginTransform(
     transformOriginalShape_ = transformObject_->Shape();
     transformDelta_ = gp_Trsf();
     activeSnap_.reset();
+    transformSourceReferences_ = snapManager_.collectReferences(
+        transformFeatureId_, transformOriginalShape_);
+    transformTargetReferences_.clear();
+    for (const auto& [id, object] : featureObjects_) {
+        if (object == transformObject_ || object.IsNull()) continue;
+        const auto references = snapManager_.collectReferences(id, object->Shape());
+        transformTargetReferences_.insert(
+            transformTargetReferences_.end(), references.begin(), references.end());
+    }
     if (!makeViewRay(position, transformStartRay_)) return;
 
     const gp_Dir axis = transformGizmo_->axis(handle);
@@ -369,61 +377,40 @@ void CadViewer::beginTransform(
     if (transformGizmo_) transformGizmo_->setHovered(handle);
 }
 
-std::vector<SnapTarget> CadViewer::snapTargets() const
+void CadViewer::updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot)
 {
-    std::vector<SnapTarget> targets;
-    for (const auto& [id, object] : featureObjects_) {
-        if (object == transformObject_ || object.IsNull()) continue;
-        int index = 0;
-        for (TopExp_Explorer explorer(object->Shape(), TopAbs_VERTEX);
-             explorer.More(); explorer.Next()) {
-            ++index;
-            targets.push_back({
-                id + QString(":vertex:%1").arg(index),
-                SnapKind::VertexToVertex,
-                BRep_Tool::Pnt(TopoDS::Vertex(explorer.Current())),
-                {}
-            });
-        }
-    }
-    return targets;
-}
-
-void CadViewer::updateTransformSnap(const gp_Trsf& delta, gp_Pnt& pivot)
-{
-    if (transformHandle_ == TransformHandle::RotateX
-        || transformHandle_ == TransformHandle::RotateY
-        || transformHandle_ == TransformHandle::RotateZ) {
-        activeSnap_.reset();
-        if (transformGizmo_) transformGizmo_->setSnapActive(false);
-        return;
-    }
-    gp_Pnt movedPivot = transformPivot_;
-    movedPivot.Transform(delta);
     Standard_Integer width = 0;
     Standard_Integer height = 0;
     view_->Window()->Size(width, height);
-    Standard_Integer x = 0;
-    Standard_Integer y = 0;
-    view_->Convert(movedPivot.X(), movedPivot.Y(), movedPivot.Z(), x, y);
-    const QPointF sourceScreen(x, height - y);
-    auto targets = snapTargets();
-    for (auto& target : targets) {
-        view_->Convert(target.point.X(), target.point.Y(), target.point.Z(), x, y);
-        target.screenPoint = QPointF(x, height - y);
-    }
-    activeSnap_ = snapManager_.findCandidate(sourceScreen, targets, activeSnap_);
+    auto sources = snapManager_.transformReferences(transformSourceReferences_, delta);
+    auto targets = transformTargetReferences_;
+    const auto project = [this, height](const gp_Pnt& point) {
+        Standard_Integer x = 0;
+        Standard_Integer y = 0;
+        view_->Convert(point.X(), point.Y(), point.Z(), x, y);
+        return QPointF(x, height - y);
+    };
+    for (auto& source : sources) source.screenPoint = project(source.point);
+    for (auto& target : targets) target.screenPoint = project(target.point);
+    activeSnap_ = snapManager_.findCandidate(
+        sources,
+        targets,
+        activeSnap_,
+        project
+    );
     if (activeSnap_) {
-        const gp_Vec correction(movedPivot, activeSnap_->targetPoint);
-        if (transformHandle_ != TransformHandle::Center) {
-            const gp_Dir axis = transformGizmo_->axis(transformHandle_);
-            pivot = movedPivot.Translated(gp_Vec(axis) * correction.Dot(gp_Vec(axis)));
-        } else {
-            pivot = activeSnap_->targetPoint;
-        }
+        const gp_Trsf correction = activeSnap_->correction;
+        delta = correction;
+        delta.Multiply(transformDelta_);
+        pivot = transformPivot_;
+        pivot.Transform(delta);
         if (transformGizmo_) transformGizmo_->setSnapActive(true);
+        if (transformGizmo_) {
+            transformGizmo_->setSnapTarget(activeSnap_->targetPoint, view_);
+        }
     } else if (transformGizmo_) {
         transformGizmo_->setSnapActive(false);
+        transformGizmo_->setSnapTarget(std::nullopt, view_);
     }
 }
 
@@ -466,16 +453,9 @@ void CadViewer::updateTransformPreview(const QPoint& position)
             *angle);
     }
 
+    transformDelta_ = delta;
     gp_Pnt movedPivot = transformPivot_;
     updateTransformSnap(delta, movedPivot);
-    if (activeSnap_ && (transformHandle_ == TransformHandle::Center
-                        || transformHandle_ == TransformHandle::TranslateX
-                        || transformHandle_ == TransformHandle::TranslateY
-                        || transformHandle_ == TransformHandle::TranslateZ)) {
-        gp_Pnt unsnapped = transformPivot_;
-        unsnapped.Transform(delta);
-        delta.SetTranslation(gp_Vec(unsnapped, movedPivot));
-    }
     transformDelta_ = delta;
     TopoDS_Shape preview = transformOriginalShape_;
     preview.Move(TopLoc_Location(delta));
@@ -492,7 +472,10 @@ void CadViewer::commitTransform()
     transformDragging_ = false;
     transformHandle_ = TransformHandle::None;
     activeSnap_.reset();
-    if (transformGizmo_) transformGizmo_->setSnapActive(false);
+    if (transformGizmo_) {
+        transformGizmo_->setSnapActive(false);
+        transformGizmo_->setSnapTarget(std::nullopt, view_);
+    }
     if (delta.Form() != gp_Identity && transformCommittedHandler_) {
         transformCommittedHandler_(id, delta);
     } else if (!transformObject_.IsNull()) {
@@ -501,6 +484,8 @@ void CadViewer::commitTransform()
     }
     transformObject_.Nullify();
     transformFeatureId_.clear();
+    transformSourceReferences_.clear();
+    transformTargetReferences_.clear();
     updateTransformGizmo();
 }
 
@@ -515,8 +500,13 @@ void CadViewer::cancelTransform()
     transformHandle_ = TransformHandle::None;
     transformObject_.Nullify();
     transformFeatureId_.clear();
+    transformSourceReferences_.clear();
+    transformTargetReferences_.clear();
     activeSnap_.reset();
-    if (transformGizmo_) transformGizmo_->setSnapActive(false);
+    if (transformGizmo_) {
+        transformGizmo_->setSnapActive(false);
+        transformGizmo_->setSnapTarget(std::nullopt, view_);
+    }
     context_->UpdateCurrentViewer();
     updateTransformGizmo();
 }
