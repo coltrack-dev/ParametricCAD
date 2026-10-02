@@ -37,9 +37,12 @@ public:
 
     std::optional<SelectionHit> detectedHit() const;
 
+    std::optional<SelectionHit> validatedSelectedFaceHit() const;
+
     std::vector<SelectionHit> selectedHits() const;
 
     static SelectionKind kindForShape(const TopoDS_Shape& shape) noexcept;
+    static bool isValidFaceHit(const SelectionHit& hit);
 
 private:
     std::optional<SelectionHit> makeHit(

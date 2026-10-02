@@ -4,6 +4,7 @@
 #include <QString>
 #include <TopoDS_Shape.hxx>
 
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -87,7 +88,10 @@ struct SelectionState
         selected.clear();
         selected.reserve(hits.size());
         for (const auto& hit : hits) {
-            if (hit.item.isValid()) selected.push_back(hit.item);
+            if (hit.item.isValid()
+                && std::find(selected.begin(), selected.end(), hit.item) == selected.end()) {
+                selected.push_back(hit.item);
+            }
         }
 
         primary = selected.empty()

@@ -81,6 +81,32 @@ std::optional<SelectionHit> OcctSelectionAdapter::detectedHit() const
     return makeHit(presentation, detectedShape, hasDetectedShape);
 }
 
+bool OcctSelectionAdapter::isValidFaceHit(const SelectionHit& hit)
+{
+    if (!hit.item.isValid() || hit.item.kind != SelectionKind::Face
+        || hit.shape.IsNull() || hit.shape.ShapeType() != TopAbs_FACE
+        || hit.presentation.IsNull() || !hit.item.currentSubshapeIndex
+        || *hit.item.currentSubshapeIndex <= 0) {
+        return false;
+    }
+
+    const auto parent = Handle(AIS_Shape)::DownCast(hit.presentation);
+    if (parent.IsNull() || parent->Shape().IsNull()) return false;
+
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(parent->Shape(), TopAbs_FACE, faces);
+    const int resolvedIndex = faces.FindIndex(hit.shape);
+    return resolvedIndex == *hit.item.currentSubshapeIndex;
+}
+
+std::optional<SelectionHit> OcctSelectionAdapter::validatedSelectedFaceHit() const
+{
+    for (const auto& hit : selectedHits()) {
+        if (isValidFaceHit(hit)) return hit;
+    }
+    return std::nullopt;
+}
+
 std::optional<SelectionHit> OcctSelectionAdapter::makeHit(
     const Handle(AIS_InteractiveObject)& presentation,
     const TopoDS_Shape& selectedShape,

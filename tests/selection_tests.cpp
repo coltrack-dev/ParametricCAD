@@ -3,6 +3,8 @@
 #include <AIS_Shape.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
 
 #include <cassert>
@@ -42,10 +44,37 @@ int main()
     assert(faceHit.hasSubshape());
     assert(!faceHit.hasSameTransientIdentity(SelectionHit{otherFace, {}, {}}));
 
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(box, TopAbs_FACE, faces);
+    const auto selectedFace = faces(1);
+    SelectionHit validFaceHit{
+        SelectionItem{"box-1", SelectionKind::Face, faces.FindIndex(selectedFace)},
+        selectedFace,
+        presentation
+    };
+    assert(OcctSelectionAdapter::isValidFaceHit(validFaceHit));
+    assert(validFaceHit.item.currentSubshapeIndex == faces.FindIndex(selectedFace));
+    assert(!OcctSelectionAdapter::isValidFaceHit(
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Object, std::nullopt},
+                     box, presentation}));
+    assert(!OcctSelectionAdapter::isValidFaceHit(
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Edge, 1},
+                     edge, presentation}));
+    assert(!OcctSelectionAdapter::isValidFaceHit(
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Face, 0},
+                     selectedFace, presentation}));
+    assert(!OcctSelectionAdapter::isValidFaceHit(
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Face,
+                                   faces.Extent() + 1},
+                     selectedFace, presentation}));
+    assert(!OcctSelectionAdapter::isValidFaceHit(
+        SelectionHit{SelectionItem{"missing", SelectionKind::Face, 1},
+                     selectedFace, Handle(AIS_InteractiveObject){}}));
+
     SelectionState state;
     state.hovered = faceHit;
-    state.rebuildSelected({faceHit, replacementPresentationHit});
-    assert(state.selected.size() == 2);
+    state.rebuildSelected({faceHit, replacementPresentationHit, faceHit});
+    assert(state.selected.size() == 1);
     assert(state.primary && *state.primary == face);
     assert(state.hovered && state.hovered->hasSameTransientIdentity(faceHit));
     state.hovered.reset();
@@ -66,6 +95,7 @@ int main()
     assert(!adapter.featureIdFor(Handle(AIS_InteractiveObject){}));
     assert(adapter.selectedHits().empty());
     assert(!adapter.detectedHit());
+    assert(!adapter.validatedSelectedFaceHit());
 
     return 0;
 }
