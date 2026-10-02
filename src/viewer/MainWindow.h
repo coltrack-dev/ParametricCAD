@@ -48,6 +48,10 @@ private:
     QAction* deleteAction_{nullptr};
     QAction* faceAction_{nullptr};
     QAction* extrudeAction_{nullptr};
+    // Compatibility projection of viewer/tree feature-ID selection. OCCT and
+    // CadViewer::SelectionState remain the selection source of truth; this
+    // mirror supplies MainWindow actions and model operation inputs without
+    // coupling MainWindow to viewer internals.
     QStringList selectedObjectIds_;
     CadViewer* viewer_{nullptr};
     FeatureEditorPanel* featureEditorPanel_{nullptr};

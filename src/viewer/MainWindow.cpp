@@ -129,6 +129,9 @@ void MainWindow::applySelection(
     const bool updateViewer
 )
 {
+    // This is the single MainWindow projection point for both viewer -> tree
+    // and tree -> viewer selection paths. Keep the viewer update optional to
+    // preserve feedback-loop suppression for featureSelectionChanged.
     if (updateViewer) {
         viewer_->selectFeatures(featureIds);
     }

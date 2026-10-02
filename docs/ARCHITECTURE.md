@@ -166,6 +166,36 @@ edit command
 Selection flows in the opposite direction: `CadViewer` emits selected feature
 IDs and `MainWindow` forwards them to `FeatureEditorPanel`.
 
+### Selection architecture
+
+`OcctSelectionAdapter` is the viewer boundary for OCCT selection reads and
+detection. It wraps `MoveTo()` and `SelectDetected()`, resolves the selected
+AIS presentation to a feature ID, and exposes `SelectionHit` values for the
+current object or subshape. Face and object validation are transient checks
+against the current AIS presentation and shape.
+
+`SelectionHit` contains immediate selection data: feature ID, selection kind,
+current selected shape, parent presentation, and a current-presentation
+subshape index when applicable. The index is not a persistent topology ID and
+must not be reused after recompute or presentation replacement.
+
+`CadViewer::SelectionState` is a passive snapshot of the already completed
+OCCT selection/detection. OCCT remains the source of truth; the state does not
+perform picking, activate selection modes, or own tool behavior. `MainWindow`
+keeps `selectedObjectIds_` as an application/UI compatibility projection used
+by actions, model-operation inputs, and refresh-survival filtering. The
+`FeatureEditorPanel` keeps only Qt tree selection and uses signal blocking for
+programmatic viewer-to-tree synchronization.
+
+Interaction priority remains local to `CadViewer`: active transform capture
+and independent `TransformGizmo` handle picking are processed before model
+selection, followed by Push/Pull capture, camera navigation, and ordinary
+selection. `TransformGizmo` does not use model selection picking. `SnapManager`
+keeps its cached geometry/candidate path separate from selection and is not
+called through `SelectionState` during transform mouse movement. X-Ray
+detected-entity cycling remains a `CadViewer` policy through
+`HilightNextDetected()`.
+
 Controller behavior is testable without starting the Qt GUI. The headless
 controller tests cover stable-ID selection, Sketch → Face → Extrude creation,
 Boolean Cut creation, property validation and property undo/redo, project
