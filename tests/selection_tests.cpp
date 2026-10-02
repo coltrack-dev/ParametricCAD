@@ -8,6 +8,7 @@
 #include <cassert>
 
 using cad::viewer::OcctSelectionAdapter;
+using cad::viewer::SelectionHit;
 using cad::viewer::SelectionItem;
 using cad::viewer::SelectionKind;
 
@@ -29,10 +30,20 @@ int main()
     assert(face == sameFace);
     assert(!(face == otherFace));
 
+    auto presentation = Handle(AIS_Shape)(new AIS_Shape(box));
+    SelectionHit faceHit{face, box, presentation};
+    SelectionHit replacementPresentationHit{
+        sameFace,
+        BRepPrimAPI_MakeBox(20.0, 20.0, 30.0).Shape(),
+        Handle(AIS_Shape)(new AIS_Shape(box))
+    };
+    assert(faceHit.hasSameTransientIdentity(replacementPresentationHit));
+    assert(faceHit.hasSubshape());
+    assert(!faceHit.hasSameTransientIdentity(SelectionHit{otherFace, {}, {}}));
+
     SelectionItem invalid;
     assert(!invalid.isValid());
 
-    auto presentation = Handle(AIS_Shape)(new AIS_Shape(box));
     std::map<QString, Handle(AIS_Shape)> presentations{
         {QStringLiteral("box-1"), presentation}
     };

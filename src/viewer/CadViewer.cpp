@@ -956,6 +956,13 @@ void CadViewer::updateHover(const QPoint& position)
 
     if (selectionAdapter_) {
         selectionAdapter_->moveTo(position, view_, true);
+        const auto detected = selectionAdapter_->detectedHit();
+        if (!detected) {
+            hoveredSelectionHit_.reset();
+        } else if (!hoveredSelectionHit_
+                   || !hoveredSelectionHit_->hasSameTransientIdentity(*detected)) {
+            hoveredSelectionHit_ = detected;
+        }
     }
 }
 

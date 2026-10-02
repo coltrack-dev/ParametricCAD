@@ -63,6 +63,13 @@ struct SelectionHit
             || item.kind == SelectionKind::Edge
             || item.kind == SelectionKind::Face;
     }
+
+    // Hover identity is intentionally limited to the current presentation
+    // and subshape occurrence. It is not a persistent topology identity.
+    bool hasSameTransientIdentity(const SelectionHit& other) const noexcept
+    {
+        return item == other.item;
+    }
 };
 
 } // namespace cad::viewer

@@ -172,6 +172,7 @@ private:
     std::map<QString, std::vector<cad::viewer::SnapReference>> snapReferenceCache_;
 
     std::unique_ptr<cad::viewer::OcctSelectionAdapter> selectionAdapter_;
+    std::optional<cad::viewer::SelectionHit> hoveredSelectionHit_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };
