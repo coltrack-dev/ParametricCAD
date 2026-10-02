@@ -1,5 +1,13 @@
 # ParametricCAD `.pcad` File Format
 
+## Feature placement
+
+Canonical `body` records may contain an optional `placement` array with twelve
+finite numbers: the first three rows of an OCCT `gp_Trsf` (3x3 rotation and
+translation). It is applied after rebuilding the feature geometry and stores
+Move/Rotate results. Missing placement is identity, preserving compatibility
+with existing v1 files. Transient previews and undo history are not serialized.
+
 ## Implemented format (version 1)
 
 `src/model/ProjectFile.cpp` currently reads and writes UTF-8 JSON with this root:

@@ -1,0 +1,49 @@
+@startuml
+title ParametricCAD — Move/Rotate interaction
+
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+autonumber
+
+actor User
+participant CadViewer as Viewer
+participant TransformGizmo as Gizmo
+participant TransformMath as Math
+participant SnapManager as Snap
+participant ModelingController as Controller
+participant QUndoStack as Stack
+participant TransformFeatureCommand as Command
+participant Body
+
+User -> Viewer : activate Move / Rotate
+Viewer -> Gizmo : show at selected bounding-box center
+User -> Viewer : press axis or rotation ring
+Viewer -> Viewer : capture feature ID and original placement
+
+loop mouse move
+    User -> Viewer : move cursor
+    Viewer -> Math : build camera ray and calculate delta
+    Math --> Viewer : world translation / rotation
+    Viewer -> Snap : evaluate compatible candidates
+    Snap --> Viewer : best candidate with hysteresis
+    Viewer -> Gizmo : highlight handle / snap target
+    Viewer -> Viewer : update temporary AIS preview from original transform
+end
+
+alt release
+    Viewer -> Controller : commitTransform(featureId, before, after)
+    Controller -> Stack : push(command)
+    Stack -> Command : redo()
+    Command -> Body : resolve ID, set placement, recompute
+else Esc
+    Viewer -> Viewer : restore original AIS shape
+end
+
+note over Math
+  Screen coordinates are converted to camera rays.
+  Translation uses axis projection; rotation uses
+  a pivot plane. No pixel-to-model coefficient.
+end note
+
+@enduml

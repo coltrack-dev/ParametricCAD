@@ -13,6 +13,7 @@
 #include <GeomAbs_SurfaceType.hxx>
 #include <TopoDS.hxx>
 #include <gp_Vec.hxx>
+#include <gp_Trsf.hxx>
 
 #include <algorithm>
 #include <variant>
@@ -196,6 +197,27 @@ private slots:
         QVERIFY(std::abs(volume(controller.body().findFeature(second.id)->shape())
                          - secondVolume) < 1.0e-6);
         QCOMPARE(controller.undoStack().index(), 3);
+    }
+
+    void transformIsOneUndoablePlacementChange()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto before = controller.body().findFeature(box.id)->placement();
+        gp_Trsf after;
+        after.SetTranslation(gp_Vec(12.0, -3.0, 7.0));
+
+        const auto result = controller.transformFeature(box.id, before, after);
+        QVERIFY(result.success);
+        QCOMPARE(controller.undoStack().count(), 2);
+        QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().X(), 12.0);
+
+        controller.undo();
+        QCOMPARE(controller.body().findFeature(box.id)->placement().Form(), gp_Identity);
+        controller.redo();
+        QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().Y(), -3.0);
+        QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().Z(), 7.0);
     }
 };
 

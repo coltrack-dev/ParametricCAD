@@ -48,6 +48,27 @@ private:
     parametric::PropertyValue after_;
 };
 
+class TransformFeatureCommand final : public QUndoCommand
+{
+public:
+    TransformFeatureCommand(
+        parametric::Body& body,
+        std::string featureId,
+        gp_Trsf before,
+        gp_Trsf after
+    );
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const gp_Trsf& placement);
+
+    parametric::Body& body_;
+    std::string featureId_;
+    gp_Trsf before_;
+    gp_Trsf after_;
+};
+
 class RemoveFeatureCommand final : public QUndoCommand
 {
 public:

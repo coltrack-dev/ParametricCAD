@@ -6,6 +6,8 @@
 #include <functional>
 
 #include <vector>
+#include <memory>
+#include <optional>
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Shape.hxx>
@@ -17,6 +19,9 @@
 #include <gp_Vec.hxx>
 
 #include "viewer/PushPullDrag.h"
+#include "viewer/SnapManager.h"
+#include "viewer/TransformGizmo.h"
+#include "viewer/TransformMath.h"
 
 class QAction;
 class QLabel;
@@ -58,6 +63,9 @@ public:
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler
     );
+    void setTransformCommittedHandler(
+        std::function<void(const QString&, const gp_Trsf&)> handler
+    );
 
 signals:
     void featureSelectionChanged(const QStringList& featureIds);
@@ -79,6 +87,15 @@ private:
     void setupToolBar();
     void syncToolBarState();
     void setPushPullArmed(bool armed);
+    void setTransformMode(bool enabled);
+    void updateTransformGizmo();
+    void beginTransform(cad::viewer::TransformHandle handle, const QPoint& position);
+    void updateTransformPreview(const QPoint& position);
+    void commitTransform();
+    void cancelTransform();
+    void updateTransformSnap(const gp_Trsf& delta, gp_Pnt& pivot);
+    std::vector<cad::viewer::SnapTarget> snapTargets() const;
+    bool makeViewRay(const QPoint& position, cad::viewer::ViewRay& ray) const;
     void bindWindow();
     void updateHover(const QPoint& position);
     void selectAt(
@@ -102,6 +119,7 @@ private:
     QAction* selectEdgeAction_{nullptr};
     QAction* selectFaceAction_{nullptr};
     QAction* pushPullAction_{nullptr};
+    QAction* transformAction_{nullptr};
     QAction* xRayAction_{nullptr};
 
     Handle(V3d_Viewer) viewer_;
@@ -131,6 +149,22 @@ private:
     Handle(AIS_Shape) pushPullObject_;
     Handle(AIS_Shape) pushPullPreview_;
     std::function<void(const QString&, int, const gp_Vec&, double)> pushPullCommittedHandler_;
+    std::function<void(const QString&, const gp_Trsf&)> transformCommittedHandler_;
+
+    std::unique_ptr<cad::viewer::TransformGizmo> transformGizmo_;
+    cad::viewer::SnapManager snapManager_;
+    bool transformMode_{false};
+    bool transformDragging_{false};
+    cad::viewer::TransformHandle transformHandle_{cad::viewer::TransformHandle::None};
+    QString transformFeatureId_;
+    Handle(AIS_Shape) transformObject_;
+    TopoDS_Shape transformOriginalShape_;
+    gp_Pnt transformPivot_;
+    gp_Trsf transformDelta_;
+    cad::viewer::ViewRay transformStartRay_;
+    cad::viewer::PushPullDragState transformTranslationDrag_;
+    std::optional<gp_Pnt> transformRotationStartPoint_;
+    std::optional<cad::viewer::SnapCandidate> activeSnap_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };

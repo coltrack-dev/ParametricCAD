@@ -13,6 +13,7 @@
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <cmath>
+#include <gp_Trsf.hxx>
 #include <iostream>
 #include <stdexcept>
 
@@ -37,7 +38,11 @@ int main()
         body.addFeature(box);
         body.addFeature(cylinder);
         body.addFeature(std::make_shared<BooleanFeature>("cut-3", box, cylinder, BooleanOperation::Cut));
-        body.addFeature(std::make_shared<ConeFeature>("cone-4", 5, 2, 8));
+        auto cone = std::make_shared<ConeFeature>("cone-4", 5, 2, 8);
+        gp_Trsf placement;
+        placement.SetTranslation(gp_Vec(5.0, 6.0, 7.0));
+        cone->setPlacement(placement);
+        body.addFeature(cone);
         body.addFeature(std::make_shared<SphereFeature>("sphere-5", 6));
         body.addFeature(std::make_shared<TorusFeature>("torus-6", 8, 2));
         body.addFeature(std::make_shared<HexagonFeature>("hexagon-7", 10, 4));
@@ -65,6 +70,11 @@ int main()
         check(editable && std::string(editable->typeId()) == "Box" && editable->name() == "Коробка"
             && boolean && boolean->dependencies().front().lock() == editable
             && boolean->dependencies().back().lock() == loadedBody.findFeature("cylinder-2"), "identity and links");
+        const auto loadedCone = loadedBody.findFeature("cone-4");
+        check(loadedCone && std::abs(loadedCone->placement().TranslationPart().X() - 5.0) < 1e-9
+                  && std::abs(loadedCone->placement().TranslationPart().Y() - 6.0) < 1e-9
+                  && std::abs(loadedCone->placement().TranslationPart().Z() - 7.0) < 1e-9,
+              "placement roundtrip");
         editable->setNumericProperty("width", 50);
         editable->setNumericProperty("depth", 30);
         editable->setNumericProperty("height", 40);

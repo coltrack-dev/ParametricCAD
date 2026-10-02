@@ -1,5 +1,6 @@
 #include "model/ParametricFeature.h"
 
+#include <QJsonArray>
 #include <Standard_Failure.hxx>
 #include <stdexcept>
 #include <utility>
@@ -94,6 +95,13 @@ QJsonObject ParametricFeature::serialize() const
         {"name", QString::fromStdString(name_)},
         {"type", QString::fromLatin1(typeId())}
     };
+    QJsonArray placement;
+    for (int row = 1; row <= 3; ++row) {
+        for (int column = 1; column <= 4; ++column) {
+            placement.append(placement_.Value(row, column));
+        }
+    }
+    object.insert("placement", placement);
     writeParameters(object);
     return object;
 }
@@ -106,6 +114,17 @@ void ParametricFeature::writeParameters(QJsonObject&) const
 const TopoDS_Shape& ParametricFeature::shape() const noexcept
 {
     return shape_;
+}
+
+const gp_Trsf& ParametricFeature::placement() const noexcept
+{
+    return placement_;
+}
+
+void ParametricFeature::setPlacement(const gp_Trsf& placement)
+{
+    placement_ = placement;
+    markDirty();
 }
 
 const std::vector<std::weak_ptr<ParametricFeature>>&
@@ -153,6 +172,9 @@ bool ParametricFeature::recompute()
         }
 
         shape_ = std::move(rebuiltShape);
+        if (placement_.Form() != gp_Identity) {
+            shape_.Move(TopLoc_Location(placement_));
+        }
         state_ = FeatureState::UpToDate;
         error_.clear();
         return true;

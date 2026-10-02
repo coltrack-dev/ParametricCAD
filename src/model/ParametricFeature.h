@@ -1,6 +1,7 @@
 #pragma once
 
 #include <TopoDS_Shape.hxx>
+#include <gp_Trsf.hxx>
 #include <QJsonObject>
 
 #include <functional>
@@ -72,6 +73,8 @@ public:
     QJsonObject serialize() const;
 
     const TopoDS_Shape& shape() const noexcept;
+    const gp_Trsf& placement() const noexcept;
+    void setPlacement(const gp_Trsf& placement);
 
     const std::vector<std::weak_ptr<ParametricFeature>>& dependencies() const noexcept;
     void addDependency(const Ptr& dependency);
@@ -87,6 +90,7 @@ private:
     std::string id_;
     std::string name_;
     TopoDS_Shape shape_;
+    gp_Trsf placement_;
     FeatureState state_{FeatureState::Dirty};
     std::string error_;
     std::vector<std::weak_ptr<ParametricFeature>> dependencies_;

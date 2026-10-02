@@ -147,6 +147,33 @@ ModelingResult ModelingController::pushPull(
     }
 }
 
+ModelingResult ModelingController::transformFeature(
+    const std::string& featureId,
+    const gp_Trsf& before,
+    const gp_Trsf& after
+)
+{
+    try {
+        undoStack_.push(new cad::commands::TransformFeatureCommand(
+            body_, featureId, before, after));
+        return {true, featureId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::transformFeatureDelta(
+    const std::string& featureId,
+    const gp_Trsf& delta
+)
+{
+    const auto feature = body_.findFeature(featureId);
+    if (!feature) return {false, {}, "Transform target does not exist"};
+    gp_Trsf after = delta;
+    after.Multiply(feature->placement());
+    return transformFeature(featureId, feature->placement(), after);
+}
+
 ModelingResult ModelingController::createBoolean(
     const BooleanKind requestedOperation,
     const std::vector<std::string>& selection,

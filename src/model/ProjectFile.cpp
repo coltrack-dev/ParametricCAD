@@ -126,6 +126,24 @@ ParametricFeature::Ptr decode(const QJsonObject& o, const Body& body)
     const auto factory = factories().find(type);
     require(factory != factories().end(), "Unsupported parametric feature type");
     auto feature = factory->second(o, body);
+    if (o.contains("placement")) {
+        const auto values = o.value("placement").toArray();
+        require(values.size() == 12, "Invalid feature placement");
+        double matrix[12]{};
+        for (int index = 0; index < 12; ++index) {
+            require(values.at(index).isDouble()
+                        && std::isfinite(values.at(index).toDouble()),
+                    "Invalid feature placement value");
+            matrix[index] = values.at(index).toDouble();
+        }
+        gp_Trsf placement;
+        placement.SetValues(
+            matrix[0], matrix[1], matrix[2], matrix[3],
+            matrix[4], matrix[5], matrix[6], matrix[7],
+            matrix[8], matrix[9], matrix[10], matrix[11]
+        );
+        feature->setPlacement(placement);
+    }
     feature->setName(string(o, "name"));
     return feature;
 }

@@ -18,10 +18,12 @@ add_test(NAME geometry_tests COMMAND geometry_tests)
 add_executable(push_pull_drag_tests
     push_pull_drag_tests.cpp
     ../src/viewer/PushPullDrag.cpp
+    ../src/viewer/TransformMath.cpp
+    ../src/viewer/SnapManager.cpp
 )
 target_include_directories(push_pull_drag_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(push_pull_drag_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-target_link_libraries(push_pull_drag_tests PRIVATE TKernel TKMath)
+target_link_libraries(push_pull_drag_tests PRIVATE Qt6::Gui TKernel TKMath)
 add_test(NAME push_pull_drag_tests COMMAND push_pull_drag_tests)
 
 find_package(Qt6 REQUIRED COMPONENTS Test)

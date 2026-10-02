@@ -48,6 +48,44 @@ void ChangeParametricPropertyCommand::apply(const parametric::PropertyValue& val
 void ChangeParametricPropertyCommand::undo() { apply(before_); }
 void ChangeParametricPropertyCommand::redo() { apply(after_); }
 
+TransformFeatureCommand::TransformFeatureCommand(
+    parametric::Body& body,
+    std::string featureId,
+    gp_Trsf before,
+    gp_Trsf after
+)
+    : QUndoCommand("Transform Feature"),
+      body_(body),
+      featureId_(std::move(featureId)),
+      before_(std::move(before)),
+      after_(std::move(after))
+{
+    if (!body_.findFeature(featureId_)) {
+        throw std::invalid_argument("Transform target does not exist");
+    }
+}
+
+void TransformFeatureCommand::apply(const gp_Trsf& placement)
+{
+    const auto feature = body_.findFeature(featureId_);
+    if (!feature) {
+        throw std::invalid_argument("Transform target no longer exists");
+    }
+    feature->setPlacement(placement);
+    body_.markDirtyFrom(featureId_);
+    body_.recompute();
+}
+
+void TransformFeatureCommand::undo()
+{
+    apply(before_);
+}
+
+void TransformFeatureCommand::redo()
+{
+    apply(after_);
+}
+
 void AddFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());

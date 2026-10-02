@@ -40,6 +40,12 @@ MainWindow::MainWindow(QWidget* parent)
                 featureId.toStdString(), faceIndex, normal, distance));
         }
     );
+    viewer_->setTransformCommittedHandler(
+        [this](const QString& featureId, const gp_Trsf& delta) {
+            reportResult(modeling_.transformFeatureDelta(
+                featureId.toStdString(), delta));
+        }
+    );
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         refreshModelView();
         featureEditorPanel_->scheduleRefresh();

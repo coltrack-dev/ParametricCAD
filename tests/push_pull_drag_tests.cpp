@@ -1,4 +1,6 @@
 #include "viewer/PushPullDrag.h"
+#include "viewer/SnapManager.h"
+#include "viewer/TransformMath.h"
 
 #include <cassert>
 #include <cmath>
@@ -76,6 +78,36 @@ int main()
         gp_Dir(0.0, 0.0, -1.0)
     );
     assert(headOnDistance && std::isfinite(*headOnDistance));
+
+    const ViewRay startRay{gp_Pnt(-1.0, -1.0, 1.0), gp_Dir(0.0, 1.0, 0.0)};
+    const ViewRay currentRay{gp_Pnt(-1.0, -1.0, 3.5), gp_Dir(0.0, 1.0, 0.0)};
+    const auto transformDistance = translationDelta(*state, startRay, currentRay);
+    assert(transformDistance && almostEqual(*transformDistance, 2.5));
+
+    const auto translation = translationTransform(gp_Dir(0.0, 0.0, 1.0), 2.5);
+    gp_Pnt translated(0.0, 0.0, 0.0);
+    translated.Transform(translation);
+    assert(almostEqual(translated.Z(), 2.5));
+
+    const auto angle = rotationDelta(
+        gp_Pnt(0.0, 0.0, 0.0),
+        gp_Dir(0.0, 0.0, 1.0),
+        ViewRay{gp_Pnt(0.0, -1.0, 1.0), gp_Dir(0.0, 0.0, -1.0)},
+        ViewRay{gp_Pnt(1.0, 0.0, 1.0), gp_Dir(0.0, 0.0, -1.0)}
+    );
+    assert(angle && almostEqual(*angle, 1.5707963267948966));
+
+    SnapManager snapManager;
+    const std::vector<SnapTarget> targets{
+        {QStringLiteral("vertex-a"), SnapKind::VertexToVertex, gp_Pnt(), QPointF(100.0, 100.0)},
+        {QStringLiteral("vertex-b"), SnapKind::VertexToVertex, gp_Pnt(), QPointF(130.0, 100.0)}
+    };
+    const auto snapped = snapManager.findCandidate(QPointF(108.0, 100.0), targets, std::nullopt);
+    assert(snapped && snapped->id == QStringLiteral("vertex-a"));
+    const auto held = snapManager.findCandidate(QPointF(115.0, 100.0), targets, snapped);
+    assert(held && held->id == QStringLiteral("vertex-a"));
+    const auto released = snapManager.findCandidate(QPointF(125.0, 100.0), targets, held);
+    assert(released && released->id == QStringLiteral("vertex-b"));
 
     return 0;
 }

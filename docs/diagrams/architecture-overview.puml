@@ -9,17 +9,21 @@ package "Qt UI" {
     component MainWindow
     component FeatureEditorPanel
     component CadViewer
+    component TransformGizmo
 }
 
 package "Application" {
     component ModelingController
     component ProjectController
+    component SnapManager
+    component TransformMath
     interface FeatureEditingService
 }
 
 package "Commands" {
     component QUndoStack
     component FeatureCommands
+    component TransformFeatureCommand
 }
 
 package "Parametric model" {
@@ -48,10 +52,14 @@ FeatureEditorPanel ..> FeatureEditingService : uses contract
 ModelingController ..|> FeatureEditingService
 
 CadViewer --> MainWindow : feature IDs / PushPull commit
+CadViewer --> TransformGizmo : display / hit-test handles
+CadViewer --> TransformMath : screen-to-world transforms
+CadViewer --> SnapManager : snap candidates
 
 ModelingController --> QUndoStack : push / undo / redo
 QUndoStack --> FeatureCommands
 FeatureCommands --> Body : mutate through commands
+TransformFeatureCommand --> Body : placement before / after
 
 Body *-- ParametricFeature
 PrimitiveFeatures --|> ParametricFeature

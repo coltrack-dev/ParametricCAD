@@ -23,6 +23,10 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <GProp_GProps.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -42,6 +46,12 @@
 #else
 #include <Xw_Window.hxx>
 #endif
+
+using cad::viewer::SnapCandidate;
+using cad::viewer::SnapKind;
+using cad::viewer::SnapTarget;
+using cad::viewer::TransformHandle;
+using cad::viewer::ViewRay;
 
 namespace
 {
@@ -73,6 +83,24 @@ bool makeViewRay(
     origin.SetCoord(x, y, z);
     direction = gp_Dir(rayDirection);
     return true;
+}
+
+gp_Pnt shapeCenter(const TopoDS_Shape& shape)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    Standard_Real xmin = 0.0;
+    Standard_Real ymin = 0.0;
+    Standard_Real zmin = 0.0;
+    Standard_Real xmax = 0.0;
+    Standard_Real ymax = 0.0;
+    Standard_Real zmax = 0.0;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    return gp_Pnt(
+        (xmin + xmax) * 0.5,
+        (ymin + ymax) * 0.5,
+        (zmin + zmax) * 0.5
+    );
 }
 }
 
@@ -163,6 +191,12 @@ void CadViewer::setupToolBar()
         setPushPullArmed(checked);
     });
 
+    transformAction_ = toolBar_->addAction("Move/Rotate [M]");
+    transformAction_->setCheckable(true);
+    connect(transformAction_, &QAction::triggered, this, [this](bool checked) {
+        setTransformMode(checked);
+    });
+
     xRayAction_ = toolBar_->addAction("X-Ray [X]");
     xRayAction_->setCheckable(true);
     connect(xRayAction_, &QAction::triggered, this, [this](bool checked) {
@@ -208,6 +242,9 @@ void CadViewer::syncToolBarState()
     if (pushPullAction_ != nullptr) {
         pushPullAction_->setChecked(pushPullArmed_);
     }
+    if (transformAction_ != nullptr) {
+        transformAction_->setChecked(transformMode_);
+    }
     if (xRayAction_ != nullptr) {
         xRayAction_->setChecked(xRayEnabled_);
     }
@@ -233,6 +270,257 @@ void CadViewer::setPushPullArmed(bool armed)
     syncToolBarState();
 }
 
+void CadViewer::setTransformCommittedHandler(
+    std::function<void(const QString&, const gp_Trsf&)> handler
+)
+{
+    transformCommittedHandler_ = std::move(handler);
+}
+
+void CadViewer::setTransformMode(const bool enabled)
+{
+    if (transformDragging_) {
+        cancelTransform();
+    }
+    transformMode_ = enabled;
+    if (!transformMode_ && transformGizmo_) {
+        transformGizmo_->hide();
+    } else {
+        updateTransformGizmo();
+    }
+    syncToolBarState();
+}
+
+bool CadViewer::makeViewRay(const QPoint& position, ViewRay& ray) const
+{
+    return ::makeViewRay(view_, position, ray.origin, ray.direction);
+}
+
+void CadViewer::updateTransformGizmo()
+{
+    if (!initialized_ || !transformMode_ || !transformGizmo_ || transformDragging_) {
+        return;
+    }
+    context_->InitSelected();
+    if (!context_->MoreSelected()) {
+        transformGizmo_->hide();
+        return;
+    }
+    const auto object = Handle(AIS_Shape)::DownCast(context_->SelectedInteractive());
+    if (object.IsNull()) {
+        transformGizmo_->hide();
+        return;
+    }
+    transformGizmo_->show(shapeCenter(object->Shape()), view_);
+}
+
+void CadViewer::beginTransform(
+    const TransformHandle handle,
+    const QPoint& position
+)
+{
+    if (!transformGizmo_ || handle == TransformHandle::None) return;
+    context_->InitSelected();
+    if (!context_->MoreSelected()) return;
+    transformObject_ = Handle(AIS_Shape)::DownCast(context_->SelectedInteractive());
+    if (transformObject_.IsNull()) return;
+
+    for (const auto& [id, object] : featureObjects_) {
+        if (object == transformObject_) {
+            transformFeatureId_ = id;
+            break;
+        }
+    }
+    if (transformFeatureId_.isEmpty()) return;
+
+    transformHandle_ = handle;
+    transformPivot_ = transformGizmo_->pivot();
+    transformOriginalShape_ = transformObject_->Shape();
+    transformDelta_ = gp_Trsf();
+    activeSnap_.reset();
+    if (!makeViewRay(position, transformStartRay_)) return;
+
+    const gp_Dir axis = transformGizmo_->axis(handle);
+    if (handle == TransformHandle::TranslateX
+        || handle == TransformHandle::TranslateY
+        || handle == TransformHandle::TranslateZ) {
+        const auto drag = cad::viewer::makePushPullDragState(
+            transformPivot_, axis,
+            view_->Camera()->Direction(),
+            view_->Camera()->Up(),
+            view_->Camera()->SideRight()
+        );
+        if (!drag) return;
+        transformTranslationDrag_ = *drag;
+    } else if (handle == TransformHandle::Center) {
+        transformTranslationDrag_.anchor = transformPivot_;
+        transformTranslationDrag_.normal = view_->Camera()->Direction();
+        transformTranslationDrag_.dragPlane = gp_Pln(
+            transformPivot_, view_->Camera()->Direction());
+    } else {
+        const auto start = cad::viewer::intersectRayWithPlane(
+            transformStartRay_.origin,
+            transformStartRay_.direction,
+            gp_Pln(transformPivot_, axis));
+        if (!start || gp_Vec(transformPivot_, *start).Magnitude() <= 1.0e-9) return;
+        transformRotationStartPoint_ = *start;
+    }
+    transformDragging_ = true;
+    if (transformGizmo_) transformGizmo_->setHovered(handle);
+}
+
+std::vector<SnapTarget> CadViewer::snapTargets() const
+{
+    std::vector<SnapTarget> targets;
+    for (const auto& [id, object] : featureObjects_) {
+        if (object == transformObject_ || object.IsNull()) continue;
+        int index = 0;
+        for (TopExp_Explorer explorer(object->Shape(), TopAbs_VERTEX);
+             explorer.More(); explorer.Next()) {
+            ++index;
+            targets.push_back({
+                id + QString(":vertex:%1").arg(index),
+                SnapKind::VertexToVertex,
+                BRep_Tool::Pnt(TopoDS::Vertex(explorer.Current())),
+                {}
+            });
+        }
+    }
+    return targets;
+}
+
+void CadViewer::updateTransformSnap(const gp_Trsf& delta, gp_Pnt& pivot)
+{
+    if (transformHandle_ == TransformHandle::RotateX
+        || transformHandle_ == TransformHandle::RotateY
+        || transformHandle_ == TransformHandle::RotateZ) {
+        activeSnap_.reset();
+        if (transformGizmo_) transformGizmo_->setSnapActive(false);
+        return;
+    }
+    gp_Pnt movedPivot = transformPivot_;
+    movedPivot.Transform(delta);
+    Standard_Integer width = 0;
+    Standard_Integer height = 0;
+    view_->Window()->Size(width, height);
+    Standard_Integer x = 0;
+    Standard_Integer y = 0;
+    view_->Convert(movedPivot.X(), movedPivot.Y(), movedPivot.Z(), x, y);
+    const QPointF sourceScreen(x, height - y);
+    auto targets = snapTargets();
+    for (auto& target : targets) {
+        view_->Convert(target.point.X(), target.point.Y(), target.point.Z(), x, y);
+        target.screenPoint = QPointF(x, height - y);
+    }
+    activeSnap_ = snapManager_.findCandidate(sourceScreen, targets, activeSnap_);
+    if (activeSnap_) {
+        const gp_Vec correction(movedPivot, activeSnap_->targetPoint);
+        if (transformHandle_ != TransformHandle::Center) {
+            const gp_Dir axis = transformGizmo_->axis(transformHandle_);
+            pivot = movedPivot.Translated(gp_Vec(axis) * correction.Dot(gp_Vec(axis)));
+        } else {
+            pivot = activeSnap_->targetPoint;
+        }
+        if (transformGizmo_) transformGizmo_->setSnapActive(true);
+    } else if (transformGizmo_) {
+        transformGizmo_->setSnapActive(false);
+    }
+}
+
+void CadViewer::updateTransformPreview(const QPoint& position)
+{
+    if (!transformDragging_ || transformObject_.IsNull()) return;
+    ViewRay currentRay;
+    if (!makeViewRay(position, currentRay)) return;
+
+    gp_Trsf delta;
+    if (transformHandle_ == TransformHandle::TranslateX
+        || transformHandle_ == TransformHandle::TranslateY
+        || transformHandle_ == TransformHandle::TranslateZ) {
+        const auto distance = cad::viewer::translationDelta(
+            transformTranslationDrag_, transformStartRay_, currentRay);
+        if (!distance) return;
+        delta = cad::viewer::translationTransform(
+            transformGizmo_->axis(transformHandle_), *distance);
+    } else if (transformHandle_ == TransformHandle::Center) {
+        const auto start = cad::viewer::intersectRayWithPlane(
+            transformStartRay_.origin,
+            transformStartRay_.direction,
+            transformTranslationDrag_.dragPlane);
+        const auto current = cad::viewer::intersectRayWithPlane(
+            currentRay.origin,
+            currentRay.direction,
+            transformTranslationDrag_.dragPlane);
+        if (!start || !current) return;
+        delta.SetTranslation(gp_Vec(*start, *current));
+    } else {
+        const auto angle = cad::viewer::rotationDelta(
+            transformPivot_,
+            transformGizmo_->axis(transformHandle_),
+            transformStartRay_,
+            currentRay);
+        if (!angle) return;
+        delta = cad::viewer::rotationTransform(
+            transformPivot_,
+            transformGizmo_->axis(transformHandle_),
+            *angle);
+    }
+
+    gp_Pnt movedPivot = transformPivot_;
+    updateTransformSnap(delta, movedPivot);
+    if (activeSnap_ && (transformHandle_ == TransformHandle::Center
+                        || transformHandle_ == TransformHandle::TranslateX
+                        || transformHandle_ == TransformHandle::TranslateY
+                        || transformHandle_ == TransformHandle::TranslateZ)) {
+        gp_Pnt unsnapped = transformPivot_;
+        unsnapped.Transform(delta);
+        delta.SetTranslation(gp_Vec(unsnapped, movedPivot));
+    }
+    transformDelta_ = delta;
+    TopoDS_Shape preview = transformOriginalShape_;
+    preview.Move(TopLoc_Location(delta));
+    transformObject_->SetShape(preview);
+    context_->Redisplay(transformObject_, Standard_False);
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::commitTransform()
+{
+    if (!transformDragging_) return;
+    const QString id = transformFeatureId_;
+    const gp_Trsf delta = transformDelta_;
+    transformDragging_ = false;
+    transformHandle_ = TransformHandle::None;
+    activeSnap_.reset();
+    if (transformGizmo_) transformGizmo_->setSnapActive(false);
+    if (delta.Form() != gp_Identity && transformCommittedHandler_) {
+        transformCommittedHandler_(id, delta);
+    } else if (!transformObject_.IsNull()) {
+        transformObject_->SetShape(transformOriginalShape_);
+        context_->Redisplay(transformObject_, Standard_False);
+    }
+    transformObject_.Nullify();
+    transformFeatureId_.clear();
+    updateTransformGizmo();
+}
+
+void CadViewer::cancelTransform()
+{
+    if (!transformDragging_) return;
+    if (!transformObject_.IsNull()) {
+        transformObject_->SetShape(transformOriginalShape_);
+        context_->Redisplay(transformObject_, Standard_False);
+    }
+    transformDragging_ = false;
+    transformHandle_ = TransformHandle::None;
+    transformObject_.Nullify();
+    transformFeatureId_.clear();
+    activeSnap_.reset();
+    if (transformGizmo_) transformGizmo_->setSnapActive(false);
+    context_->UpdateCurrentViewer();
+    updateTransformGizmo();
+}
+
 QPaintEngine* CadViewer::paintEngine() const
 {
     return nullptr;
@@ -255,6 +543,7 @@ void CadViewer::initializeOcc()
     viewer_->SetLightOn();
 
     context_ = new AIS_InteractiveContext(viewer_);
+    transformGizmo_ = std::make_unique<cad::viewer::TransformGizmo>(context_);
     view_ = viewer_->CreateView();
 
     bindWindow();
@@ -537,6 +826,9 @@ void CadViewer::applySelectionMode()
     }
 
     context_->Activate(mode, Standard_True);
+    if (transformGizmo_) {
+        transformGizmo_->deactivateSelection();
+    }
     context_->UpdateCurrentViewer();
 }
 
@@ -704,7 +996,7 @@ bool CadViewer::beginPushPull()
     bool anchorFound = false;
     gp_Pnt rayOrigin;
     gp_Dir rayDirection;
-    if (makeViewRay(view_, lastMousePosition_, rayOrigin, rayDirection)) {
+    if (::makeViewRay(view_, lastMousePosition_, rayOrigin, rayDirection)) {
         const auto hit = cad::viewer::intersectRayWithPlane(
             rayOrigin,
             rayDirection,
@@ -777,7 +1069,7 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
 
     gp_Pnt rayOrigin;
     gp_Dir rayDirection;
-    if (!makeViewRay(view_, position, rayOrigin, rayDirection)) {
+    if (!::makeViewRay(view_, position, rayOrigin, rayDirection)) {
         return;
     }
 
@@ -912,6 +1204,23 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         event->position().toPoint();
     mousePressPosition_ = lastMousePosition_;
 
+    if (transformDragging_) {
+        if (event->button() == Qt::RightButton) {
+            cancelTransform();
+            return;
+        }
+        if (event->button() == Qt::LeftButton) return;
+    }
+
+    if (transformMode_ && event->button() == Qt::LeftButton
+        && transformGizmo_) {
+        const auto handle = transformGizmo_->hitTest(lastMousePosition_, view_);
+        if (handle != TransformHandle::None) {
+            beginTransform(handle, lastMousePosition_);
+            return;
+        }
+    }
+
     if (pushPullActive_) {
         if (event->button() == Qt::LeftButton) {
             updatePushPullPreview(lastMousePosition_);
@@ -959,6 +1268,12 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     const QPoint currentPosition =
         event->position().toPoint();
 
+    if (transformDragging_) {
+        updateTransformPreview(currentPosition);
+        lastMousePosition_ = currentPosition;
+        return;
+    }
+
     if (pushPullActive_) {
         updatePushPullPreview(currentPosition);
         lastMousePosition_ = currentPosition;
@@ -988,7 +1303,12 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         }
 
     } else if (event->buttons() == Qt::NoButton) {
-        updateHover(currentPosition);
+        if (transformMode_ && transformGizmo_) {
+            transformGizmo_->setHovered(
+                transformGizmo_->hitTest(currentPosition, view_));
+        } else {
+            updateHover(currentPosition);
+        }
     }
 
     lastMousePosition_ = currentPosition;
@@ -996,6 +1316,12 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
 void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (transformDragging_) {
+        if (event->button() == Qt::LeftButton) {
+            commitTransform();
+        }
+        return;
+    }
     if (pushPullActive_) {
         QWidget::mouseReleaseEvent(event);
         return;
@@ -1059,10 +1385,21 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
         setSelectionMode(SelectionMode::Face);
         setPushPullArmed(true);
         return;
+    case Qt::Key_M:
+        setTransformMode(!transformMode_);
+        return;
     case Qt::Key_X:
         setXRayEnabled(!xRayEnabled_);
         return;
     case Qt::Key_Escape:
+        if (transformDragging_) {
+            cancelTransform();
+            return;
+        }
+        if (transformMode_) {
+            setTransformMode(false);
+            return;
+        }
         if (pushPullArmed_) {
             setPushPullArmed(false);
             clearSelection();
@@ -1093,6 +1430,7 @@ void CadViewer::selectFeatures(const QStringList& featureIds)
         }
     }
     context_->UpdateCurrentViewer();
+    updateTransformGizmo();
 }
 
 void CadViewer::notifyFeatureSelection()
@@ -1111,4 +1449,5 @@ void CadViewer::notifyFeatureSelection()
         }
     }
     emit featureSelectionChanged(ids);
+    updateTransformGizmo();
 }

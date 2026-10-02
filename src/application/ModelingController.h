@@ -36,6 +36,15 @@ public:
         const gp_Vec& normal,
         double distance
     );
+    ModelingResult transformFeature(
+        const std::string& featureId,
+        const gp_Trsf& before,
+        const gp_Trsf& after
+    );
+    ModelingResult transformFeatureDelta(
+        const std::string& featureId,
+        const gp_Trsf& delta
+    );
     ModelingResult createBoolean(
         BooleanKind operation,
         const std::vector<std::string>& selection,

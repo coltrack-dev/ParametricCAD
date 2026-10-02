@@ -78,3 +78,9 @@ Sketch -> Face -> Extrude remains editable after loading. No undo commands are s
 6. Clear Project, Undo, Redo; verify both legacy and Body features return unchanged.
 7. Save, edit, Undo; verify the modified marker disappears without losing history.
 8. Open a project or choose New; verify Undo/Redo are disabled and old history is gone.
+## Spatial transforms
+
+Move/Rotate is committed through `TransformFeatureCommand`. The command stores
+the stable feature ID and complete before/after `gp_Trsf`, resolves the feature
+through `Body`, marks dependents dirty and recomputes. Preview movement updates
+only the AIS presentation, so one completed drag creates one undoable command.

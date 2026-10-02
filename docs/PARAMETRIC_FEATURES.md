@@ -1,5 +1,12 @@
 # Parametric Feature Architecture
 
+## Spatial placement
+
+`ParametricFeature` keeps its geometric parameters separate from an OCCT
+placement. Recompute builds the definition and then applies placement. The
+Move/Rotate tool changes only placement, so dimensions and other parameters are
+preserved; its completed drag is represented by `TransformFeatureCommand`.
+
 ## Implementation status
 
 The numbered sections below describe the target architecture, not a list of
