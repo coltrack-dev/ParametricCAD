@@ -28,6 +28,8 @@
 #include <Prs3d_Drawer.hxx>
 #include <Prs3d_LineAspect.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopoDS.hxx>
@@ -469,6 +471,13 @@ TopoDS_Shape CadViewer::selectedShape() const
     return context_->SelectedShape();
 }
 
+void CadViewer::setPushPullCommittedHandler(
+    std::function<void(const QString&, int, const gp_Vec&, double)> handler
+)
+{
+    pushPullCommittedHandler_ = std::move(handler);
+}
+
 void CadViewer::clearSelection()
 {
     if (!initialized_) {
@@ -634,6 +643,24 @@ bool CadViewer::beginPushPull()
         return false;
     }
 
+    QString featureId;
+    for (const auto& [id, object] : featureObjects_) {
+        if (object == selectedObject) {
+            featureId = id;
+            break;
+        }
+    }
+    if (featureId.isEmpty()) {
+        return false;
+    }
+
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(selectedObject->Shape(), TopAbs_FACE, faces);
+    const int faceIndex = faces.FindIndex(selected);
+    if (faceIndex <= 0) {
+        return false;
+    }
+
     const TopoDS_Face selectedFace = TopoDS::Face(selected);
     BRepAdaptor_Surface surface(selectedFace, Standard_True);
 
@@ -650,6 +677,8 @@ bool CadViewer::beginPushPull()
     pushPullFace_ = selectedFace;
     pushPullBaseShape_ = selectedObject->Shape();
     pushPullNormal_ = gp_Vec(normal);
+    pushPullFeatureId_ = featureId;
+    pushPullFaceIndex_ = faceIndex;
     pushPullObject_ = selectedObject;
     pushPullStartPosition_ = mapFromGlobal(QCursor::pos());
     pushPullDistance_ = 0.0;
@@ -736,27 +765,27 @@ void CadViewer::commitPushPull()
         return;
     }
 
-    const TopoDS_Shape result =
-        buildPushPullResult(pushPullDistance_);
-
-    if (!result.IsNull() &&
-        std::abs(pushPullDistance_) > PushPullTolerance) {
-
-        pushPullObject_->SetShape(result);
-    }
+    const bool hasChange = std::abs(pushPullDistance_) > PushPullTolerance;
+    const QString featureId = pushPullFeatureId_;
+    const int faceIndex = pushPullFaceIndex_;
+    const gp_Vec normal = pushPullNormal_;
+    const double distance = pushPullDistance_;
 
     if (!pushPullPreview_.IsNull()) {
         context_->Remove(pushPullPreview_, Standard_False);
         pushPullPreview_.Nullify();
     }
 
-    context_->Display(pushPullObject_, Standard_False);
-    context_->Redisplay(pushPullObject_, Standard_False);
+    if (!pushPullObject_.IsNull()) {
+        context_->Display(pushPullObject_, Standard_False);
+    }
 
     pushPullActive_ = false;
     pushPullDistance_ = 0.0;
     pushPullFace_.Nullify();
     pushPullBaseShape_.Nullify();
+    pushPullFeatureId_.clear();
+    pushPullFaceIndex_ = 0;
     pushPullObject_.Nullify();
     if (pushPullArmed_) {
         setCursor(Qt::CrossCursor);
@@ -767,6 +796,10 @@ void CadViewer::commitPushPull()
     applySelectionMode();
     context_->UpdateCurrentViewer();
     syncToolBarState();
+
+    if (hasChange && pushPullCommittedHandler_) {
+        pushPullCommittedHandler_(featureId, faceIndex, normal, distance);
+    }
 }
 
 void CadViewer::cancelPushPull()
@@ -788,6 +821,8 @@ void CadViewer::cancelPushPull()
     pushPullDistance_ = 0.0;
     pushPullFace_.Nullify();
     pushPullBaseShape_.Nullify();
+    pushPullFeatureId_.clear();
+    pushPullFaceIndex_ = 0;
     pushPullObject_.Nullify();
 
     if (pushPullArmed_) {

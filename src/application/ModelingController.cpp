@@ -129,6 +129,24 @@ ModelingResult ModelingController::createExtrude(
     }
 }
 
+ModelingResult ModelingController::pushPull(
+    const std::string& targetId,
+    const int faceIndex,
+    const gp_Vec& normal,
+    const double distance
+)
+{
+    const auto source = body_.findFeature(targetId);
+    if (!source) return {false, {}, "Push/Pull target does not exist"};
+    try {
+        const auto feature = std::make_shared<cad::parametric::PushPullFeature>(
+            id("pushpull"), source, faceIndex, normal, distance);
+        return addFeature(feature);
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::createBoolean(
     const BooleanKind requestedOperation,
     const std::vector<std::string>& selection,

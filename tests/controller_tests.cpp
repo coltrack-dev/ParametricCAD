@@ -4,8 +4,48 @@
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
 
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopAbs_Orientation.hxx>
+#include <GeomAbs_SurfaceType.hxx>
+#include <TopoDS.hxx>
+#include <gp_Vec.hxx>
+
 #include <algorithm>
 #include <variant>
+
+namespace {
+struct FacePick
+{
+    int index;
+    gp_Vec normal;
+};
+
+FacePick firstPlanarFace(const TopoDS_Shape& shape)
+{
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(shape, TopAbs_FACE, faces);
+    for (int index = 1; index <= faces.Extent(); ++index) {
+        const auto face = TopoDS::Face(faces.FindKey(index));
+        BRepAdaptor_Surface surface(face, Standard_True);
+        if (surface.GetType() != GeomAbs_Plane) continue;
+        gp_Dir direction = surface.Plane().Axis().Direction();
+        if (face.Orientation() == TopAbs_REVERSED) direction.Reverse();
+        return {index, gp_Vec(direction)};
+    }
+    return {0, {}};
+}
+
+double volume(const TopoDS_Shape& shape)
+{
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    return properties.Mass();
+}
+}
 
 using namespace cad::application;
 using namespace cad::parametric;
@@ -106,6 +146,56 @@ private slots:
         QVERIFY(!controller.setFeatureProperty(box.id, "missing", 1.0).success);
         QVERIFY(!controller.setFeatureProperty(box.id, "width", 0.0).success);
         QVERIFY(!controller.setFeatureProperty(box.id, "width", std::string("42")).success);
+    }
+
+    void pushPullIsUndoableAndRedoable()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto initialVolume = volume(controller.body().shape());
+
+        const auto firstPick = firstPlanarFace(controller.body().findFeature(box.id)->shape());
+        QVERIFY(firstPick.index > 0);
+        const auto first = controller.pushPull(box.id, firstPick.index, firstPick.normal, 10.0);
+        QVERIFY(first.success);
+        QCOMPARE(controller.undoStack().count(), 2);
+        const auto firstFeature = controller.body().findFeature(first.id);
+        QVERIFY(firstFeature);
+        const auto firstVolume = volume(firstFeature->shape());
+
+        const auto secondPick = firstPlanarFace(firstFeature->shape());
+        QVERIFY(secondPick.index > 0);
+        const auto second = controller.pushPull(
+            first.id, secondPick.index, secondPick.normal, 5.0);
+        QVERIFY(second.success);
+        QCOMPARE(controller.undoStack().count(), 3);
+        const auto secondFeature = controller.body().findFeature(second.id);
+        QVERIFY(secondFeature);
+        const auto secondVolume = volume(secondFeature->shape());
+        QVERIFY(std::abs(secondVolume - firstVolume) > 1.0e-6);
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(second.id));
+        QVERIFY(controller.body().findFeature(first.id));
+        QVERIFY(std::abs(volume(controller.body().findFeature(first.id)->shape())
+                         - firstVolume) < 1.0e-6);
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(first.id));
+        QVERIFY(controller.body().findFeature(box.id));
+        QVERIFY(std::abs(volume(controller.body().shape()) - initialVolume) < 1.0e-6);
+        QCOMPARE(controller.undoStack().count(), 3);
+
+        controller.redo();
+        QVERIFY(controller.body().findFeature(first.id));
+        QVERIFY(std::abs(volume(controller.body().findFeature(first.id)->shape())
+                         - firstVolume) < 1.0e-6);
+        controller.redo();
+        QVERIFY(controller.body().findFeature(second.id));
+        QVERIFY(std::abs(volume(controller.body().findFeature(second.id)->shape())
+                         - secondVolume) < 1.0e-6);
+        QCOMPARE(controller.undoStack().index(), 3);
     }
 };
 

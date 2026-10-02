@@ -33,6 +33,13 @@ MainWindow::MainWindow(QWidget* parent)
 
     createActions();
     createParametricPanel();
+    viewer_->setPushPullCommittedHandler(
+        [this](const QString& featureId, const int faceIndex,
+               const gp_Vec& normal, const double distance) {
+            reportResult(modeling_.pushPull(
+                featureId.toStdString(), faceIndex, normal, distance));
+        }
+    );
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         refreshModelView();
         featureEditorPanel_->scheduleRefresh();

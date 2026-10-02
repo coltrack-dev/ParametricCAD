@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QStringList>
 #include <map>
+#include <functional>
 
 #include <vector>
 
@@ -52,6 +53,9 @@ public:
     SelectionMode selectionMode() const;
     TopoDS_Shape selectedShape() const;
     void clearSelection();
+    void setPushPullCommittedHandler(
+        std::function<void(const QString&, int, const gp_Vec&, double)> handler
+    );
 
 signals:
     void featureSelectionChanged(const QStringList& featureIds);
@@ -120,8 +124,11 @@ private:
     TopoDS_Face pushPullFace_;
     TopoDS_Shape pushPullBaseShape_;
     gp_Vec pushPullNormal_;
+    QString pushPullFeatureId_;
+    int pushPullFaceIndex_{0};
     Handle(AIS_Shape) pushPullObject_;
     Handle(AIS_Shape) pushPullPreview_;
+    std::function<void(const QString&, int, const gp_Vec&, double)> pushPullCommittedHandler_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };

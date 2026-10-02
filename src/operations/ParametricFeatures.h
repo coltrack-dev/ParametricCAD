@@ -241,6 +241,39 @@ private:
     gp_Vec vector_;
 };
 
+class PushPullFeature final : public ParametricFeature
+{
+public:
+    PushPullFeature(
+        std::string id,
+        const Ptr& source,
+        int faceIndex,
+        gp_Vec normal,
+        double distance
+    );
+    const char* typeId() const noexcept override { return "PushPull"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    std::vector<std::string> hiddenDependencyIds() const override;
+
+    Ptr source() const;
+    const std::string& sourceFeatureId() const noexcept;
+    int faceIndex() const noexcept;
+    const gp_Vec& normal() const noexcept;
+    double distance() const noexcept;
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string sourceFeatureId_;
+    std::weak_ptr<ParametricFeature> source_;
+    int faceIndex_;
+    gp_Vec normal_;
+    double distance_;
+};
+
 class RevolveFeature final : public ParametricFeature
 {
 public:

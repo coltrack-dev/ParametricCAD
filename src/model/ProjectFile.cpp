@@ -75,6 +75,17 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             return std::make_shared<ExtrudeFeature>(string(o, "id"), source,
                 gp_Vec(number(o, "vectorX"), number(o, "vectorY"), number(o, "vectorZ")));
         }},
+        {"PushPull", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "PushPull references missing source");
+            const double faceIndexValue = number(o, "faceIndex");
+            require(faceIndexValue >= 1.0 && std::floor(faceIndexValue) == faceIndexValue,
+                    "Invalid PushPull face index");
+            return std::make_shared<PushPullFeature>(string(o, "id"), source,
+                static_cast<int>(faceIndexValue),
+                gp_Vec(number(o, "normalX"), number(o, "normalY"), number(o, "normalZ")),
+                number(o, "distance"));
+        }},
         {"Box", [](const QJsonObject& o, const Body&) {
             return std::make_shared<BoxParametricFeature>(string(o,"id"), number(o,"width"), number(o,"depth"), number(o,"height"));
         }},

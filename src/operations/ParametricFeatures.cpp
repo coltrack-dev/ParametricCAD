@@ -6,8 +6,13 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
+#include <TopAbs_ShapeEnum.hxx>
 
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
@@ -670,6 +675,122 @@ TopoDS_Shape ExtrudeFeature::build() const
         profile_->shape(),
         vector_
     );
+}
+
+PushPullFeature::PushPullFeature(
+    std::string id,
+    const Ptr& source,
+    const int faceIndex,
+    gp_Vec normal,
+    const double distance
+)
+    : ParametricFeature(std::move(id), "Push/Pull"),
+      sourceFeatureId_(source ? source->id() : std::string{}),
+      source_(source),
+      faceIndex_(faceIndex),
+      normal_(std::move(normal)),
+      distance_(distance)
+{
+    requireFeature(source, "Push/Pull source");
+    if (faceIndex_ <= 0) {
+        throw std::invalid_argument("Push/Pull face index must be positive");
+    }
+    if (normal_.Magnitude() <= 1.0e-9) {
+        throw std::invalid_argument("Push/Pull normal must not be zero");
+    }
+    if (!std::isfinite(distance_) || std::abs(distance_) <= 1.0e-9) {
+        throw std::invalid_argument("Push/Pull distance must not be zero");
+    }
+    normal_.Normalize();
+    addDependency(source);
+}
+
+std::vector<FeatureProperty> PushPullFeature::properties() const
+{
+    return {textProperty("sourceFeatureId", "Source", sourceFeatureId_),
+            {"faceIndex", "Face", faceIndex_, std::nullopt, std::nullopt, false},
+            numericProperty("distance", "Distance", std::abs(distance_))};
+}
+
+bool PushPullFeature::setNumericProperty(
+    const std::string& key,
+    const double value
+)
+{
+    if (key != "distance" || !std::isfinite(value) || value <= 0.001) {
+        return false;
+    }
+    distance_ = distance_ < 0.0 ? -value : value;
+    markDirty();
+    return true;
+}
+
+std::vector<std::string> PushPullFeature::hiddenDependencyIds() const
+{
+    return {sourceFeatureId_};
+}
+
+ParametricFeature::Ptr PushPullFeature::source() const
+{
+    return source_.lock();
+}
+
+const std::string& PushPullFeature::sourceFeatureId() const noexcept
+{
+    return sourceFeatureId_;
+}
+
+int PushPullFeature::faceIndex() const noexcept
+{
+    return faceIndex_;
+}
+
+const gp_Vec& PushPullFeature::normal() const noexcept
+{
+    return normal_;
+}
+
+double PushPullFeature::distance() const noexcept
+{
+    return distance_;
+}
+
+TopoDS_Shape PushPullFeature::build() const
+{
+    const auto source = source_.lock();
+    requireFeature(source, "Push/Pull source");
+
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
+    if (faceIndex_ > faces.Extent()) {
+        throw std::runtime_error("Push/Pull face reference is no longer valid");
+    }
+
+    const TopoDS_Face face = TopoDS::Face(faces.FindKey(faceIndex_));
+    const TopoDS_Shape prism =
+        BRepPrimAPI_MakePrism(face, normal_ * distance_).Shape();
+
+    if (distance_ > 0.0) {
+        BRepAlgoAPI_Fuse fuse(source->shape(), prism);
+        fuse.Build();
+        if (!fuse.IsDone()) throw std::runtime_error("Push/Pull fuse failed");
+        return fuse.Shape();
+    }
+
+    BRepAlgoAPI_Cut cut(source->shape(), prism);
+    cut.Build();
+    if (!cut.IsDone()) throw std::runtime_error("Push/Pull cut failed");
+    return cut.Shape();
+}
+
+void PushPullFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("faceIndex", faceIndex_);
+    object.insert("normalX", normal_.X());
+    object.insert("normalY", normal_.Y());
+    object.insert("normalZ", normal_.Z());
+    object.insert("distance", distance_);
 }
 
 RevolveFeature::RevolveFeature(

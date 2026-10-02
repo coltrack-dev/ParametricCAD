@@ -30,6 +30,12 @@ public:
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;
+    ModelingResult pushPull(
+        const std::string& targetId,
+        int faceIndex,
+        const gp_Vec& normal,
+        double distance
+    );
     ModelingResult createBoolean(
         BooleanKind operation,
         const std::vector<std::string>& selection,
