@@ -1,11 +1,13 @@
 #include "viewer/SelectionAdapter.h"
 
+#include <AIS_Point.hxx>
 #include <AIS_Shape.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
+#include <Geom_CartesianPoint.hxx>
 
 #include <cassert>
 
@@ -71,6 +73,13 @@ int main()
         SelectionHit{SelectionItem{"missing", SelectionKind::Face, 1},
                      selectedFace, Handle(AIS_InteractiveObject){}}));
 
+    SelectionHit validObjectHit{
+        SelectionItem{"box-1", SelectionKind::Object, std::nullopt},
+        box,
+        presentation
+    };
+    assert(!OcctSelectionAdapter::isValidFaceHit(validObjectHit));
+
     SelectionState state;
     state.hovered = faceHit;
     state.rebuildSelected({faceHit, replacementPresentationHit, faceHit});
@@ -96,6 +105,23 @@ int main()
     assert(adapter.selectedHits().empty());
     assert(!adapter.detectedHit());
     assert(!adapter.validatedSelectedFaceHit());
+    assert(!adapter.validatedSelectedObjectHit());
+
+    OcctSelectionAdapter objectAdapter(noContext, presentations);
+    assert(objectAdapter.featureIdFor(validObjectHit.presentation)
+        == validObjectHit.item.featureId);
+    assert(objectAdapter.isValidObjectHit(validObjectHit));
+    assert(!objectAdapter.isValidObjectHit(
+        SelectionHit{SelectionItem{"missing", SelectionKind::Object, std::nullopt},
+                     box, presentation}));
+    assert(!objectAdapter.isValidObjectHit(
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Object, std::nullopt},
+                     {}, presentation}));
+    assert(!objectAdapter.isValidObjectHit(
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Object, std::nullopt},
+                     box,
+                     Handle(AIS_InteractiveObject)(new AIS_Point(
+                         new Geom_CartesianPoint(gp_Pnt(0.0, 0.0, 0.0))))}));
 
     return 0;
 }

@@ -332,12 +332,17 @@ void CadViewer::updateTransformGizmo()
     if (!initialized_ || !transformMode_ || !transformGizmo_ || transformDragging_) {
         return;
     }
-    context_->InitSelected();
-    if (!context_->MoreSelected()) {
+    if (!selectionAdapter_) {
         transformGizmo_->hide();
         return;
     }
-    const auto object = Handle(AIS_Shape)::DownCast(context_->SelectedInteractive());
+    const auto selectedObjectHit = selectionAdapter_->validatedSelectedObjectHit();
+    if (!selectedObjectHit) {
+        transformGizmo_->hide();
+        return;
+    }
+    const auto object = Handle(AIS_Shape)::DownCast(
+        selectedObjectHit->presentation);
     if (object.IsNull()) {
         transformGizmo_->hide();
         return;
@@ -351,17 +356,14 @@ void CadViewer::beginTransform(
 )
 {
     if (!transformGizmo_ || handle == TransformHandle::None) return;
-    context_->InitSelected();
-    if (!context_->MoreSelected()) return;
-    transformObject_ = Handle(AIS_Shape)::DownCast(context_->SelectedInteractive());
-    if (transformObject_.IsNull()) return;
+    if (!selectionAdapter_) return;
+    const auto selectedObjectHit = selectionAdapter_->validatedSelectedObjectHit();
+    if (!selectedObjectHit) return;
 
-    for (const auto& [id, object] : featureObjects_) {
-        if (object == transformObject_) {
-            transformFeatureId_ = id;
-            break;
-        }
-    }
+    transformObject_ = Handle(AIS_Shape)::DownCast(
+        selectedObjectHit->presentation);
+    if (transformObject_.IsNull()) return;
+    transformFeatureId_ = selectedObjectHit->item.featureId;
     if (transformFeatureId_.isEmpty()) return;
 
     transformHandle_ = handle;
@@ -1032,46 +1034,24 @@ bool CadViewer::beginPushPull()
         return false;
     }
 
-    const TopoDS_Shape selected = selectedShape();
-
-    if (selected.IsNull() || selected.ShapeType() != TopAbs_FACE) {
+    if (!selectionAdapter_) {
         return false;
     }
 
-    context_->InitSelected();
-    if (!context_->MoreSelected()) {
+    const auto faceHit = selectionAdapter_->validatedSelectedFaceHit();
+    if (!faceHit) {
         return false;
     }
 
-    Handle(AIS_InteractiveObject) selectedInteractive =
-        context_->SelectedInteractive();
-
-    Handle(AIS_Shape) selectedObject =
-        Handle(AIS_Shape)::DownCast(selectedInteractive);
-
+    const auto selectedObject = Handle(AIS_Shape)::DownCast(
+        faceHit->presentation);
     if (selectedObject.IsNull()) {
         return false;
     }
 
-    QString featureId;
-    for (const auto& [id, object] : featureObjects_) {
-        if (object == selectedObject) {
-            featureId = id;
-            break;
-        }
-    }
-    if (featureId.isEmpty()) {
-        return false;
-    }
-
-    TopTools_IndexedMapOfShape faces;
-    TopExp::MapShapes(selectedObject->Shape(), TopAbs_FACE, faces);
-    const int faceIndex = faces.FindIndex(selected);
-    if (faceIndex <= 0) {
-        return false;
-    }
-
-    const TopoDS_Face selectedFace = TopoDS::Face(selected);
+    const TopoDS_Face selectedFace = TopoDS::Face(faceHit->shape);
+    const QString featureId = faceHit->item.featureId;
+    const int faceIndex = *faceHit->item.currentSubshapeIndex;
     BRepAdaptor_Surface surface(selectedFace, Standard_True);
 
     if (surface.GetType() != GeomAbs_Plane) {

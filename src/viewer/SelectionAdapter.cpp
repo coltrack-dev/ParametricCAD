@@ -107,6 +107,30 @@ std::optional<SelectionHit> OcctSelectionAdapter::validatedSelectedFaceHit() con
     return std::nullopt;
 }
 
+bool OcctSelectionAdapter::isValidObjectHit(const SelectionHit& hit) const
+{
+    if (!hit.item.isValid() || hit.shape.IsNull() || hit.presentation.IsNull()) {
+        return false;
+    }
+
+    // Transform currently uses the parent AIS_Shape even when the selected
+    // item is a face or edge. Keep that existing parent-selection semantics.
+    const auto parent = Handle(AIS_Shape)::DownCast(hit.presentation);
+    if (parent.IsNull() || parent->Shape().IsNull()) return false;
+
+    const auto resolvedId = featureIdFor(hit.presentation);
+    return resolvedId && *resolvedId == hit.item.featureId;
+}
+
+std::optional<SelectionHit> OcctSelectionAdapter::validatedSelectedObjectHit() const
+{
+    // Preserve beginTransform()/updateTransformGizmo() semantics: the first
+    // item in OCCT selected iteration is the selected parent object.
+    const auto hits = selectedHits();
+    if (hits.empty() || !isValidObjectHit(hits.front())) return std::nullopt;
+    return hits.front();
+}
+
 std::optional<SelectionHit> OcctSelectionAdapter::makeHit(
     const Handle(AIS_InteractiveObject)& presentation,
     const TopoDS_Shape& selectedShape,
