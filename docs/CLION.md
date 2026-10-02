@@ -46,3 +46,22 @@ BoxFeature::recompute()
 Запустите приложение и нажмите `Box`.
 
 Это позволит пройти из UI до вызова геометрического ядра.
+
+## macOS Intel
+
+Use the Apple Clang toolchain and Ninja. Install dependencies with Homebrew:
+
+```bash
+brew install cmake ninja qt opencascade
+```
+
+Recommended CMake options:
+
+```text
+-DCMAKE_BUILD_TYPE=Debug
+-DCMAKE_OSX_ARCHITECTURES=x86_64
+-DCMAKE_PREFIX_PATH=$(brew --prefix qt);$(brew --prefix opencascade)
+```
+
+The viewer uses OCCT `Cocoa_Window` around Qt's native `NSView`; no X11 or
+XQuartz configuration is required.

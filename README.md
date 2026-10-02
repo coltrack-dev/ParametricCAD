@@ -137,7 +137,8 @@ Mouse controls are inspired by common 3D modeling applications.
 - Ninja / Make
 - OpenGL
 
-The project currently targets Linux and is being developed and tested primarily on Linux.
+The same source tree supports native Linux and macOS builds. Linux uses the OCCT
+X11 window backend; macOS uses the native Cocoa window backend provided by OCCT.
 
 ## Project Structure
 
@@ -187,6 +188,44 @@ sudo apt install \
 ```
 
 Package names may vary depending on the Linux distribution and Open CASCADE version.
+
+### macOS (Intel x86_64)
+
+Install Xcode Command Line Tools, Homebrew, and the native Qt 6 / Open CASCADE
+packages:
+
+```bash
+xcode-select --install
+brew install cmake ninja qt opencascade
+```
+
+Configure explicitly for the Intel target. The `brew --prefix` form works with
+both `/usr/local` Intel Homebrew and a custom Homebrew installation:
+
+```bash
+cmake -S . -B build-macos -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix opencascade)"
+```
+
+Build and test:
+
+```bash
+cmake --build build-macos -j
+ctest --test-dir build-macos --output-on-failure
+```
+
+Run the native application bundle:
+
+```bash
+open build-macos/src/ParametricCAD.app
+```
+
+The macOS viewer wraps Qt's native `NSView` in OCCT's `Cocoa_Window`. It does
+not require X11, XQuartz, XCB, or GLX. macOS OpenGL is deprecated by Apple, so
+the application depends on the OpenGL support available in the installed Qt
+and OCCT versions; the existing OCCT `OpenGl_GraphicDriver` path is retained.
 
 ### Configure
 

@@ -43,7 +43,9 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 
-#ifdef _WIN32
+#if defined(Q_OS_MACOS) || defined(__APPLE__)
+#include <Cocoa_Window.hxx>
+#elif defined(_WIN32)
 #include <WNT_Window.hxx>
 #else
 #include <Xw_Window.hxx>
@@ -587,7 +589,8 @@ void CadViewer::initializeOcc()
         return;
     }
 
-    // The graphic driver and Xw_Window must use the same display connection.
+    // Aspect_DisplayConnection is required by the OCCT graphic driver. It is
+    // a no-op on Cocoa, while it owns the X11 connection on Linux.
     displayConnection_ = new Aspect_DisplayConnection();
 
     Handle(OpenGl_GraphicDriver) graphicDriver =
@@ -620,7 +623,14 @@ void CadViewer::initializeOcc()
 
 void CadViewer::bindWindow()
 {
-#ifdef _WIN32
+#if defined(Q_OS_MACOS) || defined(__APPLE__)
+
+    Handle(Cocoa_Window) window =
+        new Cocoa_Window(
+            reinterpret_cast<NSView*>(winId())
+        );
+
+#elif defined(_WIN32)
 
     Handle(WNT_Window) window =
         new WNT_Window(

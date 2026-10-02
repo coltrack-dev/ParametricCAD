@@ -24,6 +24,9 @@ add_executable(push_pull_drag_tests
 )
 target_include_directories(push_pull_drag_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(push_pull_drag_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+if(DEFINED OpenCASCADE_LIBRARY_DIR)
+    target_link_directories(push_pull_drag_tests PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+endif()
 target_link_libraries(push_pull_drag_tests PRIVATE Qt6::Gui
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO)
 add_test(NAME push_pull_drag_tests COMMAND push_pull_drag_tests)
@@ -48,6 +51,9 @@ add_library(model_test_support STATIC
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(model_test_support SYSTEM PUBLIC ${OpenCASCADE_INCLUDE_DIR})
+if(DEFINED OpenCASCADE_LIBRARY_DIR)
+    target_link_directories(model_test_support PUBLIC ${OpenCASCADE_LIBRARY_DIR})
+endif()
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet TKOffset)
 add_executable(project_file_tests project_file_tests.cpp)

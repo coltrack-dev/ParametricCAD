@@ -1,11 +1,48 @@
 {
     "body": [
         {
-            "height": 60,
-            "id": "cylinder-4748c8a9-ad78-4640-ba97-0b7bb4e2fa44",
-            "name": "Cylinder",
-            "radius": 25,
-            "type": "Cylinder"
+            "depth": 70,
+            "height": 30,
+            "id": "box-e69cac04-94fc-4363-bf8c-4b8f12d3b223",
+            "name": "Box",
+            "placement": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                125.2445940988506,
+                0,
+                0,
+                1,
+                0
+            ],
+            "type": "Box",
+            "width": 100
+        },
+        {
+            "depth": 70,
+            "height": 30,
+            "id": "box-66ef88a5-1354-45a7-9906-cea0a0f41b8f",
+            "name": "Box",
+            "placement": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                74.72730707527649,
+                0,
+                0,
+                1,
+                30
+            ],
+            "type": "Box",
+            "width": 100
         }
     ],
     "features": [

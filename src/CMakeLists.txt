@@ -51,6 +51,14 @@ set(PARAMETRIC_CAD_SOURCES
 
 add_executable(ParametricCAD ${PARAMETRIC_CAD_SOURCES})
 
+if(APPLE)
+    set_target_properties(ParametricCAD PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "ParametricCAD"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.parametriccad.ParametricCAD"
+    )
+endif()
+
 target_include_directories(ParametricCAD
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -60,6 +68,10 @@ target_include_directories(ParametricCAD
         SYSTEM PRIVATE
         ${OpenCASCADE_INCLUDE_DIR}
 )
+
+if(DEFINED OpenCASCADE_LIBRARY_DIR)
+    target_link_directories(ParametricCAD PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+endif()
 
 target_link_libraries(ParametricCAD
         PRIVATE
