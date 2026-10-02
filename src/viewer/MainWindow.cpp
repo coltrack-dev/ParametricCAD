@@ -17,6 +17,11 @@
 #include <QToolBar>
 #include <algorithm>
 
+namespace
+{
+constexpr int ModelPanelWidth = 320;
+}
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
       project_(modeling_),
@@ -49,9 +54,18 @@ void MainWindow::createParametricPanel()
         new QDockWidget("Model", this);
 
     dockWidget->setObjectName("ParametricModelDock");
+    dockWidget->setFixedWidth(ModelPanelWidth);
+    dockWidget->setSizePolicy(
+        QSizePolicy::Fixed,
+        QSizePolicy::Expanding
+    );
 
     featureEditorPanel_ =
         new FeatureEditorPanel(dockWidget);
+    featureEditorPanel_->setSizePolicy(
+        QSizePolicy::Fixed,
+        QSizePolicy::Expanding
+    );
 
     featureEditorPanel_->setService(&modeling_);
     featureEditorPanel_->setFeatures(modeling_.features());

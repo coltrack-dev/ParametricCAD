@@ -141,6 +141,10 @@ void FeatureEditorPanel::createUi()
     auto* rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(6, 6, 6, 6);
     rootLayout->setSpacing(6);
+    setSizePolicy(
+        QSizePolicy::Fixed,
+        QSizePolicy::Expanding
+    );
 
     auto* primitivesTitle =
         new QLabel("<b>Primitives</b>", this);
@@ -200,7 +204,11 @@ void FeatureEditorPanel::createUi()
     tree_->setSelectionMode(
         QAbstractItemView::ExtendedSelection
     );
-    tree_->setMinimumWidth(260);
+    tree_->setMinimumWidth(0);
+    tree_->setSizePolicy(
+        QSizePolicy::Expanding,
+        QSizePolicy::Expanding
+    );
 
     rootLayout->addWidget(tree_, 2);
 
@@ -209,8 +217,14 @@ void FeatureEditorPanel::createUi()
     rootLayout->addWidget(propertiesTitle);
 
     propertiesWidget_ = new QWidget(this);
+    propertiesWidget_->setMinimumWidth(0);
+    propertiesWidget_->setSizePolicy(
+        QSizePolicy::Expanding,
+        QSizePolicy::Expanding
+    );
     propertiesLayout_ =
         new QFormLayout(propertiesWidget_);
+    propertiesLayout_->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
     rootLayout->addWidget(propertiesWidget_, 1);
 
@@ -439,31 +453,30 @@ void FeatureEditorPanel::rebuildProperties(
         return;
     }
 
+    const auto makePropertyLabel = [this](const QString& text) {
+        auto* label = new QLabel(text, propertiesWidget_);
+        label->setWordWrap(true);
+        label->setMinimumWidth(0);
+        label->setSizePolicy(
+            QSizePolicy::Expanding,
+            QSizePolicy::Preferred
+        );
+        return label;
+    };
+
     propertiesLayout_->addRow(
         "Name",
-        new QLabel(
-            QString::fromStdString(feature->name),
-            propertiesWidget_
-        )
+        makePropertyLabel(QString::fromStdString(feature->name))
     );
 
     propertiesLayout_->addRow(
         "Id",
-        new QLabel(
-            QString::fromStdString(feature->id),
-            propertiesWidget_
-        )
+        makePropertyLabel(QString::fromStdString(feature->id))
     );
 
     if (feature->state == cad::parametric::FeatureState::Failed) {
 
-        auto* errorLabel =
-            new QLabel(
-                QString::fromStdString(feature->error),
-                propertiesWidget_
-            );
-
-        errorLabel->setWordWrap(true);
+        auto* errorLabel = makePropertyLabel(QString::fromStdString(feature->error));
         errorLabel->setStyleSheet(
             "QLabel { color: #c0392b; }"
         );
@@ -505,20 +518,16 @@ void FeatureEditorPanel::rebuildProperties(
                 else return QString::fromStdString(item);
             }, property.value);
             propertiesLayout_->addRow(QString::fromStdString(property.label),
-                new QLabel(value, propertiesWidget_));
+                makePropertyLabel(value));
         }
     }
 
     if (!properties.empty()) return;
 
-    auto* info =
-        new QLabel(
-            "This feature is part of the parametric history. "
-            "A specialized editor will be added later.",
-            propertiesWidget_
-        );
-
-    info->setWordWrap(true);
+    auto* info = makePropertyLabel(
+        "This feature is part of the parametric history. "
+        "A specialized editor will be added later."
+    );
     propertiesLayout_->addRow(info);
 }
 
@@ -528,13 +537,13 @@ void FeatureEditorPanel::clearProperties()
         propertiesLayout_->removeRow(0);
     }
 
-    auto* label =
-        new QLabel(
-            "Select a feature in the tree.",
-            propertiesWidget_
-        );
-
+    auto* label = new QLabel(
+        "Select a feature in the tree.",
+        propertiesWidget_
+    );
     label->setWordWrap(true);
+    label->setMinimumWidth(0);
+    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     propertiesLayout_->addRow(label);
 }
 

@@ -57,6 +57,10 @@ CadViewer::CadViewer(QWidget* parent)
 
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
+    setSizePolicy(
+        QSizePolicy::Expanding,
+        QSizePolicy::Expanding
+    );
 
     // Force Qt to create the native platform window.
     winId();
