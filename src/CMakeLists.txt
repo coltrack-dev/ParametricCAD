@@ -1,11 +1,17 @@
 set(PARAMETRIC_CAD_SOURCES
     app/main.cpp
+    application/ModelingController.cpp
+    application/ModelingController.h
+    application/ProjectController.cpp
+    application/ProjectController.h
     commands/FeatureCommands.cpp
     commands/FeatureCommands.h
     model/FeatureVisibility.cpp
     model/FeatureVisibility.h
     viewer/MainWindow.cpp
     viewer/MainWindow.h
+    viewer/ModelPresenter.cpp
+    viewer/ModelPresenter.h
     viewer/FeatureEditorPanel.cpp
     viewer/FeatureEditorPanel.h
     viewer/CadViewer.cpp

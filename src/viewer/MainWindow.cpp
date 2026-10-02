@@ -1,14 +1,9 @@
 #include "viewer/MainWindow.h"
-#include "model/ProjectFile.h"
-#include "model/FeatureVisibility.h"
-#include "commands/FeatureCommands.h"
-
-#include "operations/ParametricFeatures.h"
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
+#include "viewer/ModelPresenter.h"
 
 #include <QAction>
-#include <QScopedValueRollback>
 #include <QCloseEvent>
 #include <QDir>
 #include <QFileDialog>
@@ -20,32 +15,31 @@
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QToolBar>
-#include <QUuid>
-
-#include <memory>
+#include <algorithm>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
-      viewer_(new CadViewer(this))
+      project_(modeling_),
+      viewer_(new CadViewer(this)),
+      presenter_(std::make_unique<cad::viewer::ModelPresenter>(modeling_.body(), *viewer_))
 {
     updateTitle();
     setCentralWidget(viewer_);
 
     createActions();
     createParametricPanel();
-    connect(&undoStack_, &QUndoStack::indexChanged, this, [this]() {
-        if (resettingProject_) return;
-        refreshParametricModel();
+    connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
+        refreshModelView();
         featureEditorPanel_->scheduleRefresh();
     });
-    connect(&undoStack_, &QUndoStack::cleanChanged, this, [this](bool) { updateTitle(); });
+    connect(&modeling_.undoStack(), &QUndoStack::cleanChanged, this, [this](bool) { updateTitle(); });
     statusBar()->showMessage("Ready");
 }
 
 
 MainWindow::~MainWindow()
 {
-    disconnect(&undoStack_, nullptr, this, nullptr);
+    disconnect(&modeling_.undoStack(), nullptr, this, nullptr);
     featureEditorPanel_->setUndoStack(nullptr);
     featureEditorPanel_->setBody(nullptr);
 }
@@ -60,27 +54,24 @@ void MainWindow::createParametricPanel()
     featureEditorPanel_ =
         new FeatureEditorPanel(dockWidget);
 
-    featureEditorPanel_->setUndoStack(&undoStack_);
-    featureEditorPanel_->setBody(
-        &parametricBody_
-    );
+    featureEditorPanel_->setUndoStack(&modeling_.undoStack());
+    featureEditorPanel_->setBody(&modeling_.body());
 
     featureEditorPanel_->setModelChangedHandler(
         [this]() {
-            refreshParametricModel();
+            refreshModelView();
         }
     );
 
     featureEditorPanel_->setFeatureSelectedHandler(
         [this](const QStringList& featureIds) {
-            selectParametricFeatures(featureIds);
+            applySelection(featureIds);
         }
     );
 
     connect(viewer_, &CadViewer::featureSelectionChanged, this, [this](const QStringList& ids) {
         featureEditorPanel_->selectFeatures(ids);
-        selectedObjectIds_ = ids;
-        deleteAction_->setEnabled(ids.size() == 1);
+        applySelection(ids);
     });
 
     dockWidget->setWidget(featureEditorPanel_);
@@ -91,41 +82,51 @@ void MainWindow::createParametricPanel()
     );
 }
 
-void MainWindow::refreshParametricModel()
+void MainWindow::refreshModelView(const bool fitView)
 {
-    const bool rebuilt = parametricBody_.recompute();
-    QStringList present;
-    for (const auto& feature : parametricBody_.features()) {
-        if (feature->state() != cad::parametric::FeatureState::UpToDate || feature->shape().IsNull()) continue;
-        const auto id = QString::fromStdString(feature->id());
-        present.append(id);
-        viewer_->updateFeature(feature->shape(), id);
-    }
-    viewer_->retainFeatures(present);
-    updateParametricVisibility();
+    const auto result = presenter_->refresh();
     QStringList surviving;
     for (const auto& id : selectedObjectIds_) {
-        if (present.contains(id) || parametricBody_.findFeature(id.toStdString())) surviving.append(id);
+        if (std::find_if(result.presentedIds.begin(), result.presentedIds.end(),
+                [&id](const auto& candidate) { return QString::fromStdString(candidate) == id; })
+            != result.presentedIds.end()) surviving.append(id);
     }
-    if (surviving != selectedObjectIds_) featureEditorPanel_->selectFeatures(surviving);
-    selectParametricFeatures(surviving);
-    statusBar()->showMessage(rebuilt ? "Model updated" : QString::fromStdString(parametricBody_.lastError()), 3000);
+    applySelection(surviving);
+    if (fitView) viewer_->fitAll();
+    statusBar()->showMessage(result.rebuilt ? "Model updated" : QString::fromStdString(result.error), 3000);
 }
 
-void MainWindow::updateParametricVisibility()
-{
-    QStringList hidden;
-    for (const auto& id : cad::parametric::hiddenFeatureIds(parametricBody_)) {
-        hidden.append(QString::fromStdString(id));
-    }
-    viewer_->setHiddenFeatures(hidden);
-}
-
-void MainWindow::selectParametricFeatures(const QStringList& featureIds)
+void MainWindow::applySelection(const QStringList& featureIds)
 {
     viewer_->selectFeatures(featureIds);
     selectedObjectIds_ = featureIds;
-    deleteAction_->setEnabled(featureIds.size() == 1);
+    updateActionState();
+}
+
+std::vector<std::string> MainWindow::selectedIds() const
+{
+    std::vector<std::string> ids;
+    for (const auto& id : selectedObjectIds_) ids.push_back(id.toStdString());
+    return ids;
+}
+
+void MainWindow::updateActionState()
+{
+    const auto state = modeling_.actionState(selectedIds());
+    deleteAction_->setEnabled(state.canDelete);
+    faceAction_->setEnabled(state.canCreateFace);
+    extrudeAction_->setEnabled(state.canExtrude);
+}
+
+void MainWindow::reportResult(const cad::application::ModelingResult& result)
+{
+    if (!result.success) {
+        QMessageBox::warning(this, "Modeling operation failed",
+            QString::fromStdString(result.error));
+        return;
+    }
+    featureEditorPanel_->refresh();
+    applySelection({QString::fromStdString(result.id)});
 }
 
 void MainWindow::createActions()
@@ -146,12 +147,12 @@ void MainWindow::createActions()
 
     auto* editMenu = menuBar()->addMenu("&Edit");
     connect(editMenu, &QMenu::aboutToShow, this, [this]() { featureEditorPanel_->commitPendingEdits(); });
-    auto* undoAction = undoStack_.createUndoAction(this, "Undo");
+    auto* undoAction = modeling_.undoStack().createUndoAction(this, "Undo");
     auto undoKeys = QKeySequence::keyBindings(QKeySequence::Undo);
     if (!undoKeys.contains(QKeySequence(Qt::CTRL | Qt::Key_Z))) undoKeys.append(QKeySequence(Qt::CTRL | Qt::Key_Z));
     undoAction->setShortcuts(undoKeys);
     editMenu->addAction(undoAction);
-    auto* redoAction = undoStack_.createRedoAction(this, "Redo");
+    auto* redoAction = modeling_.undoStack().createRedoAction(this, "Redo");
     auto redoKeys = QKeySequence::keyBindings(QKeySequence::Redo);
     if (!redoKeys.contains(QKeySequence(Qt::CTRL | Qt::Key_Y))) redoKeys.append(QKeySequence(Qt::CTRL | Qt::Key_Y));
     redoAction->setShortcuts(redoKeys);
@@ -181,10 +182,12 @@ void MainWindow::createActions()
     modelingMenu->addSeparator();
     auto* sketchAction = modelingMenu->addAction("Add Rectangle Sketch");
     connect(sketchAction, &QAction::triggered, this, &MainWindow::createRectangleSketch);
-    auto* faceAction = modelingMenu->addAction("Create Face");
-    connect(faceAction, &QAction::triggered, this, &MainWindow::createFace);
-    auto* extrudeAction = modelingMenu->addAction("Extrude Face");
-    connect(extrudeAction, &QAction::triggered, this, &MainWindow::createExtrude);
+    faceAction_ = modelingMenu->addAction("Create Face");
+    faceAction_->setEnabled(false);
+    connect(faceAction_, &QAction::triggered, this, &MainWindow::createFace);
+    extrudeAction_ = modelingMenu->addAction("Extrude Face");
+    extrudeAction_->setEnabled(false);
+    connect(extrudeAction_, &QAction::triggered, this, &MainWindow::createExtrude);
     modelingMenu->addSeparator();
 
     auto* clearAction = new QAction("Clear", this);
@@ -199,145 +202,66 @@ void MainWindow::createActions()
 
 void MainWindow::createBox()
 {
-    const auto id =
-        "box-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addParametricFeature(
-        std::make_shared<cad::parametric::BoxParametricFeature>(
-            id,
-            100.0,
-            70.0,
-            30.0
-        )
-    );
+    reportResult(modeling_.createBox());
 }
 
 void MainWindow::createCylinder()
 {
-    const auto id =
-        "cylinder-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addParametricFeature(
-        std::make_shared<cad::parametric::CylinderParametricFeature>(
-            id,
-            25.0,
-            60.0
-        )
-    );
+    reportResult(modeling_.createCylinder());
 }
 
 void MainWindow::createRectangleSketch()
 {
-    const auto id = "sketch-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    addParametricFeature(std::make_shared<cad::parametric::SketchFeature>(id, 100.0, 60.0));
+    reportResult(modeling_.createSketch());
 }
 
 void MainWindow::createFace()
 {
-    const auto ids = featureEditorPanel_->selectedFeatureIds();
-    const auto sketch = ids.size() == 1
-        ? parametricBody_.findFeature(ids.front().toStdString())
-        : cad::parametric::ParametricFeature::Ptr{};
-    if (!sketch || sketch->role() != cad::parametric::FeatureRole::Sketch) {
-        QMessageBox::information(this, "Create Face",
-            "Select exactly one Rectangle Sketch in the model tree or viewport, then choose Create Face.");
-        return;
-    }
-    const auto id = "face-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    addParametricFeature(std::make_shared<cad::parametric::FaceFeature>(id, sketch));
+    reportResult(modeling_.createFace(selectedIds()));
 }
 
 void MainWindow::createExtrude()
 {
-    const auto ids = featureEditorPanel_->selectedFeatureIds();
-    const auto face = ids.size() == 1
-        ? parametricBody_.findFeature(ids.front().toStdString())
-        : cad::parametric::ParametricFeature::Ptr{};
-    if (!face || face->role() != cad::parametric::FeatureRole::Face) {
-        QMessageBox::information(this, "Extrude Face", "Select exactly one Face feature to extrude.");
-        return;
-    }
-    const auto id = "extrude-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    addParametricFeature(std::make_shared<cad::parametric::ExtrudeFeature>(id, face, gp_Vec(0, 0, 20)));
+    reportResult(modeling_.createExtrude(selectedIds()));
 }
 
 void MainWindow::deleteFeature()
 {
     featureEditorPanel_->commitPendingEdits();
     if (selectedObjectIds_.size() != 1) return;
-    const auto id = selectedObjectIds_.front();
-    try {
-        std::unique_ptr<QUndoCommand> command;
-        if (parametricBody_.findFeature(id.toStdString())) {
-            auto removal = std::make_unique<cad::commands::RemoveFeatureCommand>(parametricBody_, id.toStdString());
-            const auto names = removal->dependentNames();
-            if (!names.isEmpty() && QMessageBox::question(this, "Delete Feature",
-                QString("Delete %1?\nDependent features will also be deleted:\n%2")
-                    .arg(id, names.join("\n")), QMessageBox::Yes | QMessageBox::Cancel,
-                    QMessageBox::Cancel) != QMessageBox::Yes) return;
-            command = std::move(removal);
-        } else {
-            throw std::invalid_argument("Cannot delete unknown feature");
-        }
-        featureEditorPanel_->selectFeatures({});
-        selectParametricFeatures({});
-        undoStack_.push(command.release());
-        featureEditorPanel_->refresh();
-    } catch (const std::exception& error) {
-        QMessageBox::warning(this, "Delete Feature", QString::fromUtf8(error.what()));
-    }
-}
-
-void MainWindow::addParametricFeature(const cad::parametric::ParametricFeature::Ptr& feature)
-{
-    try {
-        undoStack_.push(new cad::commands::AddFeatureCommand(parametricBody_, feature,
-            "Create " + QString::fromStdString(feature->name())));
-        const auto id = QString::fromStdString(feature->id());
-        featureEditorPanel_->refresh();
-        featureEditorPanel_->selectFeatures({id});
-        selectParametricFeatures({id});
-    } catch (const std::exception& error) {
-        QMessageBox::warning(this, "Cannot create feature", QString::fromUtf8(error.what()));
-    }
+    const auto id = selectedObjectIds_.front().toStdString();
+    const auto names = modeling_.dependentNames(id);
+    if (!names.isEmpty() && QMessageBox::question(this, "Delete Feature",
+        QString("Delete %1?\nDependent features will also be deleted:\n%2")
+            .arg(QString::fromStdString(id), names.join("\n")),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel)
+        != QMessageBox::Yes) return;
+    reportResult(modeling_.deleteFeature(id));
 }
 
 void MainWindow::clearDocument()
 {
-    if (document_.features().empty() && parametricBody_.features().empty()) return;
-    undoStack_.push(new cad::commands::ClearProjectCommand(document_, parametricBody_));
-}
-
-void MainWindow::restoreViewer(bool fitView)
-{
-    selectParametricFeatures({});
-    viewer_->clear();
-    // Create feature presentations only when the model changes or is loaded.
-    refreshParametricModel();
-    if (fitView) viewer_->fitAll();
+    modeling_.clearProject();
+    applySelection({});
+    featureEditorPanel_->refresh();
 }
 
 void MainWindow::updateTitle()
 {
     setWindowTitle((currentFile_.isEmpty() ? QStringLiteral("Untitled") : currentFile_)
                    + QStringLiteral("[*] — ParametricCAD"));
-    setWindowModified(!undoStack_.isClean());
+    setWindowModified(!modeling_.undoStack().isClean());
 }
 
 bool MainWindow::saveTo(const QString& path)
 {
     featureEditorPanel_->commitPendingEdits();
-    if (!parametricBody_.recompute()) {
-        QMessageBox::critical(this, "Save failed", QString::fromStdString(parametricBody_.lastError()));
-        return false;
-    }
     QString error;
-    if (!ProjectFile::save(path, document_, parametricBody_, error)) {
+    if (!project_.save(path, error)) {
         QMessageBox::critical(this, "Save failed", path + "\n" + error);
         return false;
     }
     currentFile_ = path;
-    undoStack_.setClean();
     updateTitle();
     statusBar()->showMessage("Saved: " + path, 3000);
     return true;
@@ -366,12 +290,11 @@ bool MainWindow::saveDocumentAs()
 void MainWindow::newDocument()
 {
     if (!confirmReplacement()) return;
-    const QScopedValueRollback resetting(resettingProject_, true);
-    undoStack_.clear();
-    document_.clear();
-    parametricBody_ = {};
-    featureEditorPanel_->setBody(&parametricBody_);
-    refreshParametricModel();
+    project_.newProject();
+    featureEditorPanel_->setBody(&modeling_.body());
+    presenter_->clear();
+    applySelection({});
+    featureEditorPanel_->refresh();
     currentFile_.clear();
     updateTitle();
 }
@@ -380,27 +303,17 @@ void MainWindow::openDocument()
 {
     const auto path = QFileDialog::getOpenFileName(this, "Open project", currentFile_, "ParametricCAD (*.pcad)");
     if (path.isEmpty()) return;
-    // Validate first; a failed open must leave the active project intact.
-    Document loaded;
-    cad::parametric::Body loadedBody;
-    QString error;
-    if (!ProjectFile::load(path, loaded, loadedBody, error)) {
-        QMessageBox::critical(this, "Open failed", path + "\n" + error);
-        return;
-    }
     if (!confirmReplacement()) return;
-    // Saving the active project may have updated the file being opened.
-    if (path == currentFile_ && !ProjectFile::load(path, loaded, loadedBody, error)) {
+    QString error;
+    if (!project_.open(path, error)) {
         QMessageBox::critical(this, "Open failed", path + "\n" + error);
         return;
     }
-    const QScopedValueRollback resetting(resettingProject_, true);
-    undoStack_.clear();
-    document_ = std::move(loaded);
-    parametricBody_ = std::move(loadedBody);
     currentFile_ = path;
-    featureEditorPanel_->setBody(&parametricBody_);
-    restoreViewer();
+    featureEditorPanel_->setBody(&modeling_.body());
+    presenter_->clear();
+    applySelection({});
+    refreshModelView(true);
     updateTitle();
     statusBar()->showMessage("Opened: " + path, 3000);
 }
@@ -414,7 +327,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 bool MainWindow::confirmReplacement()
 {
     featureEditorPanel_->commitPendingEdits();
-    if (undoStack_.isClean()) return true;
+    if (!project_.isDirty()) return true;
     const auto choice = QMessageBox::question(this, "Current project",
         "Save the current project before replacing it?",
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);

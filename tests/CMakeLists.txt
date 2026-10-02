@@ -18,6 +18,8 @@ add_test(NAME geometry_tests COMMAND geometry_tests)
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
 add_library(model_test_support STATIC
+    ../src/application/ModelingController.cpp
+    ../src/application/ProjectController.cpp
     ../src/model/ProjectFile.cpp
     ../src/commands/FeatureCommands.cpp
     ../src/model/FeatureVisibility.cpp
@@ -61,3 +63,7 @@ add_executable(undo_panel_tests undo_panel_tests.cpp ../src/viewer/FeatureEditor
 target_link_libraries(undo_panel_tests PRIVATE model_test_support Qt6::Test Qt6::Widgets)
 add_test(NAME undo_panel_tests COMMAND undo_panel_tests)
 set_tests_properties(undo_panel_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
+
+add_executable(controller_tests controller_tests.cpp)
+target_link_libraries(controller_tests PRIVATE model_test_support Qt6::Test)
+add_test(NAME controller_tests COMMAND controller_tests)

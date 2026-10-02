@@ -8,10 +8,10 @@ model from OCCT visualization and from the Qt user interface.
 
 ```text
 MainWindow
-    ├── FeatureEditorPanel ──> Body / ParametricFeature
-    └── CadViewer            ──> OCCT presentation and selection
-
-ProjectFile ──> Document + Body
+    ├── ModelingController ──> Document / Body / commands
+    ├── ProjectController  ──> ProjectFile and project lifecycle
+    ├── FeatureEditorPanel ──> model properties and selection IDs
+    └── ModelPresenter     ──> CadViewer
 
 Body ──> ParametricFeature ──> operations / BasicFeatures ──> TopoDS_Shape
 ```
@@ -114,14 +114,29 @@ incorrect shape.
 
 ## Application and UI
 
-`MainWindow` coordinates document actions, menus, the undo stack, persistence,
-the feature editor, and viewer refreshes. It does not build feature geometry.
+The application layer is in `src/application`:
+
+- `ModelingController` owns the active `Document`, `Body` and `QUndoStack`.
+  It creates features, validates selection-dependent operations, creates
+  commands, performs deletion/clear operations, and exposes action state.
+- `ProjectController` performs validated save/load/new-project operations. A
+  loaded project is prepared by `ProjectFile` before replacing the active
+  model, and successful saves update the undo-stack clean state.
+
+`MainWindow` is the Qt shell. It creates menus, dialogs and widgets, forwards
+actions to the application controllers, displays errors/status, and routes
+selection IDs between the viewer and editor. It does not construct feature
+objects, inspect model dependencies, build commands, or serialize projects.
 
 `FeatureEditorPanel` provides the model tree and property editors. It changes
 feature parameters through model APIs and uses `QUndoStack` commands for
 creation, deletion, parameter edits, and project clearing. Commands retain
 feature ownership where necessary, but do not own or replace the `Document` or
 `Body` containers.
+
+`ModelPresenter` is the model/view adapter. It recomputes the Body, updates
+feature presentations, retains current IDs, and applies polymorphic visibility
+rules. This keeps model-to-view synchronization out of `MainWindow`.
 
 `CadViewer` owns the OCCT viewer and presentation objects. It is responsible
 for displaying and updating shapes, object/edge/face selection, hover
@@ -141,6 +156,10 @@ edit command
 
 Selection flows in the opposite direction: `CadViewer` emits selected feature
 IDs and `MainWindow` forwards them to `FeatureEditorPanel`.
+
+Controller behavior is testable without starting the Qt GUI. The headless
+controller tests cover stable-ID selection, Sketch → Face → Extrude creation,
+Boolean Cut creation, undo/redo, project replacement, and invalid-load safety.
 
 ## Persistence
 
