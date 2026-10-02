@@ -41,6 +41,7 @@ int main()
     assert(adapter.featureIdFor(presentation) == QStringLiteral("box-1"));
     assert(!adapter.featureIdFor(Handle(AIS_InteractiveObject){}));
     assert(adapter.selectedHits().empty());
+    assert(!adapter.detectedHit());
 
     return 0;
 }

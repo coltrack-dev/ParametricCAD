@@ -4,6 +4,10 @@
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Shape.hxx>
+#include <AIS_SelectionScheme.hxx>
+#include <V3d_View.hxx>
+
+#include <QPoint>
 
 #include <map>
 #include <optional>
@@ -22,6 +26,16 @@ public:
     std::optional<QString> featureIdFor(
         const Handle(AIS_InteractiveObject)& presentation
     ) const;
+
+    void moveTo(
+        const QPoint& position,
+        const Handle(V3d_View)& view,
+        bool updateViewer
+    ) const;
+
+    void selectDetected(AIS_SelectionScheme scheme) const;
+
+    std::optional<SelectionHit> detectedHit() const;
 
     std::vector<SelectionHit> selectedHits() const;
 

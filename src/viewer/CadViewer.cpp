@@ -954,12 +954,9 @@ void CadViewer::updateHover(const QPoint& position)
 
     resetDetectedCycle();
 
-    context_->MoveTo(
-        position.x(),
-        position.y(),
-        view_,
-        Standard_True
-    );
+    if (selectionAdapter_) {
+        selectionAdapter_->moveTo(position, view_, true);
+    }
 }
 
 void CadViewer::selectAt(
@@ -979,12 +976,9 @@ void CadViewer::selectAt(
             std::abs(delta.y()) <= DetectedCyclePositionTolerance;
 
         if (!samePickPosition) {
-            context_->MoveTo(
-                position.x(),
-                position.y(),
-                view_,
-                Standard_True
-            );
+            if (selectionAdapter_) {
+                selectionAdapter_->moveTo(position, view_, true);
+            }
 
             detectedCyclePosition_ = position;
             detectedCycleActive_ = true;
@@ -997,11 +991,13 @@ void CadViewer::selectAt(
         updateHover(position);
     }
 
-    context_->SelectDetected(
-        toggleSelection
-            ? AIS_SelectionScheme_XOR
-            : AIS_SelectionScheme_Replace
-    );
+    if (selectionAdapter_) {
+        selectionAdapter_->selectDetected(
+            toggleSelection
+                ? AIS_SelectionScheme_XOR
+                : AIS_SelectionScheme_Replace
+        );
+    }
     context_->UpdateCurrentViewer();
     notifyFeatureSelection();
 }

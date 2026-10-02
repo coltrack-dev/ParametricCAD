@@ -3,6 +3,7 @@
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <StdSelect_BRepOwner.hxx>
 
 #include <utility>
 
@@ -28,6 +29,30 @@ std::optional<QString> OcctSelectionAdapter::featureIdFor(
     return std::nullopt;
 }
 
+void OcctSelectionAdapter::moveTo(
+    const QPoint& position,
+    const Handle(V3d_View)& view,
+    const bool updateViewer
+) const
+{
+    if (context_.IsNull() || view.IsNull()) return;
+
+    context_->MoveTo(
+        position.x(),
+        position.y(),
+        view,
+        updateViewer ? Standard_True : Standard_False
+    );
+}
+
+void OcctSelectionAdapter::selectDetected(
+    const AIS_SelectionScheme scheme
+) const
+{
+    if (context_.IsNull()) return;
+    context_->SelectDetected(scheme);
+}
+
 SelectionKind OcctSelectionAdapter::kindForShape(
     const TopoDS_Shape& shape
 ) noexcept
@@ -40,6 +65,20 @@ SelectionKind OcctSelectionAdapter::kindForShape(
     case TopAbs_FACE: return SelectionKind::Face;
     default: return SelectionKind::Object;
     }
+}
+
+std::optional<SelectionHit> OcctSelectionAdapter::detectedHit() const
+{
+    if (context_.IsNull() || !context_->HasDetected()) return std::nullopt;
+
+    const auto presentation = context_->DetectedInteractive();
+    const auto owner = Handle(StdSelect_BRepOwner)::DownCast(
+        context_->DetectedOwner());
+    const bool hasDetectedShape = !owner.IsNull() && owner->HasShape();
+    const TopoDS_Shape detectedShape = hasDetectedShape
+        ? owner->Shape()
+        : TopoDS_Shape{};
+    return makeHit(presentation, detectedShape, hasDetectedShape);
 }
 
 std::optional<SelectionHit> OcctSelectionAdapter::makeHit(
