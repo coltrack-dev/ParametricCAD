@@ -40,6 +40,32 @@ The application currently keeps both containers in `MainWindow`: the
 canonical parametric history is in `parametricBody_`, while `document_` holds
 legacy document features when needed. New saves serialize the canonical Body.
 
+The model-facing code works through `ParametricFeature` interfaces rather than
+testing concrete C++ classes. Feature-specific behavior is implemented by the
+feature itself.
+
+## Polymorphic feature contract
+
+`ParametricFeature` provides the extension points used by the rest of the
+application:
+
+- `typeId()` identifies a feature in the persistence registry;
+- `role()` exposes semantic capabilities such as `Sketch` and `Face`;
+- `properties()` returns editable or read-only `FeatureProperty` metadata;
+- `setNumericProperty()` applies an edit without exposing the concrete class;
+- `serialize()` delegates parameter encoding to the feature;
+- `hiddenDependencyIds()` supplies presentation-specific visibility rules;
+- `creationLabel()` supplies the undo command label.
+
+Adding a feature should therefore add its own geometry builder, properties and
+serialization parameters. It should not require another RTTI branch in
+`MainWindow`, `FeatureEditorPanel`, `Body`, or the viewer.
+
+`FeatureProperty` is intentionally small: it contains a stable key, display
+label, a `double` or `string` value, optional numeric limits, and an editable
+flag. The editor creates controls from this metadata and records changes with
+the generic `ChangeParametricPropertyCommand`.
+
 ## Parametric features and recompute
 
 Every `ParametricFeature` has one of these states:
@@ -129,6 +155,13 @@ invalid file from partially replacing the current project. Legacy Box and
 Cylinder records are converted to canonical parametric features during load
 and save.
 
+Deserialization uses a registry keyed by the stable serialized `type` value.
+The registry is the deliberate type boundary required to construct a concrete
+class from file data; serialization of an existing feature remains virtual and
+does not inspect its C++ type. Dependencies are validated generically against
+the preceding history entries, while source-role validation is handled by the
+feature contract.
+
 See [PCAD_FORMAT.md](PCAD_FORMAT.md) for the file-level schema and
 [PARAMETRIC_FEATURES.md](PARAMETRIC_FEATURES.md) for feature behavior.
 
@@ -136,6 +169,7 @@ See [PCAD_FORMAT.md](PCAD_FORMAT.md) for the file-level schema and
 
 The legacy `Document`/`Feature` API and the canonical `Body` history are not
 yet unified. Direct Push/Pull is also separate from the parametric history.
-Future work may unify these histories and add a persisted parametric Push/Pull
-feature, but changes must preserve existing selection, editing, save/load, and
-undo behavior.
+Some feature classes already have geometry implementations but are not yet in
+the version 1 persistence registry. Future work may unify these histories and
+add a persisted parametric Push/Pull feature, but changes must preserve
+existing selection, editing, save/load, and undo behavior.
