@@ -12,16 +12,16 @@
 #include <QSaveFile>
 #include <Standard_Failure.hxx>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace {
 using namespace cad::parametric;
 
-std::string legacyFeatureId(const QJsonArray& features, const int index)
+std::string legacyFeatureId(const Feature& feature, const int index)
 {
-    const auto type = features.at(index).toObject().value("type").toString();
-    return (type == "Box" ? "legacy-box-" : "legacy-cylinder-")
-        + std::to_string(index);
+    return std::string(feature.legacyIdPrefix()) + std::to_string(index);
 }
 
 void require(bool ok, const char* message)
@@ -42,93 +42,81 @@ std::string string(const QJsonObject& o, const char* key)
 }
 QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
 {
-    QJsonObject o{{"id", QString::fromStdString(feature->id())},
-                  {"name", QString::fromStdString(feature->name())}};
-    if (auto f = std::dynamic_pointer_cast<SketchFeature>(feature)) {
-        require(std::isfinite(f->width()) && f->width() > 0
-                && std::isfinite(f->height()) && f->height() > 0, "Invalid Sketch dimensions");
-        o.insert("type", "Sketch"); o.insert("plane", "XY");
-        o.insert("width", f->width()); o.insert("height", f->height());
-    } else if (auto f = std::dynamic_pointer_cast<FaceFeature>(feature)) {
-        if (!f->source() || preceding.findFeature(f->sourceFeatureId()) != f->source()) {
-            throw std::runtime_error("Face '" + f->id() + "' references missing or forward Sketch '"
-                                     + f->sourceFeatureId() + "'");
-        }
-        o.insert("type", "Face");
-        o.insert("sourceFeatureId", QString::fromStdString(f->sourceFeatureId()));
-    } else if (auto f = std::dynamic_pointer_cast<ExtrudeFeature>(feature)) {
-        require(f->profile() && preceding.findFeature(f->profile()->id()) == f->profile(), "Invalid Extrude source reference");
-        o.insert("type", "Extrude");
-        o.insert("sourceFeatureId", QString::fromStdString(f->profile()->id()));
-        o.insert("vectorX", f->vector().X()); o.insert("vectorY", f->vector().Y()); o.insert("vectorZ", f->vector().Z());
-    } else if (auto f = std::dynamic_pointer_cast<BoxParametricFeature>(feature)) {
-        o.insert("type", "Box"); o.insert("width", f->width());
-        o.insert("depth", f->depth()); o.insert("height", f->height());
-    } else if (auto f = std::dynamic_pointer_cast<CylinderParametricFeature>(feature)) {
-        o.insert("type", "Cylinder"); o.insert("radius", f->radius()); o.insert("height", f->height());
-    } else if (auto f = std::dynamic_pointer_cast<ConeFeature>(feature)) {
-        o.insert("type", "Cone"); o.insert("bottomRadius", f->bottomRadius());
-        o.insert("topRadius", f->topRadius()); o.insert("height", f->height());
-    } else if (auto f = std::dynamic_pointer_cast<SphereFeature>(feature)) {
-        o.insert("type", "Sphere"); o.insert("radius", f->radius());
-    } else if (auto f = std::dynamic_pointer_cast<TorusFeature>(feature)) {
-        o.insert("type", "Torus"); o.insert("majorRadius", f->majorRadius()); o.insert("minorRadius", f->minorRadius());
-    } else if (auto f = std::dynamic_pointer_cast<HexagonFeature>(feature)) {
-        o.insert("type", "Hexagon"); o.insert("acrossFlats", f->acrossFlats()); o.insert("height", f->height());
-    } else if (auto f = std::dynamic_pointer_cast<BooleanFeature>(feature)) {
-        require(f->left() && f->right() && preceding.findFeature(f->left()->id()) == f->left()
-                && preceding.findFeature(f->right()->id()) == f->right(), "Invalid boolean references");
-        o.insert("type", "Boolean");
-        o.insert("left", QString::fromStdString(f->left()->id()));
-        o.insert("right", QString::fromStdString(f->right()->id()));
-        switch (f->operation()) {
-        case BooleanOperation::Fuse: o.insert("operation", "Fuse"); break;
-        case BooleanOperation::Cut: o.insert("operation", "Cut"); break;
-        case BooleanOperation::Common: o.insert("operation", "Common"); break;
-        }
-    } else throw std::runtime_error("Unsupported parametric feature type");
-    return o;
+    for (const auto& weak : feature->dependencies()) {
+        const auto dependency = weak.lock();
+        require(dependency && preceding.findFeature(dependency->id()) == dependency,
+                "Feature references a missing or forward dependency");
+    }
+    return feature->serialize();
 }
+
+using FeatureFactory = std::function<ParametricFeature::Ptr(const QJsonObject&, const Body&)>;
+
+const std::unordered_map<std::string, FeatureFactory>& factories()
+{
+    static const std::unordered_map<std::string, FeatureFactory> registry{
+        {"Sketch", [](const QJsonObject& o, const Body&) {
+            require(string(o, "plane") == "XY", "Unsupported Sketch plane (expected XY)");
+            return std::make_shared<SketchFeature>(string(o, "id"), number(o, "width"), number(o, "height"));
+        }},
+        {"Face", [](const QJsonObject& o, const Body& body) {
+            const auto sourceId = string(o, "sourceFeatureId");
+            const auto source = body.findFeature(sourceId);
+            if (!source || source->role() != FeatureRole::Sketch) {
+                throw std::runtime_error("Face '" + string(o, "id")
+                    + "' references missing, forward or non-Sketch source '"
+                    + sourceId + "'");
+            }
+            return std::make_shared<FaceFeature>(string(o, "id"), source);
+        }},
+        {"Extrude", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "Extrude references missing source");
+            return std::make_shared<ExtrudeFeature>(string(o, "id"), source,
+                gp_Vec(number(o, "vectorX"), number(o, "vectorY"), number(o, "vectorZ")));
+        }},
+        {"Box", [](const QJsonObject& o, const Body&) {
+            return std::make_shared<BoxParametricFeature>(string(o,"id"), number(o,"width"), number(o,"depth"), number(o,"height"));
+        }},
+        {"Cylinder", [](const QJsonObject& o, const Body&) {
+            return std::make_shared<CylinderParametricFeature>(string(o,"id"), number(o,"radius"), number(o,"height"));
+        }},
+        {"Cone", [](const QJsonObject& o, const Body&) {
+            return std::make_shared<ConeFeature>(string(o,"id"), number(o,"bottomRadius"), number(o,"topRadius"), number(o,"height"));
+        }},
+        {"Sphere", [](const QJsonObject& o, const Body&) {
+            return std::make_shared<SphereFeature>(string(o,"id"), number(o,"radius"));
+        }},
+        {"Torus", [](const QJsonObject& o, const Body&) {
+            return std::make_shared<TorusFeature>(string(o,"id"), number(o,"majorRadius"), number(o,"minorRadius"));
+        }},
+        {"Hexagon", [](const QJsonObject& o, const Body&) {
+            return std::make_shared<HexagonFeature>(string(o,"id"), number(o,"acrossFlats"), number(o,"height"));
+        }},
+        {"Boolean", [](const QJsonObject& o, const Body& body) {
+            const auto left = body.findFeature(string(o,"left"));
+            const auto right = body.findFeature(string(o,"right"));
+            require(left && right, "Missing or forward boolean reference");
+            const auto operation = string(o,"operation");
+            require(operation == "Fuse" || operation == "Cut" || operation == "Common", "Unknown Boolean operation");
+            const auto kind = operation == "Fuse" ? BooleanOperation::Fuse
+                : operation == "Cut" ? BooleanOperation::Cut : BooleanOperation::Common;
+            return std::make_shared<BooleanFeature>(string(o,"id"), left, right, kind);
+        }}
+    };
+    return registry;
+}
+
 ParametricFeature::Ptr decode(const QJsonObject& o, const Body& body)
 {
     const auto id = string(o, "id");
     require(!id.empty(), "Empty feature id");
     const auto type = string(o, "type");
-    ParametricFeature::Ptr f;
-    if (type == "Sketch") {
-        require(string(o, "plane") == "XY", "Unsupported Sketch plane (expected XY)");
-        f = std::make_shared<SketchFeature>(id, number(o, "width"), number(o, "height"));
-    } else if (type == "Face") {
-        const auto sourceId = string(o, "sourceFeatureId");
-        const auto source = body.findFeature(sourceId);
-        if (!std::dynamic_pointer_cast<SketchFeature>(source)) {
-            throw std::runtime_error("Face '" + id + "' references missing, forward or non-Sketch source '"
-                                     + sourceId + "'");
-        }
-        f = std::make_shared<FaceFeature>(id, source);
-    } else if (type == "Extrude") {
-        const auto sourceId = string(o, "sourceFeatureId");
-        const auto source = body.findFeature(sourceId);
-        if (!source) throw std::runtime_error("Extrude '" + id + "' references missing source '" + sourceId + "'");
-        f = std::make_shared<ExtrudeFeature>(id, source,
-            gp_Vec(number(o, "vectorX"), number(o, "vectorY"), number(o, "vectorZ")));
-    } else if (type == "Box") f = std::make_shared<BoxParametricFeature>(id, number(o,"width"), number(o,"depth"), number(o,"height"));
-    else if (type == "Cylinder") f = std::make_shared<CylinderParametricFeature>(id, number(o,"radius"), number(o,"height"));
-    else if (type == "Cone") f = std::make_shared<ConeFeature>(id, number(o,"bottomRadius"), number(o,"topRadius"), number(o,"height"));
-    else if (type == "Sphere") f = std::make_shared<SphereFeature>(id, number(o,"radius"));
-    else if (type == "Torus") f = std::make_shared<TorusFeature>(id, number(o,"majorRadius"), number(o,"minorRadius"));
-    else if (type == "Hexagon") f = std::make_shared<HexagonFeature>(id, number(o,"acrossFlats"), number(o,"height"));
-    else if (type == "Boolean") {
-        const auto left = body.findFeature(string(o,"left"));
-        const auto right = body.findFeature(string(o,"right"));
-        require(left && right, "Missing or forward boolean reference");
-        const auto op = string(o,"operation");
-        require(op == "Fuse" || op == "Cut" || op == "Common", "Unknown boolean operation");
-        f = std::make_shared<BooleanFeature>(id, left, right, op == "Fuse" ? BooleanOperation::Fuse :
-            op == "Cut" ? BooleanOperation::Cut : BooleanOperation::Common);
-    } else throw std::runtime_error("Unsupported parametric feature type");
-    f->setName(string(o,"name"));
-    return f;
+    const auto factory = factories().find(type);
+    require(factory != factories().end(), "Unsupported parametric feature type");
+    auto feature = factory->second(o, body);
+    feature->setName(string(o, "name"));
+    return feature;
 }
 }
 
@@ -143,18 +131,8 @@ bool ProjectFile::save(const QString& path, const Document& document,
         Body canonical;
         for (std::size_t index = 0; index < document.features().size(); ++index) {
             const auto& feature = document.features()[index];
-            if (const auto* box = dynamic_cast<const BoxFeature*>(feature.get())) {
-                canonical.addFeature(std::make_shared<BoxParametricFeature>(
-                    "legacy-box-" + std::to_string(index),
-                    box->width(), box->depth(), box->height()));
-            } else if (const auto* cylinder =
-                       dynamic_cast<const CylinderFeature*>(feature.get())) {
-                canonical.addFeature(std::make_shared<CylinderParametricFeature>(
-                    "legacy-cylinder-" + std::to_string(index),
-                    cylinder->radius(), cylinder->height()));
-            } else {
-                throw std::runtime_error("Unsupported document feature type");
-            }
+            canonical.addFeature(feature->toParametricFeature(
+                legacyFeatureId(*feature, static_cast<int>(index))));
         }
         for (const auto& feature : body.features()) canonical.addFeature(feature);
 
@@ -192,21 +170,23 @@ bool ProjectFile::load(const QString& path, Document& document,
         require(root.value("features").isArray() && root.value("body").isArray(), "Missing feature arrays");
         Body loadedBody;
         const auto legacyFeatures = root.value("features").toArray();
+        const std::unordered_map<std::string, std::function<ParametricFeature::Ptr(const QJsonObject&, const std::string&)>> legacyFactories{
+            {"Box", [](const QJsonObject& o, const std::string& id) {
+                return std::make_shared<BoxParametricFeature>(id, number(o,"width"), number(o,"depth"), number(o,"height"));
+            }},
+            {"Cylinder", [](const QJsonObject& o, const std::string& id) {
+                return std::make_shared<CylinderParametricFeature>(id, number(o,"radius"), number(o,"height"));
+            }}
+        };
         for (int index = 0; index < legacyFeatures.size(); ++index) {
             const auto& value = legacyFeatures.at(index);
             require(value.isObject(), "Invalid feature entry");
             const auto o = value.toObject();
             const auto type = string(o,"type");
-            const auto id = legacyFeatureId(legacyFeatures, index);
-            if (type == "Box") {
-                loadedBody.addFeature(std::make_shared<BoxParametricFeature>(
-                    id, number(o,"width"), number(o,"depth"), number(o,"height")));
-            } else if (type == "Cylinder") {
-                loadedBody.addFeature(std::make_shared<CylinderParametricFeature>(
-                    id, number(o,"radius"), number(o,"height")));
-            } else {
-                throw std::runtime_error("Unsupported document feature type");
-            }
+            const auto factory = legacyFactories.find(type);
+            require(factory != legacyFactories.end(), "Unsupported document feature type");
+            loadedBody.addFeature(factory->second(o, "legacy-" + QString::fromStdString(type).toLower().toStdString()
+                + "-" + std::to_string(index)));
         }
         for (const auto& value : root.value("body").toArray()) {
             require(value.isObject(), "Invalid body feature entry");

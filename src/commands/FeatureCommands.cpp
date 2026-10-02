@@ -20,6 +20,34 @@ AddFeatureCommand::AddFeatureCommand(parametric::Body& body,
     if (!feature_->recompute()) throw std::invalid_argument(feature_->error());
 }
 
+ChangeParametricPropertyCommand::ChangeParametricPropertyCommand(
+    parametric::Body& body,
+    parametric::ParametricFeature::Ptr feature,
+    std::string key,
+    const double before,
+    const double after,
+    const QString& text
+)
+    : QUndoCommand(text), body_(body), feature_(std::move(feature)),
+      key_(std::move(key)), before_(before), after_(after)
+{
+    if (!feature_ || body_.findFeature(feature_->id()) != feature_) {
+        throw std::invalid_argument("Property command requires a feature in the active Body");
+    }
+}
+
+void ChangeParametricPropertyCommand::apply(const double value)
+{
+    if (!feature_->setNumericProperty(key_, value)) {
+        throw std::invalid_argument("Feature does not expose numeric property '" + key_ + "'");
+    }
+    body_.markDirtyFrom(feature_->id());
+    body_.recompute();
+}
+
+void ChangeParametricPropertyCommand::undo() { apply(before_); }
+void ChangeParametricPropertyCommand::redo() { apply(after_); }
+
 void AddFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());

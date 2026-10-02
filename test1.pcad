@@ -1,42 +1,11 @@
 {
     "body": [
         {
-            "acrossFlats": 30,
-            "height": 12,
-            "id": "hexagon-a85d32e4-c0b1-41f6-a749-d6079b39d02c",
-            "name": "Hexagon",
-            "type": "Hexagon"
-        },
-        {
-            "height": 12,
-            "id": "cylinder-f9518688-68b7-4d52-9f29-c8fb9eea2333",
+            "height": 60,
+            "id": "cylinder-4748c8a9-ad78-4640-ba97-0b7bb4e2fa44",
             "name": "Cylinder",
-            "radius": 8,
+            "radius": 25,
             "type": "Cylinder"
-        },
-        {
-            "id": "cut-6abdc6db-35c1-4d2f-b0d2-fe04bd6cdbd4",
-            "left": "hexagon-a85d32e4-c0b1-41f6-a749-d6079b39d02c",
-            "name": "Cut001",
-            "operation": "Cut",
-            "right": "cylinder-f9518688-68b7-4d52-9f29-c8fb9eea2333",
-            "type": "Boolean"
-        },
-        {
-            "depth": 70,
-            "height": 30,
-            "id": "box-1551884c-374d-48b8-8473-d34c2a56c41b",
-            "name": "Box",
-            "type": "Box",
-            "width": 100
-        },
-        {
-            "id": "fuse-8a667930-89f1-4962-8f10-aae2235ae8d3",
-            "left": "hexagon-a85d32e4-c0b1-41f6-a749-d6079b39d02c",
-            "name": "Fuse",
-            "operation": "Fuse",
-            "right": "box-1551884c-374d-48b8-8473-d34c2a56c41b",
-            "type": "Boolean"
         }
     ],
     "features": [

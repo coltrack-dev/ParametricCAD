@@ -1,7 +1,10 @@
 #pragma once
 
 #include <TopoDS_Shape.hxx>
+#include <memory>
 #include <string>
+
+namespace cad::parametric { class ParametricFeature; }
 
 class Feature
 {
@@ -16,6 +19,10 @@ public:
 
     [[nodiscard]] const std::string& name() const noexcept;
     [[nodiscard]] const TopoDS_Shape& shape() const noexcept;
+
+    virtual std::shared_ptr<cad::parametric::ParametricFeature>
+    toParametricFeature(const std::string& id) const = 0;
+    virtual const char* legacyIdPrefix() const noexcept = 0;
 
     virtual void recompute() = 0;
 

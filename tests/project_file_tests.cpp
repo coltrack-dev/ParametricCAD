@@ -48,22 +48,26 @@ int main()
         Body loadedBody;
         check(ProjectFile::load(path, loaded, loadedBody, error), "load");
         check(loaded.features().empty() && loadedBody.features().size() == 9, "feature count");
-        const auto loadedBox = std::dynamic_pointer_cast<BoxParametricFeature>(
-            loadedBody.findFeature("legacy-box-0"));
-        const auto loadedCylinder = std::dynamic_pointer_cast<CylinderParametricFeature>(
-            loadedBody.findFeature("legacy-cylinder-1"));
-        check(loadedBox && loadedBox->width() == 11 && loadedBox->depth() == 12
-            && loadedBox->height() == 13, "box dimensions");
-        check(loadedCylinder && loadedCylinder->radius() == 7
-            && loadedCylinder->height() == 15, "cylinder dimensions");
+        const auto loadedBox = loadedBody.findFeature("legacy-box-0");
+        const auto loadedCylinder = loadedBody.findFeature("legacy-cylinder-1");
+        check(loadedBox && std::string(loadedBox->typeId()) == "Box"
+            && std::get<double>(loadedBox->properties()[0].value) == 11
+            && std::get<double>(loadedBox->properties()[1].value) == 12
+            && std::get<double>(loadedBox->properties()[2].value) == 13, "box dimensions");
+        check(loadedCylinder && std::string(loadedCylinder->typeId()) == "Cylinder"
+            && std::get<double>(loadedCylinder->properties()[0].value) == 7
+            && std::get<double>(loadedCylinder->properties()[1].value) == 15, "cylinder dimensions");
         GProp_GProps props;
         BRepGProp::VolumeProperties(loadedBox->shape(), props);
         check(std::abs(props.Mass() - 11*12*13) < 1e-6, "rebuilt volume");
-        auto editable = std::dynamic_pointer_cast<BoxParametricFeature>(loadedBody.findFeature("box-1"));
-        auto boolean = std::dynamic_pointer_cast<BooleanFeature>(loadedBody.findFeature("cut-3"));
-        check(editable && editable->name() == "Коробка" && boolean && boolean->left() == editable
-            && boolean->right() == loadedBody.findFeature("cylinder-2"), "identity and links");
-        editable->setSize(50, 30, 40);
+        auto editable = loadedBody.findFeature("box-1");
+        auto boolean = loadedBody.findFeature("cut-3");
+        check(editable && std::string(editable->typeId()) == "Box" && editable->name() == "Коробка"
+            && boolean && boolean->dependencies().front().lock() == editable
+            && boolean->dependencies().back().lock() == loadedBody.findFeature("cylinder-2"), "identity and links");
+        editable->setNumericProperty("width", 50);
+        editable->setNumericProperty("depth", 30);
+        editable->setNumericProperty("height", 40);
         loadedBody.markDirtyFrom(editable->id());
         check(loadedBody.recompute(), "edit after load");
         check(ProjectFile::save(path, loaded, loadedBody, error), "save edited model");

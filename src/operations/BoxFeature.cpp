@@ -1,4 +1,5 @@
 #include "operations/BoxFeature.h"
+#include "operations/ParametricFeatures.h"
 
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <stdexcept>
@@ -23,3 +24,10 @@ void BoxFeature::recompute()
 double BoxFeature::width() const noexcept { return width_; }
 double BoxFeature::depth() const noexcept { return depth_; }
 double BoxFeature::height() const noexcept { return height_; }
+
+std::shared_ptr<cad::parametric::ParametricFeature>
+BoxFeature::toParametricFeature(const std::string& id) const
+{
+    return std::make_shared<cad::parametric::BoxParametricFeature>(
+        id, width_, depth_, height_);
+}

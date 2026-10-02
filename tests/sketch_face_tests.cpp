@@ -145,22 +145,23 @@ private slots:
         QVERIFY2(ProjectFile::load(path, loaded, loadedBody, error), qPrintable(error));
         QVERIFY(loaded.features().empty());
         QCOMPARE(loadedBody.features().size(), std::size_t{4});
-        QVERIFY(std::dynamic_pointer_cast<BoxParametricFeature>(
-            loadedBody.findFeature("legacy-box-0")));
-        QVERIFY(std::dynamic_pointer_cast<CylinderParametricFeature>(
-            loadedBody.findFeature("legacy-cylinder-1")));
-        const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature("sketch-001"));
-        const auto loadedFace = std::dynamic_pointer_cast<FaceFeature>(loadedBody.findFeature("face-001"));
+        const auto loadedBox = loadedBody.findFeature("legacy-box-0");
+        const auto loadedCylinder = loadedBody.findFeature("legacy-cylinder-1");
+        QVERIFY(loadedBox && std::string(loadedBox->typeId()) == "Box");
+        QVERIFY(loadedCylinder && std::string(loadedCylinder->typeId()) == "Cylinder");
+        const auto loadedSketch = loadedBody.findFeature("sketch-001");
+        const auto loadedFace = loadedBody.findFeature("face-001");
         QVERIFY(loadedSketch && loadedFace);
+        QCOMPARE(loadedSketch->role(), FeatureRole::Sketch);
+        QCOMPARE(loadedFace->role(), FeatureRole::Face);
         QCOMPARE(loadedSketch->name(), std::string("Sketch001"));
         QCOMPARE(loadedFace->name(), std::string("Face001"));
-        QCOMPARE(loadedSketch->width(), 10.0);
-        QCOMPARE(loadedSketch->height(), 6.0);
-        QCOMPARE(loadedFace->sourceFeatureId(), loadedSketch->id());
-        QCOMPARE(loadedFace->source().get(), loadedSketch.get());
+        QCOMPARE(std::get<double>(loadedSketch->properties()[0].value), 10.0);
+        QCOMPARE(std::get<double>(loadedSketch->properties()[1].value), 6.0);
         QCOMPARE(loadedFace->dependencies().front().lock().get(), loadedSketch.get());
         QVERIFY(std::abs(area(loadedFace->shape()) - 60) < 1e-8);
-        loadedSketch->setSize(15, 8);
+        QVERIFY(loadedSketch->setNumericProperty("width", 15));
+        QVERIFY(loadedSketch->setNumericProperty("height", 8));
         loadedBody.markDirtyFrom(loadedSketch->id());
         QVERIFY(loadedBody.recompute());
         QVERIFY(std::abs(area(loadedFace->shape()) - 120) < 1e-8);

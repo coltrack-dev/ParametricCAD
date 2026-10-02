@@ -1,9 +1,13 @@
 #pragma once
 
 #include <TopoDS_Shape.hxx>
+#include <QJsonObject>
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace cad::parametric {
@@ -13,6 +17,25 @@ enum class FeatureState
     Dirty,
     UpToDate,
     Failed
+};
+
+enum class FeatureRole
+{
+    Generic,
+    Sketch,
+    Face
+};
+
+struct FeatureProperty
+{
+    using Value = std::variant<double, std::string>;
+
+    std::string key;
+    std::string label;
+    Value value;
+    std::optional<double> minimum;
+    std::optional<double> maximum;
+    bool editable{false};
 };
 
 /**
@@ -37,6 +60,14 @@ public:
     bool isDirty() const noexcept;
     const std::string& error() const noexcept;
 
+    virtual const char* typeId() const noexcept;
+    virtual FeatureRole role() const noexcept;
+    virtual std::string creationLabel() const;
+    virtual std::vector<FeatureProperty> properties() const;
+    virtual std::vector<std::string> hiddenDependencyIds() const;
+    virtual bool setNumericProperty(const std::string& key, double value);
+    QJsonObject serialize() const;
+
     const TopoDS_Shape& shape() const noexcept;
 
     const std::vector<std::weak_ptr<ParametricFeature>>& dependencies() const noexcept;
@@ -47,6 +78,7 @@ public:
 
 protected:
     virtual TopoDS_Shape build() const = 0;
+    virtual void writeParameters(QJsonObject& object) const;
 
 private:
     std::string id_;

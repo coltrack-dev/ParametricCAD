@@ -1,4 +1,5 @@
 #include "operations/CylinderFeature.h"
+#include "operations/ParametricFeatures.h"
 
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <stdexcept>
@@ -17,4 +18,11 @@ void CylinderFeature::recompute()
     }
 
     setShape(BRepPrimAPI_MakeCylinder(radius_, height_).Shape());
+}
+
+std::shared_ptr<cad::parametric::ParametricFeature>
+CylinderFeature::toParametricFeature(const std::string& id) const
+{
+    return std::make_shared<cad::parametric::CylinderParametricFeature>(
+        id, radius_, height_);
 }

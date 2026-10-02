@@ -18,12 +18,17 @@ class SketchFeature final : public ParametricFeature
 {
 public:
     SketchFeature(std::string id, double width, double height);
+    const char* typeId() const noexcept override { return "Sketch"; }
+    FeatureRole role() const noexcept override { return FeatureRole::Sketch; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
     void setSize(double width, double height);
     double width() const noexcept;
     double height() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     double width_;
@@ -34,11 +39,15 @@ class FaceFeature final : public ParametricFeature
 {
 public:
     FaceFeature(std::string id, const Ptr& source);
+    const char* typeId() const noexcept override { return "Face"; }
+    FeatureRole role() const noexcept override { return FeatureRole::Face; }
+    std::vector<FeatureProperty> properties() const override;
     const std::string& sourceFeatureId() const noexcept;
     Ptr source() const;
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     std::string sourceFeatureId_;
@@ -54,6 +63,9 @@ public:
         double depth,
         double height
     );
+    const char* typeId() const noexcept override { return "Box"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
 
     void setSize(double width, double depth, double height);
 
@@ -63,6 +75,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     double width_;
@@ -78,6 +91,9 @@ public:
         double radius,
         double height
     );
+    const char* typeId() const noexcept override { return "Cylinder"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
 
     void setRadius(double radius);
     void setHeight(double height);
@@ -87,6 +103,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     double radius_;
@@ -102,6 +119,9 @@ public:
         double topRadius,
         double height
     );
+    const char* typeId() const noexcept override { return "Cone"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
 
     void setBottomRadius(double radius);
     void setTopRadius(double radius);
@@ -113,6 +133,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     double bottomRadius_;
@@ -124,12 +145,16 @@ class SphereFeature final : public ParametricFeature
 {
 public:
     SphereFeature(std::string id, double radius);
+    const char* typeId() const noexcept override { return "Sphere"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
 
     void setRadius(double radius);
     double radius() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     double radius_;
@@ -143,6 +168,9 @@ public:
         double majorRadius,
         double minorRadius
     );
+    const char* typeId() const noexcept override { return "Torus"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
 
     void setMajorRadius(double radius);
     void setMinorRadius(double radius);
@@ -152,6 +180,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     double majorRadius_;
@@ -167,6 +196,9 @@ public:
         double acrossFlats,
         double height
     );
+    const char* typeId() const noexcept override { return "Hexagon"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
 
     void setAcrossFlats(double acrossFlats);
     void setHeight(double height);
@@ -176,6 +208,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     double acrossFlats_;
@@ -190,6 +223,9 @@ public:
         const Ptr& profile,
         gp_Vec vector
     );
+    const char* typeId() const noexcept override { return "Extrude"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
 
     void setVector(gp_Vec vector);
 
@@ -198,6 +234,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     Ptr profile_;
@@ -213,6 +250,7 @@ public:
         gp_Ax1 axis,
         double angleRadians
     );
+    const char* typeId() const noexcept override { return "Revolve"; }
 
     void setAxis(gp_Ax1 axis);
     void setAngleRadians(double angleRadians);
@@ -246,15 +284,21 @@ public:
         const Ptr& right,
         BooleanOperation operation
     );
+    const char* typeId() const noexcept override { return "Boolean"; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string&, double) override { return false; }
 
     void setOperation(BooleanOperation operation);
 
     const Ptr& left() const noexcept;
     const Ptr& right() const noexcept;
     BooleanOperation operation() const noexcept;
+    std::string creationLabel() const override;
+    std::vector<std::string> hiddenDependencyIds() const override;
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     Ptr left_;
@@ -271,6 +315,7 @@ public:
         std::vector<TopoDS_Edge> edges,
         double radius
     );
+    const char* typeId() const noexcept override { return "Fillet"; }
 
     void setEdges(std::vector<TopoDS_Edge> edges);
     void setRadius(double radius);
@@ -297,6 +342,7 @@ public:
         std::vector<TopoDS_Edge> edges,
         double distance
     );
+    const char* typeId() const noexcept override { return "Chamfer"; }
 
     void setEdges(std::vector<TopoDS_Edge> edges);
     void setDistance(double distance);
@@ -323,6 +369,7 @@ public:
         std::vector<TopoDS_Face> facesToRemove,
         double thickness
     );
+    const char* typeId() const noexcept override { return "Shell"; }
 
     void setFacesToRemove(std::vector<TopoDS_Face> faces);
     void setThickness(double thickness);
@@ -348,6 +395,7 @@ public:
         const Ptr& base,
         double distance
     );
+    const char* typeId() const noexcept override { return "Offset"; }
 
     void setDistance(double distance);
 
@@ -371,6 +419,7 @@ public:
         bool makeSolid = true,
         bool ruled = false
     );
+    const char* typeId() const noexcept override { return "Loft"; }
 
     void setSections(std::vector<TopoDS_Wire> sections);
     void setMakeSolid(bool makeSolid);
@@ -397,6 +446,7 @@ public:
         TopoDS_Wire path,
         const Ptr& profile
     );
+    const char* typeId() const noexcept override { return "Sweep"; }
 
     void setPath(TopoDS_Wire path);
 

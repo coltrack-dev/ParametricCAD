@@ -36,12 +36,52 @@ void requireFeature(
     }
 }
 
+FeatureProperty numericProperty(
+    const char* key,
+    const char* label,
+    const double value
+)
+{
+    return {key, label, value, 0.001, 1'000'000.0, true};
+}
+
+FeatureProperty textProperty(
+    const char* key,
+    const char* label,
+    std::string value
+)
+{
+    return {key, label, std::move(value), std::nullopt, std::nullopt, false};
+}
+
 } // namespace
 
 SketchFeature::SketchFeature(std::string id, double width, double height)
     : ParametricFeature(std::move(id), "Rectangle Sketch"),
       width_(width), height_(height)
 {
+}
+
+std::vector<FeatureProperty> SketchFeature::properties() const
+{
+    return {numericProperty("width", "Width", width_),
+            numericProperty("height", "Height", height_),
+            textProperty("plane", "Plane", "XY")};
+}
+
+bool SketchFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key == "width") setSize(value, height_);
+    else if (key == "height") setSize(width_, value);
+    else return false;
+    return true;
+}
+
+void SketchFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("plane", "XY");
+    object.insert("width", width_);
+    object.insert("height", height_);
 }
 
 void SketchFeature::setSize(double width, double height)
@@ -63,11 +103,21 @@ FaceFeature::FaceFeature(std::string id, const Ptr& source)
     : ParametricFeature(std::move(id), "Face"), source_(source)
 {
     requireFeature(source, "Sketch source");
-    if (!std::dynamic_pointer_cast<SketchFeature>(source)) {
+    if (source->role() != FeatureRole::Sketch) {
         throw std::invalid_argument("Face source must be a Rectangle Sketch");
     }
     sourceFeatureId_ = source->id();
     addDependency(source);
+}
+
+std::vector<FeatureProperty> FaceFeature::properties() const
+{
+    return {textProperty("sourceFeatureId", "Source Sketch", sourceFeatureId_)};
+}
+
+void FaceFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
 }
 
 const std::string& FaceFeature::sourceFeatureId() const noexcept
@@ -109,6 +159,29 @@ BoxParametricFeature::BoxParametricFeature(
       depth_(depth),
       height_(height)
 {
+}
+
+std::vector<FeatureProperty> BoxParametricFeature::properties() const
+{
+    return {numericProperty("width", "Width", width_),
+            numericProperty("depth", "Depth", depth_),
+            numericProperty("height", "Height", height_)};
+}
+
+bool BoxParametricFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key == "width") setSize(value, depth_, height_);
+    else if (key == "depth") setSize(width_, value, height_);
+    else if (key == "height") setSize(width_, depth_, value);
+    else return false;
+    return true;
+}
+
+void BoxParametricFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("width", width_);
+    object.insert("depth", depth_);
+    object.insert("height", height_);
 }
 
 void BoxParametricFeature::setSize(
@@ -158,6 +231,26 @@ CylinderParametricFeature::CylinderParametricFeature(
 {
 }
 
+std::vector<FeatureProperty> CylinderParametricFeature::properties() const
+{
+    return {numericProperty("radius", "Radius", radius_),
+            numericProperty("height", "Height", height_)};
+}
+
+bool CylinderParametricFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key == "radius") setRadius(value);
+    else if (key == "height") setHeight(value);
+    else return false;
+    return true;
+}
+
+void CylinderParametricFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("radius", radius_);
+    object.insert("height", height_);
+}
+
 void CylinderParametricFeature::setRadius(const double radius)
 {
     radius_ = radius;
@@ -199,6 +292,29 @@ ConeFeature::ConeFeature(
       topRadius_(topRadius),
       height_(height)
 {
+}
+
+std::vector<FeatureProperty> ConeFeature::properties() const
+{
+    return {numericProperty("bottomRadius", "Bottom Radius", bottomRadius_),
+            numericProperty("topRadius", "Top Radius", topRadius_),
+            numericProperty("height", "Height", height_)};
+}
+
+bool ConeFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key == "bottomRadius") setBottomRadius(value);
+    else if (key == "topRadius") setTopRadius(value);
+    else if (key == "height") setHeight(value);
+    else return false;
+    return true;
+}
+
+void ConeFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("bottomRadius", bottomRadius_);
+    object.insert("topRadius", topRadius_);
+    object.insert("height", height_);
 }
 
 void ConeFeature::setBottomRadius(const double radius)
@@ -252,6 +368,23 @@ SphereFeature::SphereFeature(
 {
 }
 
+std::vector<FeatureProperty> SphereFeature::properties() const
+{
+    return {numericProperty("radius", "Radius", radius_)};
+}
+
+bool SphereFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key != "radius") return false;
+    setRadius(value);
+    return true;
+}
+
+void SphereFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("radius", radius_);
+}
+
 void SphereFeature::setRadius(const double radius)
 {
     radius_ = radius;
@@ -277,6 +410,26 @@ TorusFeature::TorusFeature(
       majorRadius_(majorRadius),
       minorRadius_(minorRadius)
 {
+}
+
+std::vector<FeatureProperty> TorusFeature::properties() const
+{
+    return {numericProperty("majorRadius", "Major Radius", majorRadius_),
+            numericProperty("minorRadius", "Minor Radius", minorRadius_)};
+}
+
+bool TorusFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key == "majorRadius") setMajorRadius(value);
+    else if (key == "minorRadius") setMinorRadius(value);
+    else return false;
+    return true;
+}
+
+void TorusFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("majorRadius", majorRadius_);
+    object.insert("minorRadius", minorRadius_);
 }
 
 void TorusFeature::setMajorRadius(const double radius)
@@ -319,6 +472,26 @@ HexagonFeature::HexagonFeature(
       acrossFlats_(acrossFlats),
       height_(height)
 {
+}
+
+std::vector<FeatureProperty> HexagonFeature::properties() const
+{
+    return {numericProperty("acrossFlats", "Across Flats", acrossFlats_),
+            numericProperty("height", "Height", height_)};
+}
+
+bool HexagonFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key == "acrossFlats") setAcrossFlats(value);
+    else if (key == "height") setHeight(value);
+    else return false;
+    return true;
+}
+
+void HexagonFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("acrossFlats", acrossFlats_);
+    object.insert("height", height_);
 }
 
 void HexagonFeature::setAcrossFlats(
@@ -453,6 +626,26 @@ ExtrudeFeature::ExtrudeFeature(
     addDependency(profile_);
 }
 
+std::vector<FeatureProperty> ExtrudeFeature::properties() const
+{
+    return {numericProperty("length", "Length", vector_.Magnitude())};
+}
+
+bool ExtrudeFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key != "length" || vector_.Magnitude() == 0.0) return false;
+    setVector(vector_.Normalized() * value);
+    return true;
+}
+
+void ExtrudeFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(profile_->id()));
+    object.insert("vectorX", vector_.X());
+    object.insert("vectorY", vector_.Y());
+    object.insert("vectorZ", vector_.Z());
+}
+
 void ExtrudeFeature::setVector(gp_Vec vector)
 {
     vector_ = std::move(vector);
@@ -550,6 +743,35 @@ BooleanFeature::BooleanFeature(
 
     addDependency(left_);
     addDependency(right_);
+}
+
+std::vector<FeatureProperty> BooleanFeature::properties() const
+{
+    const char* operationName = operation_ == BooleanOperation::Fuse ? "Fuse"
+        : operation_ == BooleanOperation::Cut ? "Cut" : "Common";
+    return {textProperty("operation", "Operation", operationName),
+            textProperty("left", "Left", left_->name()),
+            textProperty("right", "Right", right_->name())};
+}
+
+std::string BooleanFeature::creationLabel() const
+{
+    return operation_ == BooleanOperation::Fuse ? "Boolean Fuse"
+        : operation_ == BooleanOperation::Cut ? "Boolean Cut" : "Boolean Common";
+}
+
+std::vector<std::string> BooleanFeature::hiddenDependencyIds() const
+{
+    if (operation_ != BooleanOperation::Cut) return {};
+    return {left_->id(), right_->id()};
+}
+
+void BooleanFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("left", QString::fromStdString(left_->id()));
+    object.insert("right", QString::fromStdString(right_->id()));
+    object.insert("operation", operation_ == BooleanOperation::Fuse ? "Fuse"
+        : operation_ == BooleanOperation::Cut ? "Cut" : "Common");
 }
 
 void BooleanFeature::setOperation(

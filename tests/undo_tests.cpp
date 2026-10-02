@@ -249,9 +249,9 @@ private slots:
         Document loaded;
         Body loadedBody;
         QVERIFY2(ProjectFile::load(path, loaded, loadedBody, error), qPrintable(error));
-        auto loadedExtrude = std::dynamic_pointer_cast<ExtrudeFeature>(loadedBody.findFeature("extrude"));
-        QVERIFY(loadedExtrude);
-        QCOMPARE(loadedExtrude->profile().get(), loadedBody.findFeature("face").get());
+        auto loadedExtrude = loadedBody.findFeature("extrude");
+        QVERIFY(loadedExtrude && std::string(loadedExtrude->typeId()) == "Extrude");
+        QCOMPARE(loadedExtrude->dependencies().front().lock().get(), loadedBody.findFeature("face").get());
         QVERIFY(std::abs(volume(loadedExtrude->shape()) - 300) < 1e-7);
         stack.clear();
         QVERIFY(stack.isClean());

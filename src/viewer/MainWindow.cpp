@@ -236,10 +236,9 @@ void MainWindow::createFace()
 {
     const auto ids = featureEditorPanel_->selectedFeatureIds();
     const auto sketch = ids.size() == 1
-        ? std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
-              parametricBody_.findFeature(ids.front().toStdString()))
-        : nullptr;
-    if (!sketch) {
+        ? parametricBody_.findFeature(ids.front().toStdString())
+        : cad::parametric::ParametricFeature::Ptr{};
+    if (!sketch || sketch->role() != cad::parametric::FeatureRole::Sketch) {
         QMessageBox::information(this, "Create Face",
             "Select exactly one Rectangle Sketch in the model tree or viewport, then choose Create Face.");
         return;
@@ -252,9 +251,9 @@ void MainWindow::createExtrude()
 {
     const auto ids = featureEditorPanel_->selectedFeatureIds();
     const auto face = ids.size() == 1
-        ? std::dynamic_pointer_cast<cad::parametric::FaceFeature>(parametricBody_.findFeature(ids.front().toStdString()))
-        : nullptr;
-    if (!face) {
+        ? parametricBody_.findFeature(ids.front().toStdString())
+        : cad::parametric::ParametricFeature::Ptr{};
+    if (!face || face->role() != cad::parametric::FeatureRole::Face) {
         QMessageBox::information(this, "Extrude Face", "Select exactly one Face feature to extrude.");
         return;
     }

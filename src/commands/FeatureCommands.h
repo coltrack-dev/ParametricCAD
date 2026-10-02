@@ -26,6 +26,28 @@ private:
     std::size_t position_;
 };
 
+class ChangeParametricPropertyCommand final : public QUndoCommand
+{
+public:
+    ChangeParametricPropertyCommand(
+        parametric::Body& body,
+        parametric::ParametricFeature::Ptr feature,
+        std::string key,
+        double before,
+        double after,
+        const QString& text
+    );
+    void undo() override;
+    void redo() override;
+private:
+    void apply(double value);
+    parametric::Body& body_;
+    parametric::ParametricFeature::Ptr feature_;
+    std::string key_;
+    double before_;
+    double after_;
+};
+
 class RemoveFeatureCommand final : public QUndoCommand
 {
 public:

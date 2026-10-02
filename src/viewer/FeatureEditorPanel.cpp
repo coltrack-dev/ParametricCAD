@@ -23,6 +23,7 @@
 #include <QVBoxLayout>
 
 #include <memory>
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -102,14 +103,7 @@ void FeatureEditorPanel::addFeature(const FeaturePtr& feature)
 {
     if (!body_ || !undoStack_) return;
     try {
-        QString text = "Create " + QString::fromStdString(feature->name());
-        if (const auto boolean = std::dynamic_pointer_cast<cad::parametric::BooleanFeature>(feature)) {
-            switch (boolean->operation()) {
-            case cad::parametric::BooleanOperation::Cut: text = "Boolean Cut"; break;
-            case cad::parametric::BooleanOperation::Fuse: text = "Boolean Fuse"; break;
-            case cad::parametric::BooleanOperation::Common: text = "Boolean Common"; break;
-            }
-        }
+        const QString text = QString::fromStdString(feature->creationLabel());
         undoStack_->push(new cad::commands::AddFeatureCommand(*body_, feature, text));
         refresh();
         selectFeatures({QString::fromStdString(feature->id())});
@@ -504,11 +498,6 @@ void FeatureEditorPanel::addBoolean(
         features[0] = baseFeature;
         features[1] = cuttingTool;
 
-        // For the Hexagon/Cylinder workflow, always use the cylinder as the tool.
-        if (std::dynamic_pointer_cast<cad::parametric::CylinderParametricFeature>(features[0])
-            && std::dynamic_pointer_cast<cad::parametric::HexagonFeature>(features[1])) {
-            std::swap(features[0], features[1]);
-        }
     }
 
     const std::string id =
@@ -727,135 +716,46 @@ void FeatureEditorPanel::rebuildProperties(
         );
     }
 
-    const auto addParameter = [this]<class T, class Getter, class Setter>(
-        const std::shared_ptr<T>& target, const QString& label, Getter getter, Setter setter) {
-        QDoubleSpinBox* editor = makeLengthEditor(propertiesWidget_, getter(*target));
+    const auto addParameter = [this, &feature](const cad::parametric::FeatureProperty& property) {
+        const double value = std::get<double>(property.value);
+        QDoubleSpinBox* editor = makeLengthEditor(propertiesWidget_, value);
+        if (property.minimum) editor->setMinimum(*property.minimum);
+        if (property.maximum) editor->setMaximum(*property.maximum);
         editor->installEventFilter(this);
         if (auto* lineEdit = editor->findChild<QLineEdit*>()) lineEdit->installEventFilter(this);
+        const QString label = QString::fromStdString(property.label);
         propertiesLayout_->addRow(label, editor);
         connect(editor, &QDoubleSpinBox::editingFinished, this,
-            [this, target, label, getter, setter, editor]() {
-                if (updatingProperties_ || refreshPending_ || !body_ || !undoStack_ || body_->findFeature(target->id()) != target) return;
-                const double before = getter(*target);
+            [this, feature, property, label, editor]() {
+                if (updatingProperties_ || refreshPending_ || !body_ || !undoStack_ || body_->findFeature(feature->id()) != feature) return;
+                const auto properties = feature->properties();
+                const auto current = std::find_if(properties.begin(), properties.end(),
+                    [&property](const auto& candidate) { return candidate.key == property.key; });
+                if (current == properties.end() || !std::holds_alternative<double>(current->value)) return;
+                const double before = std::get<double>(current->value);
                 const double after = editor->value();
                 if (before == after) return;
-                undoStack_->push(new cad::commands::ChangeFeatureParameterCommand<T, double>(
-                    *body_, target, before, after, setter,
-                    "Change " + QString::fromStdString(target->name()) + " " + label));
+                undoStack_->push(new cad::commands::ChangeParametricPropertyCommand(
+                    *body_, feature, property.key, before, after,
+                    "Change " + QString::fromStdString(feature->name()) + " " + label));
                 scheduleRefresh();
             });
     };
 
-    using namespace cad::parametric;
-    if (auto sketch = std::dynamic_pointer_cast<SketchFeature>(feature)) {
-        addParameter(sketch, "Width", [](auto& f) { return f.width(); },
-            [](auto& f, double v) { f.setSize(v, f.height()); });
-        addParameter(sketch, "Height", [](auto& f) { return f.height(); },
-            [](auto& f, double v) { f.setSize(f.width(), v); });
-        propertiesLayout_->addRow("Plane", new QLabel("XY", propertiesWidget_));
-        return;
-    }
-    if (auto face = std::dynamic_pointer_cast<FaceFeature>(feature)) {
-        propertiesLayout_->addRow("Source Sketch",
-            new QLabel(QString::fromStdString(face->sourceFeatureId()), propertiesWidget_));
-        return;
-    }
-    if (auto box = std::dynamic_pointer_cast<BoxParametricFeature>(feature)) {
-        addParameter(box, "Width", [](auto& f) { return f.width(); },
-            [](auto& f, double v) { f.setSize(v, f.depth(), f.height()); });
-        addParameter(box, "Depth", [](auto& f) { return f.depth(); },
-            [](auto& f, double v) { f.setSize(f.width(), v, f.height()); });
-        addParameter(box, "Height", [](auto& f) { return f.height(); },
-            [](auto& f, double v) { f.setSize(f.width(), f.depth(), v); });
-        return;
-    }
-    if (auto cylinder = std::dynamic_pointer_cast<CylinderParametricFeature>(feature)) {
-        addParameter(cylinder, "Radius", [](auto& f) { return f.radius(); },
-            [](auto& f, double v) { f.setRadius(v); });
-        addParameter(cylinder, "Height", [](auto& f) { return f.height(); },
-            [](auto& f, double v) { f.setHeight(v); });
-        return;
-    }
-    if (auto cone = std::dynamic_pointer_cast<ConeFeature>(feature)) {
-        addParameter(cone, "Bottom Radius", [](auto& f) { return f.bottomRadius(); },
-            [](auto& f, double v) { f.setBottomRadius(v); });
-        addParameter(cone, "Top Radius", [](auto& f) { return f.topRadius(); },
-            [](auto& f, double v) { f.setTopRadius(v); });
-        addParameter(cone, "Height", [](auto& f) { return f.height(); },
-            [](auto& f, double v) { f.setHeight(v); });
-        return;
-    }
-    if (auto sphere = std::dynamic_pointer_cast<SphereFeature>(feature)) {
-        addParameter(sphere, "Radius", [](auto& f) { return f.radius(); },
-            [](auto& f, double v) { f.setRadius(v); });
-        return;
-    }
-    if (auto torus = std::dynamic_pointer_cast<TorusFeature>(feature)) {
-        addParameter(torus, "Major Radius", [](auto& f) { return f.majorRadius(); },
-            [](auto& f, double v) { f.setMajorRadius(v); });
-        addParameter(torus, "Minor Radius", [](auto& f) { return f.minorRadius(); },
-            [](auto& f, double v) { f.setMinorRadius(v); });
-        return;
-    }
-    if (auto hexagon = std::dynamic_pointer_cast<HexagonFeature>(feature)) {
-        addParameter(hexagon, "Across Flats", [](auto& f) { return f.acrossFlats(); },
-            [](auto& f, double v) { f.setAcrossFlats(v); });
-        addParameter(hexagon, "Height", [](auto& f) { return f.height(); },
-            [](auto& f, double v) { f.setHeight(v); });
-        return;
-    }
-    if (auto extrude = std::dynamic_pointer_cast<ExtrudeFeature>(feature)) {
-        addParameter(extrude, "Length", [](auto& f) { return f.vector().Magnitude(); },
-            [](auto& f, double v) { f.setVector(f.vector().Normalized() * v); });
-        return;
-    }
-
-    if (auto booleanFeature =
-            std::dynamic_pointer_cast<
-                cad::parametric::BooleanFeature
-            >(feature)) {
-
-        QString operation;
-
-        switch (booleanFeature->operation()) {
-            case cad::parametric::BooleanOperation::Fuse:
-                operation = "Fuse";
-                break;
-            case cad::parametric::BooleanOperation::Cut:
-                operation = "Cut";
-                break;
-            case cad::parametric::BooleanOperation::Common:
-                operation = "Common";
-                break;
+    const auto properties = feature->properties();
+    for (const auto& property : properties) {
+        if (property.editable && std::holds_alternative<double>(property.value)) {
+            addParameter(property);
+        } else if (std::holds_alternative<double>(property.value)) {
+            propertiesLayout_->addRow(QString::fromStdString(property.label),
+                new QLabel(QString::number(std::get<double>(property.value)), propertiesWidget_));
+        } else {
+            propertiesLayout_->addRow(QString::fromStdString(property.label),
+                new QLabel(QString::fromStdString(std::get<std::string>(property.value)), propertiesWidget_));
         }
-
-        propertiesLayout_->addRow(
-            "Operation",
-            new QLabel(operation, propertiesWidget_)
-        );
-
-        propertiesLayout_->addRow(
-            "Left",
-            new QLabel(
-                QString::fromStdString(
-                    booleanFeature->left()->name()
-                ),
-                propertiesWidget_
-            )
-        );
-
-        propertiesLayout_->addRow(
-            "Right",
-            new QLabel(
-                QString::fromStdString(
-                    booleanFeature->right()->name()
-                ),
-                propertiesWidget_
-            )
-        );
-
-        return;
     }
+
+    if (!properties.empty()) return;
 
     auto* info =
         new QLabel(

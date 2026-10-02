@@ -48,6 +48,52 @@ const std::string& ParametricFeature::error() const noexcept
     return error_;
 }
 
+const char* ParametricFeature::typeId() const noexcept
+{
+    return "Feature";
+}
+
+FeatureRole ParametricFeature::role() const noexcept
+{
+    return FeatureRole::Generic;
+}
+
+std::string ParametricFeature::creationLabel() const
+{
+    return "Create " + name_;
+}
+
+std::vector<FeatureProperty> ParametricFeature::properties() const
+{
+    return {};
+}
+
+std::vector<std::string> ParametricFeature::hiddenDependencyIds() const
+{
+    return {};
+}
+
+bool ParametricFeature::setNumericProperty(const std::string&, double)
+{
+    return false;
+}
+
+QJsonObject ParametricFeature::serialize() const
+{
+    QJsonObject object{
+        {"id", QString::fromStdString(id_)},
+        {"name", QString::fromStdString(name_)},
+        {"type", QString::fromLatin1(typeId())}
+    };
+    writeParameters(object);
+    return object;
+}
+
+void ParametricFeature::writeParameters(QJsonObject&) const
+{
+    throw std::runtime_error("Unsupported parametric feature type");
+}
+
 const TopoDS_Shape& ParametricFeature::shape() const noexcept
 {
     return shape_;
