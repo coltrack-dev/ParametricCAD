@@ -22,6 +22,7 @@
 #include "viewer/SnapManager.h"
 #include "viewer/TransformGizmo.h"
 #include "viewer/TransformMath.h"
+#include "viewer/SelectionAdapter.h"
 
 class QAction;
 class QLabel;
@@ -169,6 +170,8 @@ private:
     std::vector<cad::viewer::SnapReference> transformTargetReferences_;
     std::vector<cad::viewer::SnapCandidate> transformSnapCandidates_;
     std::map<QString, std::vector<cad::viewer::SnapReference>> snapReferenceCache_;
+
+    std::unique_ptr<cad::viewer::OcctSelectionAdapter> selectionAdapter_;
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };

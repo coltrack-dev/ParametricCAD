@@ -601,6 +601,8 @@ void CadViewer::initializeOcc()
     viewer_->SetLightOn();
 
     context_ = new AIS_InteractiveContext(viewer_);
+    selectionAdapter_ = std::make_unique<cad::viewer::OcctSelectionAdapter>(
+        context_, featureObjects_);
     transformGizmo_ = std::make_unique<cad::viewer::TransformGizmo>(context_);
     view_ = viewer_->CreateView();
 
@@ -1518,15 +1520,10 @@ void CadViewer::selectFeatures(const QStringList& featureIds)
 void CadViewer::notifyFeatureSelection()
 {
     QStringList ids;
-    if (initialized_) {
-        for (context_->InitSelected(); context_->MoreSelected(); context_->NextSelected()) {
-            // SelectedInteractive also identifies the parent of a picked face/edge.
-            const auto object = context_->SelectedInteractive();
-            for (const auto& [id, presentation] : featureObjects_) {
-                if (presentation == object && !ids.contains(id)) {
-                    ids.append(id);
-                    break;
-                }
+    if (initialized_ && selectionAdapter_) {
+        for (const auto& hit : selectionAdapter_->selectedHits()) {
+            if (!ids.contains(hit.item.featureId)) {
+                ids.append(hit.item.featureId);
             }
         }
     }

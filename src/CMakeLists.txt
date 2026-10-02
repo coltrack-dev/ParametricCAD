@@ -21,6 +21,9 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/TransformGizmo.h
     viewer/TransformGizmoPicking.cpp
     viewer/TransformGizmoPicking.h
+    viewer/SelectionAdapter.cpp
+    viewer/SelectionAdapter.h
+    viewer/SelectionTypes.h
     viewer/SnapManager.cpp
     viewer/SnapManager.h
     viewer/FeatureEditorPanel.cpp

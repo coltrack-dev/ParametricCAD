@@ -31,6 +31,20 @@ target_link_libraries(push_pull_drag_tests PRIVATE Qt6::Gui
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO)
 add_test(NAME push_pull_drag_tests COMMAND push_pull_drag_tests)
 
+add_executable(selection_tests
+    selection_tests.cpp
+    ../src/viewer/SelectionAdapter.cpp
+)
+target_include_directories(selection_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_include_directories(selection_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+if(DEFINED OpenCASCADE_LIBRARY_DIR)
+    target_link_directories(selection_tests PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+endif()
+target_link_libraries(selection_tests PRIVATE Qt6::Core Qt6::Gui
+    TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim
+    TKService TKV3d TKOpenGl)
+add_test(NAME selection_tests COMMAND selection_tests)
+
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
 add_library(model_test_support STATIC
