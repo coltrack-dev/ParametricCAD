@@ -1,6 +1,7 @@
 #include "viewer/PushPullDrag.h"
 #include "viewer/SnapManager.h"
 #include "viewer/TransformMath.h"
+#include "viewer/TransformGizmoPicking.h"
 
 #include <cassert>
 #include <cmath>
@@ -108,6 +109,26 @@ int main()
     assert(held && held->id == QStringLiteral("vertex-a"));
     const auto released = snapManager.findCandidate(QPointF(125.0, 100.0), targets, held);
     assert(released && released->id == QStringLiteral("vertex-b"));
+
+    assert(almostEqual(pointToProjectedSegmentDistance(
+        QPointF(10.0, 5.0), QPointF(0.0, 0.0), QPointF(20.0, 0.0)), 5.0));
+    assert(almostEqual(pointToProjectedCircleDistance(
+        QPointF(13.0, 0.0), QPointF(0.0, 0.0), 10.0), 3.0));
+
+    const std::vector<ScreenHandleGeometry> handles{
+        {TransformHandle::TranslateX, ScreenHandleGeometryKind::Segment,
+         {QPointF(0.0, 0.0), QPointF(100.0, 0.0)}, {}, 0.0, 14.0},
+        {TransformHandle::RotateZ, ScreenHandleGeometryKind::Circle,
+         {}, QPointF(50.0, 50.0), 30.0, 10.0},
+        {TransformHandle::Center, ScreenHandleGeometryKind::Point,
+         {}, QPointF(0.0, 0.0), 0.0, 18.0}
+    };
+    assert(pickClosestHandle(QPointF(72.0, 1.0), handles)
+               == TransformHandle::TranslateX);
+    assert(pickClosestHandle(QPointF(50.0, 20.0), handles)
+               == TransformHandle::RotateZ);
+    assert(pickClosestHandle(QPointF(0.0, 0.0), handles)
+               == TransformHandle::Center);
 
     return 0;
 }

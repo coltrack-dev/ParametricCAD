@@ -8,6 +8,7 @@
 #include <gp_Pnt.hxx>
 
 #include <array>
+#include <vector>
 
 namespace cad::viewer {
 

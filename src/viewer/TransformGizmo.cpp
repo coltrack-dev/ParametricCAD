@@ -1,4 +1,5 @@
 #include "viewer/TransformGizmo.h"
+#include "viewer/TransformGizmoPicking.h"
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -13,23 +14,8 @@ namespace cad::viewer {
 
 namespace
 {
-constexpr double HitTolerancePixels = 12.0;
 constexpr int RingSegments = 48;
 constexpr double Pi = 3.14159265358979323846;
-
-double distanceToSegment(const QPointF& point, const QPointF& first, const QPointF& second)
-{
-    const QPointF direction = second - first;
-    const double lengthSquared = QPointF::dotProduct(direction, direction);
-    if (lengthSquared <= 1.0e-9) return std::hypot(point.x() - first.x(), point.y() - first.y());
-    const double t = std::clamp(
-        QPointF::dotProduct(point - first, direction) / lengthSquared,
-        0.0,
-        1.0
-    );
-    const QPointF nearest = first + direction * t;
-    return std::hypot(point.x() - nearest.x(), point.y() - nearest.y());
-}
 
 Quantity_Color colorFor(
     const TransformHandle handle,
@@ -124,7 +110,7 @@ void TransformGizmo::show(const gp_Pnt& pivot, const Handle(V3d_View)& view)
     Part center;
     center.handle = TransformHandle::Center;
     center.points = {pivot_};
-    center.presentation = new AIS_Shape(BRepPrimAPI_MakeSphere(pivot_, size_ * 0.08).Shape());
+    center.presentation = new AIS_Shape(BRepPrimAPI_MakeSphere(pivot_, size_ * 0.10).Shape());
     center.presentation->SetColor(Quantity_Color(Quantity_NOC_YELLOW));
     context_->Display(center.presentation, Standard_False);
     context_->Deactivate(center.presentation);
@@ -163,38 +149,41 @@ TransformHandle TransformGizmo::hitTest(
     Standard_Integer height = 0;
     view->Window()->Size(width, height);
     const QPointF point(position.x(), height - position.y());
-    TransformHandle result = TransformHandle::None;
-    double best = HitTolerancePixels;
+    std::vector<ScreenHandleGeometry> geometries;
+    geometries.reserve(parts_.size());
+    const auto screenPoint = [&](const gp_Pnt& worldPoint) {
+        const gp_Pnt projected = project(worldPoint, view);
+        return QPointF(projected.X(), height - projected.Y());
+    };
     for (const auto& part : parts_) {
         if (part.points.size() == 1) {
-            const gp_Pnt screen = project(part.points.front(), view);
-            const double distance = std::hypot(
-                point.x() - screen.X(), point.y() - screen.Y());
-            if (distance < best) { best = distance; result = part.handle; }
+            geometries.push_back({
+                part.handle,
+                ScreenHandleGeometryKind::Point,
+                {},
+                screenPoint(part.points.front()),
+                0.0,
+                18.0
+            });
             continue;
         }
-        for (std::size_t index = 1; index < part.points.size(); ++index) {
-            const gp_Pnt first = project(part.points[index - 1], view);
-            const gp_Pnt second = project(part.points[index], view);
-            const double distance = distanceToSegment(
-                point,
-                QPointF(first.X(), first.Y()),
-                QPointF(second.X(), second.Y())
-            );
-            if (distance < best) { best = distance; result = part.handle; }
+        std::vector<QPointF> projected;
+        projected.reserve(part.points.size());
+        for (const auto& worldPoint : part.points) {
+            projected.push_back(screenPoint(worldPoint));
         }
-        if (part.points.size() > 2) {
-            const gp_Pnt first = project(part.points.back(), view);
-            const gp_Pnt second = project(part.points.front(), view);
-            const double distance = distanceToSegment(
-                point,
-                QPointF(first.X(), first.Y()),
-                QPointF(second.X(), second.Y())
-            );
-            if (distance < best) { best = distance; result = part.handle; }
-        }
+        geometries.push_back({
+            part.handle,
+            part.points.size() == 2
+                ? ScreenHandleGeometryKind::Segment
+                : ScreenHandleGeometryKind::Polyline,
+            std::move(projected),
+            {},
+            0.0,
+            part.points.size() == 2 ? 14.0 : 10.0
+        });
     }
-    return result;
+    return pickClosestHandle(point, geometries).value_or(TransformHandle::None);
 }
 
 void TransformGizmo::setHovered(const TransformHandle handle)
