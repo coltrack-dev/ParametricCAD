@@ -1,0 +1,39 @@
+@startuml
+title ParametricCAD — model change and recompute flow
+
+skinparam shadowing false
+autonumber
+
+actor User
+participant FeatureEditorPanel as Panel
+participant ModelingController as Controller
+participant QUndoStack as Stack
+participant ChangeParametricPropertyCommand as Command
+participant Body
+participant ParametricFeature as Feature
+participant ModelPresenter as Presenter
+participant CadViewer as Viewer
+
+User -> Panel : finish property edit
+Panel -> Controller : setFeatureProperty(id, key, value)
+Controller -> Controller : validate descriptor and value
+Controller -> Stack : push(Command(before, after))
+Stack -> Command : redo()
+Command -> Feature : setProperty(after)
+Command -> Body : markDirtyFrom(featureId)
+Command -> Body : recompute()
+Body -> Feature : recompute dirty dependencies
+Feature --> Body : new TopoDS_Shape / error state
+Body --> Command : completed
+Stack --> Controller : indexChanged
+Controller -> Presenter : refresh()
+Presenter -> Body : recompute and inspect visibility
+Presenter -> Viewer : updateFeature(shape, id)
+Presenter -> Viewer : setHiddenFeatures(ids)
+Controller -> Panel : refreshed descriptors and action state
+
+note over Stack,Command
+  QUndoStack::push() calls redo() once.
+  No model mutation occurs before push().
+end note
+@enduml

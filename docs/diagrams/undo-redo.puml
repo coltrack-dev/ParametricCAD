@@ -1,0 +1,44 @@
+@startuml
+title ParametricCAD — Undo / Redo architecture
+
+skinparam shadowing false
+
+actor User
+participant MainWindow
+participant QUndoStack as Stack
+participant "QUndoCommand" as Command
+participant Body
+participant "ParametricFeature history" as History
+participant ModelPresenter as Presenter
+participant CadViewer as Viewer
+participant FeatureEditorPanel as Panel
+
+User -> MainWindow : Ctrl+Z / Ctrl+Y
+MainWindow -> Stack : undo() / redo()
+Stack -> Command : undo() / redo()
+Command -> Body : add/remove feature or change parameter
+Body -> History : mark dirty and recompute
+History --> Body : restored/generated shapes
+Stack -> MainWindow : indexChanged()
+MainWindow -> Presenter : refreshModelView()
+Presenter -> Body : recompute()
+Presenter -> Viewer : update presentations
+Presenter -> Viewer : apply visibility policy
+MainWindow -> Panel : refresh descriptors
+MainWindow -> Panel : preserve valid selection IDs
+
+note right of Command
+  Commands retain stable feature identity
+  and old/new model state.
+
+  Push/Pull is represented by
+  PushPullFeature and uses the existing
+  AddFeatureCommand path.
+end note
+
+note over Viewer,Panel
+  Undo/Redo is model-driven.
+  UI observes the common refresh path;
+  it has no private Push/Pull history.
+end note
+@enduml

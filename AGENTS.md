@@ -132,3 +132,128 @@ After completing a code task, report:
 - a suggested Git commit message.
 
 Keep the final report concise.
+
+## PlantUML (`.puml`) rules
+
+When creating or modifying PlantUML diagrams in this repository, keep the syntax compatible with the PlantUML plugin used in IntelliJ IDEA.
+
+### General rules
+
+- Always use explicit `@startuml` and `@enduml`.
+- Keep one PlantUML declaration per line.
+- Do not place multiple `component`, `interface`, `class`, or similar declarations on the same line.
+- Prefer simple, widely supported PlantUML syntax over compact or experimental syntax.
+- Generated `.puml` files must be directly renderable in IntelliJ IDEA without manual editing.
+
+### Packages
+
+Write package contents on separate lines.
+
+Preferred:
+
+```plantuml
+package "Application" {
+    component ModelingController
+    component ProjectController
+    interface FeatureEditingService
+}
+```
+
+Do not use:
+
+```plantuml
+package "Application" { component ModelingController component ProjectController }
+```
+
+### Components
+
+Use:
+
+```plantuml
+component MainWindow
+component "Primitive / profile features" as PrimitiveFeatures
+```
+
+For abstract components, use a stereotype:
+
+```plantuml
+component ParametricFeature <<abstract>>
+```
+
+Do not use:
+
+```plantuml
+abstract component ParametricFeature
+```
+
+because this syntax may not render correctly in the IntelliJ PlantUML environment.
+
+### Relationships
+
+Prefer explicit standard relationships:
+
+```plantuml
+MainWindow --> ModelingController : modeling actions
+FeatureEditorPanel ..> FeatureEditingService : uses contract
+ModelingController ..|> FeatureEditingService
+Body *-- ParametricFeature
+PrimitiveFeatures --|> ParametricFeature
+```
+
+Use aliases for elements with long names before referencing them in relationships.
+
+Example:
+
+```plantuml
+component "TopoDS_Shape / B-Rep" as BRep
+BasicFeatures --> BRep
+```
+
+### Multiline labels
+
+Use `\n` inside quoted labels:
+
+```plantuml
+component "Operation features\nExtrude, Boolean, PushPull, ..." as OperationFeatures
+```
+
+Do not rely on multiline quoted strings created by formatting the source across several physical lines.
+
+### Notes
+
+Use standard block notes:
+
+```plantuml
+note right of CadViewer
+  Visualization and interaction only.
+  It does not own model history
+  or QUndoStack.
+end note
+```
+
+Keep note text simple and avoid PlantUML markup unless it is needed.
+
+### Formatting
+
+For architecture diagrams, use this baseline unless a diagram requires something different:
+
+```plantuml
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+```
+
+Indent package contents and note contents consistently.
+
+### Validation
+
+After creating or editing a `.puml` file:
+
+1. Check that every declared element referenced by a relationship exists.
+2. Check aliases for spelling mistakes.
+3. Check that `@startuml` / `@enduml` are present.
+4. Avoid unsupported compact syntax.
+5. Render the diagram or otherwise validate it with PlantUML when tooling is available.
+6. Do not consider a PlantUML documentation task complete if the resulting file has obvious syntax errors.
+
+When an existing `.puml` file does not render in IntelliJ, first simplify the syntax rather than replacing the diagram or changing its architecture.

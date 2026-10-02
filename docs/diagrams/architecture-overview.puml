@@ -1,0 +1,79 @@
+@startuml
+title ParametricCAD — component architecture
+
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+
+package "Qt UI" {
+    component MainWindow
+    component FeatureEditorPanel
+    component CadViewer
+}
+
+package "Application" {
+    component ModelingController
+    component ProjectController
+    interface FeatureEditingService
+}
+
+package "Commands" {
+    component QUndoStack
+    component FeatureCommands
+}
+
+package "Parametric model" {
+    component Body
+    component ParametricFeature <<abstract>>
+    component "Primitive / profile features" as PrimitiveFeatures
+    component "Operation features\nExtrude, Boolean, PushPull, ..." as OperationFeatures
+}
+
+package "Geometry / OCCT" {
+    component BasicFeatures
+    component "TopoDS_Shape / B-Rep" as BRep
+}
+
+package "Persistence" {
+    component ProjectFile
+    component ".pcad JSON" as Pcad
+}
+
+MainWindow --> ModelingController : modeling actions
+MainWindow --> ProjectController : open / save / new
+MainWindow --> FeatureEditorPanel : selection and descriptors
+MainWindow --> CadViewer : presentation coordination
+
+FeatureEditorPanel ..> FeatureEditingService : uses contract
+ModelingController ..|> FeatureEditingService
+
+CadViewer --> MainWindow : feature IDs / PushPull commit
+
+ModelingController --> QUndoStack : push / undo / redo
+QUndoStack --> FeatureCommands
+FeatureCommands --> Body : mutate through commands
+
+Body *-- ParametricFeature
+PrimitiveFeatures --|> ParametricFeature
+OperationFeatures --|> ParametricFeature
+
+ParametricFeature --> BasicFeatures : build geometry
+BasicFeatures --> BRep
+
+ProjectController --> ProjectFile
+ProjectFile --> Body : validated load / save
+ProjectFile --> Pcad
+
+note right of CadViewer
+  Visualization and interaction only.
+  It does not own model history
+  or QUndoStack.
+end note
+
+note right of Body
+  Ordered feature history.
+  Dependencies, dirty state,
+  recompute and result shape.
+end note
+
+@enduml

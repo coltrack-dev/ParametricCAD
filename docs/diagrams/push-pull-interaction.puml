@@ -1,0 +1,61 @@
+@startuml
+title ParametricCAD — interactive Push/Pull
+
+skinparam shadowing false
+autonumber
+
+actor User
+participant CadViewer as Viewer
+participant "V3d_View" as View
+participant PushPullDrag as DragMath
+participant MainWindow
+participant ModelingController as Controller
+participant QUndoStack as Stack
+participant AddFeatureCommand as Command
+participant PushPullFeature as Feature
+participant ModelPresenter as Presenter
+
+User -> Viewer : press P and click planar face
+Viewer -> Viewer : capture face ID, face index, normal
+Viewer -> View : ConvertWithProj(mouse position)
+View --> Viewer : world ray
+Viewer -> DragMath : create drag state(anchor, normal, camera)
+DragMath --> Viewer : drag plane
+
+loop mouse move
+    User -> Viewer : move cursor
+    Viewer -> View : ConvertWithProj(current position)
+    View --> Viewer : world ray
+    Viewer -> DragMath : intersect ray with drag plane
+    DragMath --> Viewer : world point and distance
+    Viewer -> Viewer : build preview from absolute distance
+    Viewer -> Viewer : update temporary AIS preview
+end
+
+User -> Viewer : release / confirm
+Viewer -> MainWindow : commit(targetId, faceIndex, normal, distance)
+MainWindow -> Controller : pushPull(...)
+Controller -> Feature : construct PushPullFeature
+Controller -> Stack : push(AddFeatureCommand)
+Stack -> Command : redo()
+Command -> Feature : insert and recompute
+Feature --> Command : fused or cut shape
+Stack -> MainWindow : indexChanged()
+MainWindow -> Presenter : refresh()
+Presenter -> Viewer : replace preview with model presentation
+
+note over DragMath
+  Distance is projected in world space:
+  ray -> drag plane -> delta · normal
+
+  No pixels-to-model coefficient.
+  A head-on normal uses a stable
+  camera-up depth-control fallback.
+end note
+
+note over Viewer,Feature
+  Preview is transient.
+  Commit creates exactly one undoable
+  model operation.
+end note
+@enduml
