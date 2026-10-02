@@ -24,8 +24,8 @@ ChangeParametricPropertyCommand::ChangeParametricPropertyCommand(
     parametric::Body& body,
     parametric::ParametricFeature::Ptr feature,
     std::string key,
-    const double before,
-    const double after,
+    parametric::PropertyValue before,
+    parametric::PropertyValue after,
     const QString& text
 )
     : QUndoCommand(text), body_(body), feature_(std::move(feature)),
@@ -36,10 +36,10 @@ ChangeParametricPropertyCommand::ChangeParametricPropertyCommand(
     }
 }
 
-void ChangeParametricPropertyCommand::apply(const double value)
+void ChangeParametricPropertyCommand::apply(const parametric::PropertyValue& value)
 {
-    if (!feature_->setNumericProperty(key_, value)) {
-        throw std::invalid_argument("Feature does not expose numeric property '" + key_ + "'");
+    if (!feature_->setProperty(key_, value)) {
+        throw std::invalid_argument("Feature does not expose property '" + key_ + "'");
     }
     body_.markDirtyFrom(feature_->id());
     body_.recompute();

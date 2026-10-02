@@ -78,6 +78,15 @@ bool ParametricFeature::setNumericProperty(const std::string&, double)
     return false;
 }
 
+bool ParametricFeature::setProperty(
+    const std::string& key,
+    const PropertyValue& value
+)
+{
+    if (!std::holds_alternative<double>(value)) return false;
+    return setNumericProperty(key, std::get<double>(value));
+}
+
 QJsonObject ParametricFeature::serialize() const
 {
     QJsonObject object{

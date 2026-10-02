@@ -33,19 +33,19 @@ public:
         parametric::Body& body,
         parametric::ParametricFeature::Ptr feature,
         std::string key,
-        double before,
-        double after,
+        parametric::PropertyValue before,
+        parametric::PropertyValue after,
         const QString& text
     );
     void undo() override;
     void redo() override;
 private:
-    void apply(double value);
+    void apply(const parametric::PropertyValue& value);
     parametric::Body& body_;
     parametric::ParametricFeature::Ptr feature_;
     std::string key_;
-    double before_;
-    double after_;
+    parametric::PropertyValue before_;
+    parametric::PropertyValue after_;
 };
 
 class RemoveFeatureCommand final : public QUndoCommand

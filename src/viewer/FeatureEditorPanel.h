@@ -1,14 +1,10 @@
 #pragma once
 
-#include "model/Body.h"
-
 #include <QWidget>
-#include <QPointer>
-#include <QUndoStack>
 #include <QStringList>
+#include "application/FeatureEditingService.h"
 
 #include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,18 +12,14 @@ class QFormLayout;
 class QLabel;
 class QTreeWidget;
 
-namespace cad::parametric {
-class ParametricFeature;
-enum class BooleanOperation;
-}
-
 class FeatureEditorPanel final : public QWidget
 {
 public:
     explicit FeatureEditorPanel(QWidget* parent = nullptr);
 
-    void setBody(cad::parametric::Body* body);
-    void setUndoStack(QUndoStack* stack);
+    void setService(cad::application::FeatureEditingService* service);
+    void setFeatures(std::vector<cad::application::FeatureDescriptor> features);
+    void setActionState(const cad::application::ModelingActionState& state);
     void scheduleRefresh();
     void commitPendingEdits();
     void setModelChangedHandler(std::function<void()> handler);
@@ -42,9 +34,6 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    using FeaturePtr =
-        std::shared_ptr<cad::parametric::ParametricFeature>;
-
     void createUi();
     void updateSelectedProperties();
 
@@ -55,31 +44,26 @@ private:
     void addTorus();
     void addHexagon();
 
-    void addBoolean(
-        cad::parametric::BooleanOperation operation,
-        const QString& operationName
-    );
+    void addBoolean(cad::application::BooleanKind operation, const QString& operationName);
 
     void showFeature(const std::string& featureId);
 
-    std::vector<FeaturePtr> selectedFeatures() const;
-
-    void rebuildProperties(const FeaturePtr& feature);
+    void rebuildProperties(const cad::application::FeatureDescriptor* feature);
     void clearProperties();
 
-    void addFeature(const FeaturePtr& feature);
-
-    void recomputeAndNotify(
-        const QString& successMessage
-    );
+    void reportResult(const cad::application::ModelingResult& result);
 
     void setPanelMessage(
         const QString& message,
         bool error = false
     );
 
-    cad::parametric::Body* body_{nullptr};
-    QPointer<QUndoStack> undoStack_;
+    cad::application::FeatureEditingService* service_{nullptr};
+    std::vector<cad::application::FeatureDescriptor> features_;
+    bool canDelete_{false};
+    bool canCreateFace_{false};
+    bool canExtrude_{false};
+    bool canBoolean_{false};
     bool refreshPending_{false};
     bool updatingProperties_{false};
 

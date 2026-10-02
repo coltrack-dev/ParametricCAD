@@ -26,9 +26,11 @@ enum class FeatureRole
     Face
 };
 
+using PropertyValue = std::variant<bool, int, double, std::string>;
+
 struct FeatureProperty
 {
-    using Value = std::variant<double, std::string>;
+    using Value = PropertyValue;
 
     std::string key;
     std::string label;
@@ -65,6 +67,7 @@ public:
     virtual std::string creationLabel() const;
     virtual std::vector<FeatureProperty> properties() const;
     virtual std::vector<std::string> hiddenDependencyIds() const;
+    virtual bool setProperty(const std::string& key, const PropertyValue& value);
     virtual bool setNumericProperty(const std::string& key, double value);
     QJsonObject serialize() const;
 

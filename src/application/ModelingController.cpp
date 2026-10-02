@@ -5,6 +5,7 @@
 
 #include <QUuid>
 
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
 
@@ -27,6 +28,19 @@ cad::parametric::Body& ModelingController::body() noexcept { return body_; }
 const cad::parametric::Body& ModelingController::body() const noexcept { return body_; }
 Document& ModelingController::document() noexcept { return document_; }
 QUndoStack& ModelingController::undoStack() noexcept { return undoStack_; }
+void ModelingController::undo() { undoStack_.undo(); }
+void ModelingController::redo() { undoStack_.redo(); }
+
+std::vector<FeatureDescriptor> ModelingController::features() const
+{
+    std::vector<FeatureDescriptor> result;
+    result.reserve(body_.features().size());
+    for (const auto& feature : body_.features()) {
+        result.push_back({feature->id(), feature->name(), feature->state(),
+                          feature->error(), feature->properties()});
+    }
+    return result;
+}
 
 ModelingResult ModelingController::addFeature(
     const cad::parametric::ParametricFeature::Ptr& feature
@@ -57,6 +71,28 @@ ModelingResult ModelingController::createSketch()
 {
     return addFeature(std::make_shared<cad::parametric::SketchFeature>(
         id("sketch"), 100.0, 60.0));
+}
+
+ModelingResult ModelingController::createPrimitive(const PrimitiveKind kind)
+{
+    switch (kind) {
+    case PrimitiveKind::Box: return createBox();
+    case PrimitiveKind::Cylinder: return createCylinder();
+    case PrimitiveKind::Sketch: return createSketch();
+    case PrimitiveKind::Cone:
+        return addFeature(std::make_shared<cad::parametric::ConeFeature>(
+            id("cone"), 30.0, 15.0, 60.0));
+    case PrimitiveKind::Sphere:
+        return addFeature(std::make_shared<cad::parametric::SphereFeature>(
+            id("sphere"), 35.0));
+    case PrimitiveKind::Torus:
+        return addFeature(std::make_shared<cad::parametric::TorusFeature>(
+            id("torus"), 45.0, 12.0));
+    case PrimitiveKind::Hexagon:
+        return addFeature(std::make_shared<cad::parametric::HexagonFeature>(
+            id("hexagon"), 30.0, 12.0));
+    }
+    return {false, {}, "Unsupported primitive"};
 }
 
 ModelingResult ModelingController::createFace(
@@ -94,7 +130,7 @@ ModelingResult ModelingController::createExtrude(
 }
 
 ModelingResult ModelingController::createBoolean(
-    const cad::parametric::BooleanOperation operation,
+    const BooleanKind requestedOperation,
     const std::vector<std::string>& selection,
     const std::string& currentId
 )
@@ -103,6 +139,11 @@ ModelingResult ModelingController::createBoolean(
     auto left = body_.findFeature(selection[0]);
     auto right = body_.findFeature(selection[1]);
     if (!left || !right) return {false, {}, "Selected feature does not exist"};
+    const auto operation = requestedOperation == BooleanKind::Fuse
+        ? cad::parametric::BooleanOperation::Fuse
+        : requestedOperation == BooleanKind::Cut
+            ? cad::parametric::BooleanOperation::Cut
+            : cad::parametric::BooleanOperation::Common;
     if (operation == cad::parametric::BooleanOperation::Cut && !currentId.empty()) {
         const auto current = body_.findFeature(currentId);
         if (!current) return {false, {}, "Selected cutting tool does not exist"};
@@ -111,6 +152,42 @@ ModelingResult ModelingController::createBoolean(
     try {
         return addFeature(std::make_shared<cad::parametric::BooleanFeature>(
             id("boolean"), left, right, operation));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::setFeatureProperty(
+    const std::string& featureId,
+    const std::string& propertyKey,
+    const cad::parametric::PropertyValue& value
+)
+{
+    const auto feature = body_.findFeature(featureId);
+    if (!feature) return {false, {}, "Feature does not exist"};
+    const auto properties = feature->properties();
+    const auto property = std::find_if(properties.begin(), properties.end(),
+        [&propertyKey](const auto& candidate) { return candidate.key == propertyKey; });
+    if (property == properties.end() || !property->editable) {
+        return {false, {}, "Property is not editable"};
+    }
+    if (property->value.index() != value.index()) {
+        return {false, {}, "Property value has an invalid type"};
+    }
+    if (const auto numeric = std::get_if<double>(&value)) {
+        if (property->minimum && *numeric < *property->minimum) {
+            return {false, {}, "Property value is below the minimum"};
+        }
+        if (property->maximum && *numeric > *property->maximum) {
+            return {false, {}, "Property value is above the maximum"};
+        }
+    }
+    try {
+        undoStack_.push(new cad::commands::ChangeParametricPropertyCommand(
+            body_, feature, propertyKey, property->value, value,
+            QString("Change ") + QString::fromStdString(feature->name())
+                + " " + QString::fromStdString(property->label)));
+        return {true, featureId, {}};
     } catch (const std::exception& error) {
         return failure(error);
     }

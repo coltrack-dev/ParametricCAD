@@ -4,6 +4,9 @@
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
 
+#include <algorithm>
+#include <variant>
+
 using namespace cad::application;
 using namespace cad::parametric;
 
@@ -39,7 +42,7 @@ private slots:
         const auto cylinder = controller.createCylinder();
         QVERIFY(box.success && cylinder.success);
         const auto boolean = controller.createBoolean(
-            BooleanOperation::Cut, {box.id, cylinder.id}, cylinder.id);
+            BooleanKind::Cut, {box.id, cylinder.id}, cylinder.id);
         QVERIFY(boolean.success);
         QVERIFY(controller.actionState({box.id, cylinder.id}).canBoolean);
     }
@@ -70,6 +73,39 @@ private slots:
         file.close();
         QVERIFY(!projects.open(invalid, error));
         QCOMPARE(controller.body().features().size(), std::size_t{1});
+    }
+
+    void propertyEditingIsUndoableAndValidated()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+
+        const auto initial = controller.features().front();
+        const auto width = std::find_if(initial.properties.begin(),
+            initial.properties.end(), [](const auto& property) {
+                return property.key == "width";
+            });
+        QVERIFY(width != initial.properties.end());
+        QCOMPARE(std::get<double>(width->value), 100.0);
+
+        const auto changed = controller.setFeatureProperty(box.id, "width", 42.0);
+        QVERIFY(changed.success);
+        QCOMPARE(std::get<double>(controller.features().front().properties.front().value),
+                 42.0);
+        QVERIFY(controller.body().findFeature(box.id)->state()
+                == FeatureState::UpToDate);
+
+        controller.undo();
+        QCOMPARE(std::get<double>(controller.features().front().properties.front().value),
+                 100.0);
+        controller.redo();
+        QCOMPARE(std::get<double>(controller.features().front().properties.front().value),
+                 42.0);
+
+        QVERIFY(!controller.setFeatureProperty(box.id, "missing", 1.0).success);
+        QVERIFY(!controller.setFeatureProperty(box.id, "width", 0.0).success);
+        QVERIFY(!controller.setFeatureProperty(box.id, "width", std::string("42")).success);
     }
 };
 

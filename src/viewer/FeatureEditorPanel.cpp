@@ -1,8 +1,6 @@
 #include "viewer/FeatureEditorPanel.h"
 
-#include "model/ParametricFeature.h"
-#include "commands/FeatureCommands.h"
-#include "operations/ParametricFeatures.h"
+#include "application/FeatureEditingService.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -15,15 +13,14 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTimer>
-#include <QUuid>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
-#include <memory>
 #include <algorithm>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -54,9 +51,28 @@ FeatureEditorPanel::FeatureEditorPanel(QWidget* parent)
     createUi();
 }
 
-void FeatureEditorPanel::setBody(cad::parametric::Body* body)
+void FeatureEditorPanel::setService(cad::application::FeatureEditingService* service)
 {
-    body_ = body;
+    service_ = service;
+    refresh();
+}
+
+void FeatureEditorPanel::setFeatures(
+    std::vector<cad::application::FeatureDescriptor> features
+)
+{
+    features_ = std::move(features);
+    refresh();
+}
+
+void FeatureEditorPanel::setActionState(
+    const cad::application::ModelingActionState& state
+)
+{
+    canDelete_ = state.canDelete;
+    canCreateFace_ = state.canCreateFace;
+    canExtrude_ = state.canExtrude;
+    canBoolean_ = state.canBoolean;
     refresh();
 }
 
@@ -74,7 +90,7 @@ void FeatureEditorPanel::commitPendingEdits()
 
 bool FeatureEditorPanel::eventFilter(QObject* watched, QEvent* event)
 {
-    if (undoStack_ && (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress)) {
+    if (service_ && (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress)) {
         const auto* key = static_cast<QKeyEvent*>(event);
         const bool undo = key->matches(QKeySequence::Undo)
             || (key->modifiers() == Qt::ControlModifier && key->key() == Qt::Key_Z);
@@ -84,8 +100,8 @@ bool FeatureEditorPanel::eventFilter(QObject* watched, QEvent* event)
             event->accept();
             if (event->type() == QEvent::KeyPress) {
                 commitPendingEdits();
-                if (undo) undoStack_->undo();
-                else undoStack_->redo();
+                if (undo) service_->undo();
+                else service_->redo();
                 scheduleRefresh();
             }
             return true;
@@ -94,23 +110,16 @@ bool FeatureEditorPanel::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
-void FeatureEditorPanel::setUndoStack(QUndoStack* stack)
+void FeatureEditorPanel::reportResult(const cad::application::ModelingResult& result)
 {
-    undoStack_ = stack;
-}
-
-void FeatureEditorPanel::addFeature(const FeaturePtr& feature)
-{
-    if (!body_ || !undoStack_) return;
-    try {
-        const QString text = QString::fromStdString(feature->creationLabel());
-        undoStack_->push(new cad::commands::AddFeatureCommand(*body_, feature, text));
-        refresh();
-        selectFeatures({QString::fromStdString(feature->id())});
-        if (featureSelectedHandler_) featureSelectedHandler_(selectedFeatureIds());
-    } catch (const std::exception& error) {
-        setPanelMessage(QString::fromUtf8(error.what()), true);
+    if (!result.success) {
+        setPanelMessage(QString::fromStdString(result.error), true);
+        return;
     }
+    setPanelMessage({}, false);
+    refresh();
+    selectFeatures({QString::fromStdString(result.id)});
+    if (modelChangedHandler_) modelChangedHandler_();
 }
 
 void FeatureEditorPanel::setModelChangedHandler(
@@ -253,7 +262,7 @@ void FeatureEditorPanel::createUi()
         this,
         [this]() {
             addBoolean(
-                cad::parametric::BooleanOperation::Fuse,
+                cad::application::BooleanKind::Fuse,
                 "Fuse"
             );
         }
@@ -265,7 +274,7 @@ void FeatureEditorPanel::createUi()
         this,
         [this]() {
             addBoolean(
-                cad::parametric::BooleanOperation::Cut,
+                cad::application::BooleanKind::Cut,
                 "Cut"
             );
         }
@@ -277,7 +286,7 @@ void FeatureEditorPanel::createUi()
         this,
         [this]() {
             addBoolean(
-                cad::parametric::BooleanOperation::Common,
+                cad::application::BooleanKind::Common,
                 "Common"
             );
         }
@@ -303,283 +312,52 @@ void FeatureEditorPanel::createUi()
 
 void FeatureEditorPanel::addBox()
 {
-    if (body_ == nullptr) {
-        return;
-    }
-
-    const std::string id =
-        "box-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addFeature(
-        std::make_shared<
-            cad::parametric::BoxParametricFeature
-        >(
-            id,
-            100.0,
-            70.0,
-            30.0
-        )
-    );
-
-    recomputeAndNotify("Box added");
+    reportResult(service_->createPrimitive(cad::application::PrimitiveKind::Box));
 }
 
 void FeatureEditorPanel::addCylinder()
 {
-    if (body_ == nullptr) {
-        return;
-    }
-
-    const std::string id =
-        "cylinder-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addFeature(
-        std::make_shared<
-            cad::parametric::CylinderParametricFeature
-        >(
-            id,
-            25.0,
-            60.0
-        )
-    );
-
-    recomputeAndNotify("Cylinder added");
+    reportResult(service_->createPrimitive(cad::application::PrimitiveKind::Cylinder));
 }
 
 void FeatureEditorPanel::addCone()
 {
-    if (body_ == nullptr) {
-        return;
-    }
-
-    const std::string id =
-        "cone-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addFeature(
-        std::make_shared<cad::parametric::ConeFeature>(
-            id,
-            30.0,
-            15.0,
-            60.0
-        )
-    );
-
-    recomputeAndNotify("Cone added");
+    reportResult(service_->createPrimitive(cad::application::PrimitiveKind::Cone));
 }
 
 void FeatureEditorPanel::addSphere()
 {
-    if (body_ == nullptr) {
-        return;
-    }
-
-    const std::string id =
-        "sphere-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addFeature(
-        std::make_shared<cad::parametric::SphereFeature>(
-            id,
-            35.0
-        )
-    );
-
-    recomputeAndNotify("Sphere added");
+    reportResult(service_->createPrimitive(cad::application::PrimitiveKind::Sphere));
 }
 
 void FeatureEditorPanel::addTorus()
 {
-    if (body_ == nullptr) {
-        return;
-    }
-
-    const std::string id =
-        "torus-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addFeature(
-        std::make_shared<cad::parametric::TorusFeature>(
-            id,
-            45.0,
-            12.0
-        )
-    );
-
-    recomputeAndNotify("Torus added");
+    reportResult(service_->createPrimitive(cad::application::PrimitiveKind::Torus));
 }
 
 
 void FeatureEditorPanel::addHexagon()
 {
-    if (body_ == nullptr) {
-        return;
-    }
-
-    const std::string id =
-        "hexagon-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    addFeature(
-        std::make_shared<cad::parametric::HexagonFeature>(
-            id,
-            30.0,
-            12.0
-        )
-    );
-
-    recomputeAndNotify("Hexagon added");
+    reportResult(service_->createPrimitive(cad::application::PrimitiveKind::Hexagon));
 }
 
 void FeatureEditorPanel::addBoolean(
-    const cad::parametric::BooleanOperation operation,
+    const cad::application::BooleanKind operation,
     const QString& operationName
 )
 {
-    if (body_ == nullptr) {
-        return;
-    }
-
-    std::vector<FeaturePtr> features =
-        selectedFeatures();
-
-    if (features.size() != 2) {
-        setPanelMessage(
-            "Select exactly two features in the tree. "
-            "Use Ctrl+Click for multi-selection.",
-            true
-        );
-        return;
-    }
-
-    // For Cut, make the operation order deterministic:
-    // select the base first, then Ctrl+Click the cutting tool.
-    // QTreeWidget::currentItem() is the last/currently focused item,
-    // so we treat it as the cutting tool and the other selected item
-    // as the base.
-    if (operation == cad::parametric::BooleanOperation::Cut) {
-        QTreeWidgetItem* currentItem = tree_->currentItem();
-
-        if (currentItem == nullptr) {
-            setPanelMessage(
-                "For Cut: select the base, then Ctrl+Click the cutting tool.",
-                true
-            );
-            return;
-        }
-
-        const QString currentId =
-            currentItem->data(0, FeatureIdRole).toString();
-
-        FeaturePtr cuttingTool =
-            body_->findFeature(currentId.toStdString());
-
-        if (!cuttingTool) {
-            setPanelMessage(
-                "Could not determine the cutting tool.",
-                true
-            );
-            return;
-        }
-
-        FeaturePtr baseFeature;
-
-        for (const FeaturePtr& feature : features) {
-            if (feature && feature->id() != cuttingTool->id()) {
-                baseFeature = feature;
-                break;
-            }
-        }
-
-        if (!baseFeature) {
-            setPanelMessage(
-                "Could not determine the base feature.",
-                true
-            );
-            return;
-        }
-
-        features[0] = baseFeature;
-        features[1] = cuttingTool;
-
-    }
-
-    const std::string id =
-        operationName.toLower().toStdString()
-        + "-"
-        + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-
-    auto booleanFeature =
-        std::make_shared<cad::parametric::BooleanFeature>(
-            id,
-            features[0],
-            features[1],
-            operation
-        );
-
-    booleanFeature->setName(
-        operationName.toStdString()
-    );
-
-    if (operation == cad::parametric::BooleanOperation::Cut) {
-        int sequence = 1;
-        QString name;
-        bool exists;
-        do {
-            name = QString("Cut%1").arg(sequence++, 3, 10, QLatin1Char('0'));
-            exists = false;
-            for (const auto& feature : body_->features()) {
-                if (feature->name() == name.toStdString()) exists = true;
-            }
-        } while (exists);
-        booleanFeature->setName(name.toStdString());
-    }
-
-    if (!booleanFeature->recompute()) {
-        setPanelMessage(QString::fromStdString(booleanFeature->error()), true);
-        return;
-    }
-
-    addFeature(booleanFeature);
-
-    recomputeAndNotify(
-        operationName + " added"
-    );
-    if (booleanFeature->state() == cad::parametric::FeatureState::UpToDate) {
-        selectFeatures({QString::fromStdString(booleanFeature->id())});
-        if (featureSelectedHandler_) featureSelectedHandler_(selectedFeatureIds());
-    }
-}
-
-std::vector<FeatureEditorPanel::FeaturePtr>
-FeatureEditorPanel::selectedFeatures() const
-{
-    std::vector<FeaturePtr> result;
-
-    if (body_ == nullptr || tree_ == nullptr) {
-        return result;
-    }
-
-    const QList<QTreeWidgetItem*> selectedItems =
-        tree_->selectedItems();
-
-    for (QTreeWidgetItem* item : selectedItems) {
-        if (item == nullptr) {
-            continue;
-        }
-
-        const QString id =
-            item->data(0, FeatureIdRole).toString();
-
-        if (id.isEmpty()) {
-            continue;
-        }
-
-        FeaturePtr feature =
-            body_->findFeature(id.toStdString());
-
-        if (feature) {
-            result.push_back(feature);
-        }
-    }
-
-    return result;
+    Q_UNUSED(operationName);
+    const auto ids = selectedFeatureIds();
+    const auto current = tree_->currentItem();
+    reportResult(service_->createBoolean(
+        operation,
+        [&ids]() {
+            std::vector<std::string> result;
+            for (const auto& id : ids) result.push_back(id.toStdString());
+            return result;
+        }(),
+        current ? current->data(0, FeatureIdRole).toString().toStdString() : std::string{}));
+    return;
 }
 
 void FeatureEditorPanel::refresh()
@@ -602,27 +380,14 @@ void FeatureEditorPanel::refresh()
         new QTreeWidgetItem(tree_, QStringList{"Body"});
     bodyItem->setExpanded(true);
 
-    if (body_ == nullptr) {
-        clearProperties();
-        return;
-    }
-
     QTreeWidgetItem* currentItemToRestore = nullptr;
 
-    for (const FeaturePtr& feature : body_->features()) {
-        if (!feature) {
-            continue;
-        }
+    for (const auto& feature : features_) {
+        QString title = QString::fromStdString(feature.name);
 
-        QString title =
-            QString::fromStdString(feature->name());
-
-        if (feature->state()
-            == cad::parametric::FeatureState::Dirty) {
+        if (feature.state == cad::parametric::FeatureState::Dirty) {
             title += " *";
-        } else if (
-            feature->state()
-            == cad::parametric::FeatureState::Failed) {
+        } else if (feature.state == cad::parametric::FeatureState::Failed) {
             title += " [FAILED]";
         }
 
@@ -632,8 +397,7 @@ void FeatureEditorPanel::refresh()
                 QStringList{title}
             );
 
-        const QString id =
-            QString::fromStdString(feature->id());
+        const QString id = QString::fromStdString(feature.id);
 
         item->setData(
             0,
@@ -659,18 +423,13 @@ void FeatureEditorPanel::showFeature(
     const std::string& featureId
 )
 {
-    if (body_ == nullptr) {
-        clearProperties();
-        return;
-    }
-
-    rebuildProperties(
-        body_->findFeature(featureId)
-    );
+    const auto feature = std::find_if(features_.begin(), features_.end(),
+        [&featureId](const auto& candidate) { return candidate.id == featureId; });
+    rebuildProperties(feature == features_.end() ? nullptr : &*feature);
 }
 
 void FeatureEditorPanel::rebuildProperties(
-    const FeaturePtr& feature
+    const cad::application::FeatureDescriptor* feature
 )
 {
     const QScopedValueRollback guard(updatingProperties_, true);
@@ -683,7 +442,7 @@ void FeatureEditorPanel::rebuildProperties(
     propertiesLayout_->addRow(
         "Name",
         new QLabel(
-            QString::fromStdString(feature->name()),
+            QString::fromStdString(feature->name),
             propertiesWidget_
         )
     );
@@ -691,17 +450,16 @@ void FeatureEditorPanel::rebuildProperties(
     propertiesLayout_->addRow(
         "Id",
         new QLabel(
-            QString::fromStdString(feature->id()),
+            QString::fromStdString(feature->id),
             propertiesWidget_
         )
     );
 
-    if (feature->state()
-        == cad::parametric::FeatureState::Failed) {
+    if (feature->state == cad::parametric::FeatureState::Failed) {
 
         auto* errorLabel =
             new QLabel(
-                QString::fromStdString(feature->error()),
+                QString::fromStdString(feature->error),
                 propertiesWidget_
             );
 
@@ -716,7 +474,7 @@ void FeatureEditorPanel::rebuildProperties(
         );
     }
 
-    const auto addParameter = [this, &feature](const cad::parametric::FeatureProperty& property) {
+    const auto addParameter = [this, feature](const cad::parametric::FeatureProperty& property) {
         const double value = std::get<double>(property.value);
         QDoubleSpinBox* editor = makeLengthEditor(propertiesWidget_, value);
         if (property.minimum) editor->setMinimum(*property.minimum);
@@ -727,31 +485,27 @@ void FeatureEditorPanel::rebuildProperties(
         propertiesLayout_->addRow(label, editor);
         connect(editor, &QDoubleSpinBox::editingFinished, this,
             [this, feature, property, label, editor]() {
-                if (updatingProperties_ || refreshPending_ || !body_ || !undoStack_ || body_->findFeature(feature->id()) != feature) return;
-                const auto properties = feature->properties();
-                const auto current = std::find_if(properties.begin(), properties.end(),
-                    [&property](const auto& candidate) { return candidate.key == property.key; });
-                if (current == properties.end() || !std::holds_alternative<double>(current->value)) return;
-                const double before = std::get<double>(current->value);
+                if (updatingProperties_ || refreshPending_ || !service_) return;
                 const double after = editor->value();
-                if (before == after) return;
-                undoStack_->push(new cad::commands::ChangeParametricPropertyCommand(
-                    *body_, feature, property.key, before, after,
-                    "Change " + QString::fromStdString(feature->name()) + " " + label));
-                scheduleRefresh();
+                reportResult(service_->setFeatureProperty(
+                    feature->id, property.key, after));
             });
     };
 
-    const auto properties = feature->properties();
+    const auto& properties = feature->properties;
     for (const auto& property : properties) {
         if (property.editable && std::holds_alternative<double>(property.value)) {
             addParameter(property);
-        } else if (std::holds_alternative<double>(property.value)) {
-            propertiesLayout_->addRow(QString::fromStdString(property.label),
-                new QLabel(QString::number(std::get<double>(property.value)), propertiesWidget_));
         } else {
+            const auto value = std::visit([](const auto& item) {
+                using Value = std::decay_t<decltype(item)>;
+                if constexpr (std::is_same_v<Value, bool>) return QString(item ? "true" : "false");
+                else if constexpr (std::is_same_v<Value, int>) return QString::number(item);
+                else if constexpr (std::is_same_v<Value, double>) return QString::number(item);
+                else return QString::fromStdString(item);
+            }, property.value);
             propertiesLayout_->addRow(QString::fromStdString(property.label),
-                new QLabel(QString::fromStdString(std::get<std::string>(property.value)), propertiesWidget_));
+                new QLabel(value, propertiesWidget_));
         }
     }
 
@@ -799,43 +553,6 @@ void FeatureEditorPanel::scheduleRefresh()
             refresh();
         }
     );
-}
-
-void FeatureEditorPanel::recomputeAndNotify(
-    const QString& successMessage
-)
-{
-    if (body_ == nullptr) {
-        return;
-    }
-
-    if (!body_->recompute()) {
-        setPanelMessage(
-            QString::fromStdString(
-                body_->lastError()
-            ),
-            true
-        );
-
-        refresh();
-
-        if (modelChangedHandler_) {
-            modelChangedHandler_();
-        }
-
-        return;
-    }
-
-    setPanelMessage(
-        successMessage,
-        false
-    );
-
-    refresh();
-
-    if (modelChangedHandler_) {
-        modelChangedHandler_();
-    }
 }
 
 void FeatureEditorPanel::setPanelMessage(

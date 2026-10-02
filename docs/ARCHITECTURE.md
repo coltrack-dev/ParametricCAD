@@ -10,7 +10,7 @@ model from OCCT visualization and from the Qt user interface.
 MainWindow
     ├── ModelingController ──> Document / Body / commands
     ├── ProjectController  ──> ProjectFile and project lifecycle
-    ├── FeatureEditorPanel ──> model properties and selection IDs
+  ├── FeatureEditorPanel ──> FeatureEditingService (DTOs and stable IDs)
     └── ModelPresenter     ──> CadViewer
 
 Body ──> ParametricFeature ──> operations / BasicFeatures ──> TopoDS_Shape
@@ -52,7 +52,9 @@ application:
 - `typeId()` identifies a feature in the persistence registry;
 - `role()` exposes semantic capabilities such as `Sketch` and `Face`;
 - `properties()` returns editable or read-only `FeatureProperty` metadata;
-- `setNumericProperty()` applies an edit without exposing the concrete class;
+- `setProperty()` applies a type-checked edit without exposing the concrete
+  class; the current `PropertyValue` supports `bool`, `int`, `double` and
+  `string`;
 - `serialize()` delegates parameter encoding to the feature;
 - `hiddenDependencyIds()` supplies presentation-specific visibility rules;
 - `creationLabel()` supplies the undo command label.
@@ -62,9 +64,10 @@ serialization parameters. It should not require another RTTI branch in
 `MainWindow`, `FeatureEditorPanel`, `Body`, or the viewer.
 
 `FeatureProperty` is intentionally small: it contains a stable key, display
-label, a `double` or `string` value, optional numeric limits, and an editable
-flag. The editor creates controls from this metadata and records changes with
-the generic `ChangeParametricPropertyCommand`.
+label, a `PropertyValue`, optional numeric limits, and an editable flag. The
+editor creates controls from this metadata and sends edits to the generic
+`FeatureEditingService`; `ModelingController` validates the descriptor and
+records changes with `ChangeParametricPropertyCommand`.
 
 ## Parametric features and recompute
 
@@ -122,17 +125,22 @@ The application layer is in `src/application`:
 - `ProjectController` performs validated save/load/new-project operations. A
   loaded project is prepared by `ProjectFile` before replacing the active
   model, and successful saves update the undo-stack clean state.
+- `FeatureEditingService` is the narrow application-facing contract used by
+  `FeatureEditorPanel`. It exposes feature descriptors, property metadata,
+  action state, modeling actions, and undo/redo without exposing `Body`,
+  `Document`, concrete feature classes, or `QUndoStack` to the widget.
 
 `MainWindow` is the Qt shell. It creates menus, dialogs and widgets, forwards
 actions to the application controllers, displays errors/status, and routes
 selection IDs between the viewer and editor. It does not construct feature
 objects, inspect model dependencies, build commands, or serialize projects.
 
-`FeatureEditorPanel` provides the model tree and property editors. It changes
-feature parameters through model APIs and uses `QUndoStack` commands for
-creation, deletion, parameter edits, and project clearing. Commands retain
-feature ownership where necessary, but do not own or replace the `Document` or
-`Body` containers.
+`FeatureEditorPanel` provides the model tree and property editors. It stores
+only presentation descriptors and stable feature IDs. Button actions and
+property edits call `FeatureEditingService`; the application layer creates and
+pushes commands, recomputes the model, and supplies refreshed descriptors.
+Consequently the panel has no direct dependency on `Body`, `Document`,
+`QUndoStack`, commands, or concrete feature classes.
 
 `ModelPresenter` is the model/view adapter. It recomputes the Body, updates
 feature presentations, retains current IDs, and applies polymorphic visibility
@@ -150,6 +158,7 @@ The normal model-to-view flow is:
 edit command
     -> mark affected feature(s) dirty
     -> Body::recompute()
+    -> application state supplies refreshed feature descriptors
     -> MainWindow refreshes feature presentations
     -> CadViewer displays the resulting shapes
 ```
@@ -159,7 +168,9 @@ IDs and `MainWindow` forwards them to `FeatureEditorPanel`.
 
 Controller behavior is testable without starting the Qt GUI. The headless
 controller tests cover stable-ID selection, Sketch → Face → Extrude creation,
-Boolean Cut creation, undo/redo, project replacement, and invalid-load safety.
+Boolean Cut creation, property validation and property undo/redo, project
+replacement, and invalid-load safety. Widget regression tests use the same
+service contract rather than injecting model containers or an undo stack.
 
 ## Persistence
 

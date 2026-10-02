@@ -40,8 +40,7 @@ MainWindow::MainWindow(QWidget* parent)
 MainWindow::~MainWindow()
 {
     disconnect(&modeling_.undoStack(), nullptr, this, nullptr);
-    featureEditorPanel_->setUndoStack(nullptr);
-    featureEditorPanel_->setBody(nullptr);
+    featureEditorPanel_->setService(nullptr);
 }
 
 void MainWindow::createParametricPanel()
@@ -54,8 +53,9 @@ void MainWindow::createParametricPanel()
     featureEditorPanel_ =
         new FeatureEditorPanel(dockWidget);
 
-    featureEditorPanel_->setUndoStack(&modeling_.undoStack());
-    featureEditorPanel_->setBody(&modeling_.body());
+    featureEditorPanel_->setService(&modeling_);
+    featureEditorPanel_->setFeatures(modeling_.features());
+    featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
 
     featureEditorPanel_->setModelChangedHandler(
         [this]() {
@@ -70,7 +70,6 @@ void MainWindow::createParametricPanel()
     );
 
     connect(viewer_, &CadViewer::featureSelectionChanged, this, [this](const QStringList& ids) {
-        featureEditorPanel_->selectFeatures(ids);
         applySelection(ids);
     });
 
@@ -91,7 +90,9 @@ void MainWindow::refreshModelView(const bool fitView)
                 [&id](const auto& candidate) { return QString::fromStdString(candidate) == id; })
             != result.presentedIds.end()) surviving.append(id);
     }
+    featureEditorPanel_->setFeatures(modeling_.features());
     applySelection(surviving);
+    featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (fitView) viewer_->fitAll();
     statusBar()->showMessage(result.rebuilt ? "Model updated" : QString::fromStdString(result.error), 3000);
 }
@@ -100,6 +101,7 @@ void MainWindow::applySelection(const QStringList& featureIds)
 {
     viewer_->selectFeatures(featureIds);
     selectedObjectIds_ = featureIds;
+    featureEditorPanel_->selectFeatures(featureIds);
     updateActionState();
 }
 
@@ -125,7 +127,7 @@ void MainWindow::reportResult(const cad::application::ModelingResult& result)
             QString::fromStdString(result.error));
         return;
     }
-    featureEditorPanel_->refresh();
+    refreshModelView();
     applySelection({QString::fromStdString(result.id)});
 }
 
@@ -291,7 +293,6 @@ void MainWindow::newDocument()
 {
     if (!confirmReplacement()) return;
     project_.newProject();
-    featureEditorPanel_->setBody(&modeling_.body());
     presenter_->clear();
     applySelection({});
     featureEditorPanel_->refresh();
@@ -310,7 +311,6 @@ void MainWindow::openDocument()
         return;
     }
     currentFile_ = path;
-    featureEditorPanel_->setBody(&modeling_.body());
     presenter_->clear();
     applySelection({});
     refreshModelView(true);

@@ -1,12 +1,11 @@
 #include "viewer/FeatureEditorPanel.h"
-#include "commands/FeatureCommands.h"
-#include "operations/ParametricFeatures.h"
+#include "application/ModelingController.h"
 #include <QtTest/QtTest>
 #include <QAction>
 #include <QDoubleSpinBox>
 #include <QUndoStack>
 
-using namespace cad::parametric;
+using namespace cad::application;
 
 class UndoPanelTests final : public QObject
 {
@@ -14,81 +13,80 @@ class UndoPanelTests final : public QObject
 private slots:
     void editingFinishedIsOneCommand()
     {
-        Body body;
-        auto cylinder = std::make_shared<CylinderParametricFeature>("cylinder", 5, 20);
-        body.addFeature(cylinder);
-        QVERIFY(body.recompute());
-        QUndoStack stack;
+        ModelingController controller;
+        const auto cylinder = controller.createCylinder();
+        QVERIFY(cylinder.success);
         FeatureEditorPanel panel;
-        panel.setUndoStack(&stack);
-        panel.setBody(&body);
-        connect(&stack, &QUndoStack::indexChanged, &panel, &FeatureEditorPanel::scheduleRefresh);
-        panel.selectFeatures({"cylinder"});
+        panel.setService(&controller);
+        panel.setFeatures(controller.features());
+        panel.setActionState(controller.actionState({cylinder.id}));
+        panel.selectFeatures({QString::fromStdString(cylinder.id)});
         auto* radius = panel.findChildren<QDoubleSpinBox*>().front();
         radius->setValue(6);
         radius->setValue(7);
         radius->setValue(10);
-        QCOMPARE(stack.count(), 0);
-        QCOMPARE(cylinder->radius(), 5.0);
+        QCOMPARE(controller.undoStack().count(), 1);
+        QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
+                 cad::parametric::PropertyValue{25.0});
         QVERIFY(QMetaObject::invokeMethod(radius, "editingFinished", Qt::DirectConnection));
-        QCOMPARE(stack.count(), 1);
-        QCOMPARE(stack.undoText(), QString("Change Cylinder Radius"));
-        QCOMPARE(cylinder->radius(), 10.0);
+        QCOMPARE(controller.undoStack().count(), 2);
+        QCOMPARE(controller.undoStack().undoText(), QString("Change Cylinder Radius"));
         QCoreApplication::processEvents();
-        stack.undo();
+        controller.undo();
+        panel.setFeatures(controller.features());
         QCoreApplication::processEvents();
-        QCOMPARE(stack.count(), 1);
-        QCOMPARE(cylinder->radius(), 5.0);
-        QCOMPARE(panel.findChildren<QDoubleSpinBox*>().front()->value(), 5.0);
-        stack.redo();
+        QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
+                 cad::parametric::PropertyValue{25.0});
+        QCOMPARE(panel.findChildren<QDoubleSpinBox*>().front()->value(), 25.0);
+        controller.redo();
+        panel.setFeatures(controller.features());
         QCoreApplication::processEvents();
-        QCOMPARE(cylinder->radius(), 10.0);
+        QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
+                 cad::parametric::PropertyValue{10.0});
         QCOMPARE(panel.findChildren<QDoubleSpinBox*>().front()->value(), 10.0);
     }
 
     void deletingSelectedFeatureClearsSelection()
     {
-        Body body;
-        auto sketch = std::make_shared<SketchFeature>("sketch", 10, 6);
-        auto face = std::make_shared<FaceFeature>("face", sketch);
-        body.addFeature(sketch);
-        body.addFeature(face);
-        QVERIFY(body.recompute());
-        QUndoStack stack;
+        ModelingController controller;
+        const auto sketch = controller.createSketch();
+        QVERIFY(sketch.success);
+        const auto face = controller.createFace({sketch.id});
+        QVERIFY(face.success);
         FeatureEditorPanel panel;
-        panel.setUndoStack(&stack);
-        panel.setBody(&body);
-        connect(&stack, &QUndoStack::indexChanged, &panel, &FeatureEditorPanel::scheduleRefresh);
-        panel.selectFeatures({"sketch"});
+        panel.setService(&controller);
+        panel.setFeatures(controller.features());
+        panel.selectFeatures({QString::fromStdString(sketch.id)});
         QVERIFY(!panel.findChildren<QDoubleSpinBox*>().isEmpty());
-        stack.push(new cad::commands::RemoveFeatureCommand(body, "sketch"));
+        QVERIFY(controller.deleteFeature(sketch.id).success);
+        panel.setFeatures(controller.features());
         QCoreApplication::processEvents();
         QVERIFY(panel.selectedFeatureIds().isEmpty());
         QVERIFY(panel.findChildren<QDoubleSpinBox*>().isEmpty());
-        stack.undo();
+        controller.undo();
+        panel.setFeatures(controller.features());
         QCoreApplication::processEvents();
-        panel.selectFeatures({"face"});
-        QCOMPARE(panel.selectedFeatureIds(), QStringList{"face"});
-        stack.redo();
+        panel.selectFeatures({QString::fromStdString(face.id)});
+        QCOMPARE(panel.selectedFeatureIds(), QStringList{QString::fromStdString(face.id)});
+        controller.redo();
+        panel.setFeatures(controller.features());
         QCoreApplication::processEvents();
         QVERIFY(panel.selectedFeatureIds().isEmpty());
     }
 
     void shortcutsAndCleanActions()
     {
-        Body body;
-        auto cylinder = std::make_shared<CylinderParametricFeature>("cylinder", 5, 20);
-        body.addFeature(cylinder);
-        QVERIFY(body.recompute());
-        QUndoStack stack;
+        ModelingController controller;
+        const auto cylinder = controller.createCylinder();
+        QVERIFY(cylinder.success);
+        controller.undoStack().clear();
         FeatureEditorPanel panel;
-        panel.setUndoStack(&stack);
-        panel.setBody(&body);
-        connect(&stack, &QUndoStack::indexChanged, &panel, &FeatureEditorPanel::scheduleRefresh);
-        auto* undo = stack.createUndoAction(&panel);
-        auto* redo = stack.createRedoAction(&panel);
+        panel.setService(&controller);
+        panel.setFeatures(controller.features());
+        panel.selectFeatures({QString::fromStdString(cylinder.id)});
+        auto* undo = controller.undoStack().createUndoAction(&panel);
+        auto* redo = controller.undoStack().createRedoAction(&panel);
         QVERIFY(!undo->isEnabled() && !redo->isEnabled());
-        panel.selectFeatures({"cylinder"});
         panel.show();
         panel.activateWindow();
         auto* radius = panel.findChildren<QDoubleSpinBox*>().front();
@@ -96,20 +94,23 @@ private slots:
         QTRY_VERIFY(radius->hasFocus());
         radius->setValue(9);
         QTest::keyClick(radius, Qt::Key_Z, Qt::ControlModifier);
-        QCOMPARE(cylinder->radius(), 5.0);
-        QCOMPARE(stack.count(), 1);
-        QVERIFY(stack.isClean());
+        QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
+                 cad::parametric::PropertyValue{25.0});
+        QCOMPARE(controller.undoStack().count(), 1);
+        QVERIFY(controller.undoStack().isClean());
         QVERIFY(redo->isEnabled());
+        panel.setFeatures(controller.features());
         QCoreApplication::processEvents();
         radius = panel.findChildren<QDoubleSpinBox*>().front();
         radius->setFocus();
         QTest::keyClick(radius, Qt::Key_Y, Qt::ControlModifier);
-        QCOMPARE(cylinder->radius(), 9.0);
-        QCOMPARE(stack.count(), 1);
+        QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
+                 cad::parametric::PropertyValue{9.0});
+        QCOMPARE(controller.undoStack().count(), 1);
         QVERIFY(undo->isEnabled());
-        stack.setClean();
-        QVERIFY(stack.isClean());
-        stack.clear();
+        controller.undoStack().setClean();
+        QVERIFY(controller.undoStack().isClean());
+        controller.undoStack().clear();
         QVERIFY(!undo->isEnabled() && !redo->isEnabled());
     }
 };
