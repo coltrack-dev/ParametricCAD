@@ -3,6 +3,7 @@
 #include <QtTest/QtTest>
 #include <QAction>
 #include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QUndoStack>
 
 using namespace cad::application;
@@ -55,6 +56,9 @@ private slots:
         QVERIFY(face.success);
         FeatureEditorPanel panel;
         panel.setService(&controller);
+        panel.setModelChangedHandler([&]() {
+            panel.setFeatures(controller.features());
+        });
         panel.setFeatures(controller.features());
         panel.selectFeatures({QString::fromStdString(sketch.id)});
         QVERIFY(!panel.findChildren<QDoubleSpinBox*>().isEmpty());
@@ -72,6 +76,32 @@ private slots:
         panel.setFeatures(controller.features());
         QCoreApplication::processEvents();
         QVERIFY(panel.selectedFeatureIds().isEmpty());
+    }
+
+    void linearPatternPropertyEditsDoNotInvalidateActiveEditor()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto pattern = controller.createLinearPattern({box.id});
+        QVERIFY(pattern.success);
+
+        FeatureEditorPanel panel;
+        panel.setService(&controller);
+        panel.setFeatures(controller.features());
+        panel.selectFeatures({QString::fromStdString(pattern.id)});
+
+        auto* count = panel.findChildren<QSpinBox*>().front();
+        for (const int value : {5, 1, 3, 2}) {
+            count->setValue(value);
+            QVERIFY(QMetaObject::invokeMethod(count, "editingFinished", Qt::DirectConnection));
+            QCoreApplication::processEvents();
+            count = panel.findChildren<QSpinBox*>().front();
+        }
+
+        QCOMPARE(controller.body().findFeature(pattern.id)->state(),
+                 cad::parametric::FeatureState::UpToDate);
+        QVERIFY(!controller.body().findFeature(pattern.id)->shape().IsNull());
     }
 
     void shortcutsAndCleanActions()

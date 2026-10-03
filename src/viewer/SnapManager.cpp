@@ -1,6 +1,7 @@
 #include "viewer/SnapManager.h"
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <map>
 
 namespace cad::viewer {
 
@@ -150,12 +152,16 @@ std::vector<SnapReference> SnapManager::collectReferences(
     for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
         ++index;
         const auto edge = TopoDS::Edge(explorer.Current());
-        result.push_back({ownerId, QStringLiteral("edge:%1").arg(index),
-                          SnapReferenceType::Edge, edge, gp_Pnt(), std::nullopt,
-                          std::nullopt, {}});
+        gp_Pnt midpoint;
         Standard_Real first = 0.0;
         Standard_Real last = 0.0;
         const auto curve = BRep_Tool::Curve(edge, first, last);
+        if (!curve.IsNull()) {
+            midpoint = curve->Value(first + (last - first) * 0.5);
+        }
+        result.push_back({ownerId, QStringLiteral("edge:%1").arg(index),
+                          SnapReferenceType::Edge, edge, midpoint, std::nullopt,
+                          std::nullopt, {}});
         const auto circle = Handle(Geom_Circle)::DownCast(curve);
         if (!circle.IsNull()) {
             const gp_Circ data = circle->Circ();
@@ -237,20 +243,23 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     QElapsedTimer timer;
     timer.start();
     std::vector<SnapCandidate> result;
+    std::map<QString, std::size_t> candidatesBySource;
+    std::map<QString, std::size_t> candidatesByTarget;
     std::size_t sourceIndex = 0;
     for (const auto& source : sources) {
         for (const auto& target : targets) {
             const auto kind = compatible(source, target);
             if (!kind) continue;
-            const auto targetPoint = closestPoint(source.point, target);
-            if (!targetPoint) continue;
-            auto cachedTarget = target;
-            cachedTarget.point = *targetPoint;
+            // Exact edge/face projection is deliberately deferred until a candidate
+            // is actually close to the cursor. Doing it here made pattern features
+            // turn source x target pairing into thousands of OCCT distance queries.
+            candidatesBySource[source.ownerId]++;
+            candidatesByTarget[target.ownerId]++;
             result.push_back({
                 source,
-                cachedTarget,
+                target,
                 *kind,
-                *targetPoint,
+                target.point,
                 gp_Trsf(),
                 0.0,
                 specificity(*kind),
@@ -262,6 +271,26 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     if (timer.elapsed() > 2) {
         qWarning() << "SnapManager candidate collection/OCCT projection took"
                    << timer.elapsed() << "ms for" << result.size() << "candidates";
+        std::vector<std::pair<QString, std::size_t>> contributors(
+            candidatesByTarget.begin(), candidatesByTarget.end());
+        std::sort(contributors.begin(), contributors.end(),
+            [](const auto& left, const auto& right) { return left.second > right.second; });
+        const int limit = std::min<int>(5, contributors.size());
+        for (int index = 0; index < limit; ++index) {
+            qWarning() << "SnapManager target contributor"
+                       << contributors[static_cast<std::size_t>(index)].first
+                       << contributors[static_cast<std::size_t>(index)].second;
+        }
+        std::vector<std::pair<QString, std::size_t>> sourceContributors(
+            candidatesBySource.begin(), candidatesBySource.end());
+        std::sort(sourceContributors.begin(), sourceContributors.end(),
+            [](const auto& left, const auto& right) { return left.second > right.second; });
+        const int sourceLimit = std::min<int>(5, sourceContributors.size());
+        for (int index = 0; index < sourceLimit; ++index) {
+            qWarning() << "SnapManager source contributor"
+                       << sourceContributors[static_cast<std::size_t>(index)].first
+                       << sourceContributors[static_cast<std::size_t>(index)].second;
+        }
     }
     return result;
 }
@@ -361,6 +390,12 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
             source.axis = gp_Ax1(origin, direction);
         }
         result->source = source;
+        if (result->target.type == SnapReferenceType::Edge
+            || result->target.type == SnapReferenceType::Face) {
+            const auto exactTarget = closestPoint(source.point, result->target);
+            if (!exactTarget) return std::nullopt;
+            result->targetPoint = *exactTarget;
+        }
         result->correction = correctionFor(
             source, result->target, source.point, result->targetPoint);
         if (correctionTimer.elapsed() > 2) {

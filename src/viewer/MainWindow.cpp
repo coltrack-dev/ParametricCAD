@@ -244,10 +244,14 @@ void MainWindow::createActions()
     connect(extrudeAction_, &QAction::triggered, this, &MainWindow::createExtrude);
     linearPatternAction_ = modelingMenu->addAction("Linear Pattern");
     linearPatternAction_->setEnabled(false);
+    linearPatternAction_->setToolTip("Create a linear pattern from the selected object");
     connect(linearPatternAction_, &QAction::triggered, this, &MainWindow::createLinearPattern);
+    toolBar->addAction(linearPatternAction_);
     pathPatternAction_ = modelingMenu->addAction("Path Pattern");
     pathPatternAction_->setEnabled(false);
+    pathPatternAction_->setToolTip("Create a pattern along the selected path");
     connect(pathPatternAction_, &QAction::triggered, this, &MainWindow::createPathPattern);
+    toolBar->addAction(pathPatternAction_);
     modelingMenu->addSeparator();
 
     auto* clearAction = new QAction("Clear", this);

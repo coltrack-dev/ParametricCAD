@@ -406,9 +406,16 @@ void CadViewer::beginTransform(
     Standard_Integer windowWidth = 0;
     Standard_Integer windowHeight = 0;
     view_->Window()->Size(windowWidth, windowHeight);
+    std::map<QString, QPointF> projectedTargets;
     for (auto& candidate : transformSnapCandidates_) {
-        candidate.target.screenPoint = projectWorldPoint(
-            view_, candidate.targetPoint, windowWidth, windowHeight);
+        const QString key = candidate.target.ownerId + ':' + candidate.target.subshapeId;
+        const auto [it, inserted] = projectedTargets.emplace(
+            key, QPointF());
+        if (inserted) {
+            it->second = projectWorldPoint(
+                view_, candidate.target.point, windowWidth, windowHeight);
+        }
+        candidate.target.screenPoint = it->second;
     }
     if (!makeViewRay(position, transformStartRay_)) return;
 

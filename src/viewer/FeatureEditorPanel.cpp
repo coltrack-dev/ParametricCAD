@@ -120,9 +120,19 @@ void FeatureEditorPanel::reportResult(const cad::application::ModelingResult& re
         return;
     }
     setPanelMessage({}, false);
-    refresh();
-    selectFeatures({QString::fromStdString(result.id)});
-    if (modelChangedHandler_) modelChangedHandler_();
+    // Property editors call reportResult from their own Qt signal handlers.
+    // Rebuilding the form synchronously would delete the emitting widget and
+    // its callback while Qt is still dispatching the signal. Defer the model
+    // and panel refresh until the current event has returned.
+    const QString resultId = QString::fromStdString(result.id);
+    QTimer::singleShot(0, this, [this, resultId]() {
+        if (modelChangedHandler_) {
+            modelChangedHandler_();
+        } else {
+            refresh();
+        }
+        if (!resultId.isEmpty()) selectFeatures({resultId});
+    });
 }
 
 void FeatureEditorPanel::setModelChangedHandler(
@@ -492,6 +502,7 @@ void FeatureEditorPanel::rebuildProperties(
 
     const auto addParameter = [this, feature](const cad::parametric::FeatureProperty& property) {
         const double value = std::get<double>(property.value);
+        const std::string featureId = feature->id;
         QDoubleSpinBox* editor = makeLengthEditor(propertiesWidget_, value);
         if (property.minimum) editor->setMinimum(*property.minimum);
         if (property.maximum) editor->setMaximum(*property.maximum);
@@ -500,11 +511,11 @@ void FeatureEditorPanel::rebuildProperties(
         const QString label = QString::fromStdString(property.label);
         propertiesLayout_->addRow(label, editor);
         connect(editor, &QDoubleSpinBox::editingFinished, this,
-            [this, feature, property, label, editor]() {
+            [this, featureId, property, editor]() {
                 if (updatingProperties_ || refreshPending_ || !service_) return;
                 const double after = editor->value();
                 reportResult(service_->setFeatureProperty(
-                    feature->id, property.key, after));
+                    featureId, property.key, after));
             });
     };
 
@@ -522,23 +533,25 @@ void FeatureEditorPanel::rebuildProperties(
             editor->setKeyboardTracking(false);
             editor->installEventFilter(this);
             const QString label = QString::fromStdString(property.label);
+            const std::string featureId = feature->id;
             propertiesLayout_->addRow(label, editor);
             connect(editor, &QSpinBox::editingFinished, this,
-                [this, feature, property, editor]() {
+                [this, featureId, property, editor]() {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
                     reportResult(service_->setFeatureProperty(
-                        feature->id, property.key, editor->value()));
+                        featureId, property.key, editor->value()));
                 });
         } else if (property.editable && std::holds_alternative<bool>(property.value)) {
             auto* editor = new QCheckBox(propertiesWidget_);
             editor->setChecked(std::get<bool>(property.value));
             const QString label = QString::fromStdString(property.label);
+            const std::string featureId = feature->id;
             propertiesLayout_->addRow(label, editor);
             connect(editor, &QCheckBox::toggled, this,
-                [this, feature, property](const bool checked) {
+                [this, featureId, property](const bool checked) {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
                     reportResult(service_->setFeatureProperty(
-                        feature->id, property.key, checked));
+                        featureId, property.key, checked));
                 });
         } else if (property.editable && std::holds_alternative<std::string>(property.value)
                    && (property.key == "distribution" || property.key == "orientation")) {
@@ -550,12 +563,13 @@ void FeatureEditorPanel::rebuildProperties(
             }
             editor->setCurrentText(QString::fromStdString(std::get<std::string>(property.value)));
             const QString label = QString::fromStdString(property.label);
+            const std::string featureId = feature->id;
             propertiesLayout_->addRow(label, editor);
             connect(editor, &QComboBox::currentTextChanged, this,
-                [this, feature, property](const QString& value) {
+                [this, featureId, property](const QString& value) {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
                     reportResult(service_->setFeatureProperty(
-                        feature->id, property.key, value.toStdString()));
+                        featureId, property.key, value.toStdString()));
                 });
         } else {
             const auto value = std::visit([](const auto& item) {
