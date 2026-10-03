@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QWidget>
+#include <QPointF>
 #include <QStringList>
+#include <array>
 #include <map>
 #include <functional>
 
@@ -81,6 +83,9 @@ public:
     void setTransformCommittedHandler(
         std::function<void(const QString&, const gp_Trsf&)> handler
     );
+    void setTransformCopyCommittedHandler(
+        std::function<void(const QString&, const gp_Trsf&)> handler
+    );
 
 signals:
     void featureSelectionChanged(const QStringList& featureIds);
@@ -105,7 +110,11 @@ private:
     void setPushPullArmed(bool armed);
     void setTransformMode(bool enabled);
     void updateTransformGizmo();
-    void beginTransform(cad::viewer::TransformHandle handle, const QPoint& position);
+    void beginTransform(
+        cad::viewer::TransformHandle handle,
+        const QPoint& position,
+        bool copyMode = false
+    );
     void updateTransformPreview(const QPoint& position);
     void commitTransform();
     void cancelTransform();
@@ -132,8 +141,8 @@ private:
     void commitPushPull();
     void cancelPushPull();
     void stopMousePan();
+    std::optional<std::array<QPointF, 3>> currentTrihedronAxisPositions() const;
     std::optional<int> axisIndicatorHitTest(const QPoint& position) const;
-    std::optional<QPointF> axisIndicatorPosition(int axis) const;
     void updateAxisHover(const QPoint& position);
     void clearAxisHover();
     void setStandardView(StandardView view);
@@ -176,14 +185,17 @@ private:
     Handle(AIS_Shape) pushPullPreview_;
     std::function<void(const QString&, int, const gp_Vec&, double)> pushPullCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCommittedHandler_;
+    std::function<void(const QString&, const gp_Trsf&)> transformCopyCommittedHandler_;
 
     std::unique_ptr<cad::viewer::TransformGizmo> transformGizmo_;
     cad::viewer::SnapManager snapManager_;
     bool transformMode_{false};
     bool transformDragging_{false};
+    bool transformCopyMode_{false};
     cad::viewer::TransformHandle transformHandle_{cad::viewer::TransformHandle::None};
     QString transformFeatureId_;
     Handle(AIS_Shape) transformObject_;
+    Handle(AIS_Shape) transformPreviewObject_;
     TopoDS_Shape transformOriginalShape_;
     gp_Pnt transformPivot_;
     gp_Trsf transformDelta_;

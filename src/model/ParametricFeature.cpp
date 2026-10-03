@@ -74,6 +74,11 @@ std::vector<std::string> ParametricFeature::hiddenDependencyIds() const
     return {};
 }
 
+ParametricFeature::Ptr ParametricFeature::clone(std::string) const
+{
+    return {};
+}
+
 bool ParametricFeature::setNumericProperty(const std::string&, double)
 {
     return false;
@@ -125,6 +130,13 @@ void ParametricFeature::setPlacement(const gp_Trsf& placement)
 {
     placement_ = placement;
     markDirty();
+}
+
+void ParametricFeature::copyPlacementTo(const Ptr& feature) const
+{
+    if (!feature) return;
+    feature->setName(name_);
+    feature->setPlacement(placement_);
 }
 
 const std::vector<std::weak_ptr<ParametricFeature>>&

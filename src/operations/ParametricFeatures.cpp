@@ -1258,4 +1258,145 @@ TopoDS_Shape SweepFeature::build() const
     );
 }
 
+ParametricFeature::Ptr SketchFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<SketchFeature>(std::move(newId), width_, height_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr FaceFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<FaceFeature>(std::move(newId), source());
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr BoxParametricFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<BoxParametricFeature>(
+        std::move(newId), width_, depth_, height_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr CylinderParametricFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<CylinderParametricFeature>(
+        std::move(newId), radius_, height_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr ConeFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ConeFeature>(
+        std::move(newId), bottomRadius_, topRadius_, height_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr SphereFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<SphereFeature>(std::move(newId), radius_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr TorusFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<TorusFeature>(
+        std::move(newId), majorRadius_, minorRadius_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr HexagonFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<HexagonFeature>(
+        std::move(newId), acrossFlats_, height_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr ExtrudeFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ExtrudeFeature>(
+        std::move(newId), profile(), vector_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr PushPullFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<PushPullFeature>(
+        std::move(newId), source(), faceIndex_, normal_, distance_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr RevolveFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<RevolveFeature>(
+        std::move(newId), profile(), axis_, angleRadians_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr BooleanFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<BooleanFeature>(
+        std::move(newId), left_, right_, operation_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr FilletFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<FilletFeature>(
+        std::move(newId), base_, edges_, radius_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr ChamferFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ChamferFeature>(
+        std::move(newId), base_, edges_, distance_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr ShellFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ShellFeature>(
+        std::move(newId), base_, facesToRemove_, thickness_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr OffsetFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<OffsetFeature>(
+        std::move(newId), base_, distance_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr LoftFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<LoftFeature>(
+        std::move(newId), sections_, makeSolid_, ruled_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr SweepFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<SweepFeature>(
+        std::move(newId), path_, profile_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
 } // namespace cad::parametric

@@ -313,6 +313,13 @@ void CadViewer::setTransformCommittedHandler(
     transformCommittedHandler_ = std::move(handler);
 }
 
+void CadViewer::setTransformCopyCommittedHandler(
+    std::function<void(const QString&, const gp_Trsf&)> handler
+)
+{
+    transformCopyCommittedHandler_ = std::move(handler);
+}
+
 void CadViewer::setTransformMode(const bool enabled)
 {
     if (transformDragging_) {
@@ -357,7 +364,8 @@ void CadViewer::updateTransformGizmo()
 
 void CadViewer::beginTransform(
     const TransformHandle handle,
-    const QPoint& position
+    const QPoint& position,
+    const bool copyMode
 )
 {
     if (!transformGizmo_ || handle == TransformHandle::None) return;
@@ -372,6 +380,7 @@ void CadViewer::beginTransform(
     if (transformFeatureId_.isEmpty()) return;
 
     transformHandle_ = handle;
+    transformCopyMode_ = copyMode;
     transformPivot_ = transformGizmo_->pivot();
     transformOriginalShape_ = transformObject_->Shape();
     transformDelta_ = gp_Trsf();
@@ -427,6 +436,11 @@ void CadViewer::beginTransform(
             gp_Pln(transformPivot_, axis));
         if (!start || gp_Vec(transformPivot_, *start).Magnitude() <= 1.0e-9) return;
         transformRotationStartPoint_ = *start;
+    }
+    if (transformCopyMode_) {
+        transformPreviewObject_ = new AIS_Shape(transformOriginalShape_);
+        context_->Display(transformPreviewObject_, Standard_False);
+        context_->UpdateCurrentViewer();
     }
     transformDragging_ = true;
     if (transformGizmo_) transformGizmo_->setHovered(handle);
@@ -565,7 +579,12 @@ void CadViewer::updateTransformPreview(const QPoint& position)
     transformDelta_ = delta;
     QElapsedTimer locationTimer;
     locationTimer.start();
-    context_->SetLocation(transformObject_, TopLoc_Location(delta));
+    const auto previewObject = transformCopyMode_
+        ? transformPreviewObject_
+        : transformObject_;
+    if (!previewObject.IsNull()) {
+        context_->SetLocation(previewObject, TopLoc_Location(delta));
+    }
     if (locationTimer.elapsed() > 2) {
         qWarning() << "Transform preview SetLocation took"
                    << locationTimer.elapsed() << "ms";
@@ -583,6 +602,7 @@ void CadViewer::commitTransform()
     if (!transformDragging_) return;
     const QString id = transformFeatureId_;
     const gp_Trsf delta = transformDelta_;
+    const bool copyMode = transformCopyMode_;
     transformDragging_ = false;
     transformHandle_ = TransformHandle::None;
     activeSnap_.reset();
@@ -590,16 +610,26 @@ void CadViewer::commitTransform()
         transformGizmo_->setSnapActive(false);
         transformGizmo_->setSnapTarget(std::nullopt, view_);
     }
-    if (!transformObject_.IsNull()) {
+    if (!copyMode && !transformObject_.IsNull()) {
         context_->ResetLocation(transformObject_);
     }
-    if (delta.Form() != gp_Identity && transformCommittedHandler_) {
+    if (copyMode && !transformPreviewObject_.IsNull()) {
+        context_->ResetLocation(transformPreviewObject_);
+    }
+    if (copyMode && transformCopyCommittedHandler_) {
+        transformCopyCommittedHandler_(id, delta);
+    } else if (delta.Form() != gp_Identity && transformCommittedHandler_) {
         transformCommittedHandler_(id, delta);
-    } else if (!transformObject_.IsNull()) {
+    } else if (!copyMode && !transformObject_.IsNull()) {
         context_->ResetLocation(transformObject_);
+    }
+    if (!transformPreviewObject_.IsNull()) {
+        context_->Remove(transformPreviewObject_, Standard_False);
+        transformPreviewObject_.Nullify();
     }
     transformObject_.Nullify();
     transformFeatureId_.clear();
+    transformCopyMode_ = false;
     transformSourceReferences_.clear();
     transformTargetReferences_.clear();
     transformSnapCandidates_.clear();
@@ -609,12 +639,17 @@ void CadViewer::commitTransform()
 void CadViewer::cancelTransform()
 {
     if (!transformDragging_) return;
-    if (!transformObject_.IsNull()) {
+    if (!transformObject_.IsNull() && !transformCopyMode_) {
         context_->ResetLocation(transformObject_);
+    }
+    if (!transformPreviewObject_.IsNull()) {
+        context_->Remove(transformPreviewObject_, Standard_False);
+        transformPreviewObject_.Nullify();
     }
     transformDragging_ = false;
     transformHandle_ = TransformHandle::None;
     transformObject_.Nullify();
+    transformCopyMode_ = false;
     transformFeatureId_.clear();
     transformSourceReferences_.clear();
     transformTargetReferences_.clear();
@@ -1315,7 +1350,7 @@ void CadViewer::stopMousePan()
     interactionMode_ = InteractionMode::None;
 }
 
-std::optional<QPointF> CadViewer::axisIndicatorPosition(const int axis) const
+std::optional<std::array<QPointF, 3>> CadViewer::currentTrihedronAxisPositions() const
 {
     if (!view_ || view_->Camera().IsNull()) return std::nullopt;
 
@@ -1333,8 +1368,6 @@ std::optional<QPointF> CadViewer::axisIndicatorPosition(const int axis) const
         indicatorSize * 0.85,
         this->height() - indicatorSize * 0.85
     );
-    const double armLength = indicatorSize * AxisIndicatorArm;
-
     const auto project = [this, width, height](const gp_Pnt& point) {
         return projectWorldPoint(view_, point, width, height);
     };
@@ -1344,24 +1377,32 @@ std::optional<QPointF> CadViewer::axisIndicatorPosition(const int axis) const
         gp_Dir(0.0, 1.0, 0.0),
         gp_Dir(0.0, 0.0, 1.0)
     };
-    if (axis < 0 || axis >= static_cast<int>(axes.size())) {
-        return std::nullopt;
+    const double armLength = indicatorSize * AxisIndicatorArm;
+    std::array<QPointF, 3> positions{};
+    const QPointF projectedOrigin = project(origin);
+    for (int axis = 0; axis < static_cast<int>(axes.size()); ++axis) {
+        gp_Pnt axisPoint = origin;
+        axisPoint.Translate(gp_Vec(axes[axis]));
+        const QPointF screenDirection = project(axisPoint) - projectedOrigin;
+        const double length = std::hypot(
+            screenDirection.x(),
+            screenDirection.y()
+        );
+        if (length <= 1.0e-6) {
+            positions[axis] = base;
+            continue;
+        }
+        positions[axis] =
+            base + screenDirection * (armLength / length);
     }
-
-    gp_Pnt axisPoint = origin;
-    axisPoint.Translate(gp_Vec(axes[axis]));
-    const QPointF screenDirection = project(axisPoint) - project(origin);
-    const double length = std::hypot(
-        screenDirection.x(),
-        screenDirection.y()
-    );
-    if (length <= 1.0e-6) return std::nullopt;
-
-    return base + screenDirection * (armLength / length);
+    return positions;
 }
 
 std::optional<int> CadViewer::axisIndicatorHitTest(const QPoint& position) const
 {
+    const auto positions = currentTrihedronAxisPositions();
+    if (!positions) return std::nullopt;
+
     const double indicatorSize = std::clamp(
         std::min(this->width(), this->height()) * AxisIndicatorScale,
         48.0,
@@ -1380,11 +1421,9 @@ std::optional<int> CadViewer::axisIndicatorHitTest(const QPoint& position) const
     std::optional<int> closestAxis;
     double closestDistance = hitRadius;
     for (int index = 0; index < 3; ++index) {
-        const auto endpoint = axisIndicatorPosition(index);
-        if (!endpoint) continue;
         const QPointF start = base;
         const QPointF cursor(position);
-        const QPointF segment = *endpoint - start;
+        const QPointF segment = (*positions)[index] - start;
         const double segmentLengthSquared = QPointF::dotProduct(segment, segment);
         if (segmentLengthSquared <= 1.0e-6) continue;
         const double projection = std::clamp(
@@ -1503,7 +1542,11 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         && transformGizmo_) {
         const auto handle = transformGizmo_->hitTest(lastMousePosition_, view_);
         if (handle != TransformHandle::None) {
-            beginTransform(handle, lastMousePosition_);
+            beginTransform(
+                handle,
+                lastMousePosition_,
+                event->modifiers().testFlag(Qt::ControlModifier)
+            );
             return;
         }
     }

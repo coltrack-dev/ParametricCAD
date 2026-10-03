@@ -68,6 +68,7 @@ public:
     virtual std::string creationLabel() const;
     virtual std::vector<FeatureProperty> properties() const;
     virtual std::vector<std::string> hiddenDependencyIds() const;
+    virtual Ptr clone(std::string newId) const;
     virtual bool setProperty(const std::string& key, const PropertyValue& value);
     virtual bool setNumericProperty(const std::string& key, double value);
     QJsonObject serialize() const;
@@ -85,6 +86,7 @@ public:
 protected:
     virtual TopoDS_Shape build() const = 0;
     virtual void writeParameters(QJsonObject& object) const;
+    void copyPlacementTo(const Ptr& feature) const;
 
 private:
     std::string id_;

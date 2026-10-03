@@ -20,6 +20,28 @@ AddFeatureCommand::AddFeatureCommand(parametric::Body& body,
     if (!feature_->recompute()) throw std::invalid_argument(feature_->error());
 }
 
+DuplicateFeatureCommand::DuplicateFeatureCommand(
+    parametric::Body& body,
+    parametric::ParametricFeature::Ptr feature,
+    const QString& text
+)
+    : QUndoCommand(text),
+      body_(body),
+      feature_(std::move(feature)),
+      position_(body.features().size())
+{
+    if (!feature_ || body_.findFeature(feature_->id())) {
+        throw std::invalid_argument("Duplicate must have a unique ID");
+    }
+    for (const auto& weak : feature_->dependencies()) {
+        const auto dependency = weak.lock();
+        if (!dependency || body_.findFeature(dependency->id()) != dependency) {
+            throw std::invalid_argument("Duplicate references a missing source");
+        }
+    }
+    if (!feature_->recompute()) throw std::invalid_argument(feature_->error());
+}
+
 ChangeParametricPropertyCommand::ChangeParametricPropertyCommand(
     parametric::Body& body,
     parametric::ParametricFeature::Ptr feature,
@@ -93,6 +115,18 @@ void AddFeatureCommand::undo()
 }
 
 void AddFeatureCommand::redo()
+{
+    body_.insertFeature(position_, feature_);
+    body_.recompute();
+}
+
+void DuplicateFeatureCommand::undo()
+{
+    body_.removeFeature(feature_->id());
+    body_.recompute();
+}
+
+void DuplicateFeatureCommand::redo()
 {
     body_.insertFeature(position_, feature_);
     body_.recompute();

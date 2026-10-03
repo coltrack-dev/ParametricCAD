@@ -10,6 +10,7 @@
 #include <QStringList>
 
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace cad::application {
@@ -45,6 +46,11 @@ public:
         const std::string& featureId,
         const gp_Trsf& delta
     );
+    ModelingResult duplicateFeature(const std::string& featureId);
+    ModelingResult duplicateFeatureWithDelta(
+        const std::string& featureId,
+        const gp_Trsf& delta
+    );
     ModelingResult createBoolean(
         BooleanKind operation,
         const std::vector<std::string>& selection,
@@ -75,6 +81,8 @@ private:
     Document document_;
     cad::parametric::Body body_;
     QUndoStack undoStack_;
+    std::string lastCopyFeatureId_;
+    std::optional<gp_Trsf> lastCopyDelta_;
 };
 
 } // namespace cad::application

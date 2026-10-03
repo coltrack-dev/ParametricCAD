@@ -46,6 +46,7 @@ private:
     cad::application::ProjectController project_;
     QString currentFile_;
     QAction* deleteAction_{nullptr};
+    QAction* duplicateAction_{nullptr};
     QAction* faceAction_{nullptr};
     QAction* extrudeAction_{nullptr};
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and

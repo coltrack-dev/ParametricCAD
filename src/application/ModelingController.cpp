@@ -174,6 +174,39 @@ ModelingResult ModelingController::transformFeatureDelta(
     return transformFeature(featureId, feature->placement(), after);
 }
 
+ModelingResult ModelingController::duplicateFeature(const std::string& featureId)
+{
+    if (featureId == lastCopyFeatureId_ && lastCopyDelta_) {
+        return duplicateFeatureWithDelta(featureId, *lastCopyDelta_);
+    }
+    return duplicateFeatureWithDelta(featureId, gp_Trsf());
+}
+
+ModelingResult ModelingController::duplicateFeatureWithDelta(
+    const std::string& featureId,
+    const gp_Trsf& delta
+)
+{
+    const auto source = body_.findFeature(featureId);
+    if (!source) return {false, {}, "Duplicate target does not exist"};
+
+    try {
+        const std::string copyId = id("copy");
+        const auto copy = source->clone(copyId);
+        if (!copy) return {false, {}, "Feature type does not support duplication"};
+        gp_Trsf placement = delta;
+        placement.Multiply(source->placement());
+        copy->setPlacement(placement);
+        undoStack_.push(new cad::commands::DuplicateFeatureCommand(
+            body_, copy, QStringLiteral("Duplicate Feature")));
+        lastCopyFeatureId_ = copyId;
+        lastCopyDelta_ = delta;
+        return {true, copyId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::createBoolean(
     const BooleanKind requestedOperation,
     const std::vector<std::string>& selection,

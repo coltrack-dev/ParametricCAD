@@ -46,6 +46,12 @@ MainWindow::MainWindow(QWidget* parent)
                 featureId.toStdString(), delta));
         }
     );
+    viewer_->setTransformCopyCommittedHandler(
+        [this](const QString& featureId, const gp_Trsf& delta) {
+            reportResult(modeling_.duplicateFeatureWithDelta(
+                featureId.toStdString(), delta));
+        }
+    );
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         refreshModelView();
         featureEditorPanel_->scheduleRefresh();
@@ -151,6 +157,7 @@ void MainWindow::updateActionState()
 {
     const auto state = modeling_.actionState(selectedIds());
     deleteAction_->setEnabled(state.canDelete);
+    if (duplicateAction_) duplicateAction_->setEnabled(selectedObjectIds_.size() == 1);
     faceAction_->setEnabled(state.canCreateFace);
     extrudeAction_->setEnabled(state.canExtrude);
 }
@@ -199,6 +206,14 @@ void MainWindow::createActions()
     deleteAction_->setShortcut(QKeySequence(Qt::Key_Delete));
     deleteAction_->setEnabled(false);
     connect(deleteAction_, &QAction::triggered, this, &MainWindow::deleteFeature);
+    duplicateAction_ = editMenu->addAction("Duplicate");
+    duplicateAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
+    duplicateAction_->setEnabled(false);
+    connect(duplicateAction_, &QAction::triggered, this, [this]() {
+        if (selectedObjectIds_.size() != 1) return;
+        reportResult(modeling_.duplicateFeature(
+            selectedObjectIds_.front().toStdString()));
+    });
 
     auto* modelingMenu = menuBar()->addMenu("&Modeling");
     auto* viewMenu = menuBar()->addMenu("&View");

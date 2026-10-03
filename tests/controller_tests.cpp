@@ -1,5 +1,6 @@
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
+#include "model/ProjectFile.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
@@ -242,6 +243,76 @@ private slots:
         QCOMPARE(controller.body().findFeature(box.id)->placement().Form(), gp_Identity);
         controller.redo();
         QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().X(), 10.0);
+    }
+
+    void duplicateCreatesIndependentFeatureAndRepeatsDelta()
+    {
+        ModelingController controller;
+        const auto source = controller.createBox();
+        QVERIFY(source.success);
+        const auto sourceFeature = controller.body().findFeature(source.id);
+        QVERIFY(sourceFeature);
+        const auto sourceParameters = sourceFeature->serialize();
+
+        gp_Trsf delta;
+        delta.SetTranslation(gp_Vec(100.0, 0.0, 0.0));
+        const auto first = controller.duplicateFeatureWithDelta(source.id, delta);
+        QVERIFY(first.success);
+        QVERIFY(first.id != source.id);
+        const auto firstFeature = controller.body().findFeature(first.id);
+        QVERIFY(firstFeature);
+        QCOMPARE(firstFeature->placement().TranslationPart().X(), 100.0);
+        QCOMPARE(sourceFeature->serialize(), sourceParameters);
+        QCOMPARE(firstFeature->serialize().value("type"), sourceParameters.value("type"));
+
+        const auto second = controller.duplicateFeature(first.id);
+        QVERIFY(second.success);
+        const auto secondFeature = controller.body().findFeature(second.id);
+        QVERIFY(secondFeature);
+        QCOMPARE(secondFeature->placement().TranslationPart().X(), 200.0);
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(second.id));
+        controller.redo();
+        QVERIFY(controller.body().findFeature(second.id));
+        QCOMPARE(controller.body().findFeature(second.id)->placement().TranslationPart().X(), 200.0);
+
+        controller.undo();
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(first.id));
+        QVERIFY(controller.body().findFeature(source.id));
+    }
+
+    void duplicatePlacementSurvivesSerialization()
+    {
+        ModelingController controller;
+        const auto source = controller.createBox();
+        QVERIFY(source.success);
+        gp_Trsf delta;
+        delta.SetTranslation(gp_Vec(25.0, 5.0, 0.0));
+        const auto copy = controller.duplicateFeatureWithDelta(source.id, delta);
+        QVERIFY(copy.success);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        QVERIFY(ProjectFile::save(
+            directory.filePath("duplicate.pcad"),
+            controller.document(),
+            controller.body(),
+            error));
+
+        Document loadedDocument;
+        cad::parametric::Body loadedBody;
+        QVERIFY(ProjectFile::load(
+            directory.filePath("duplicate.pcad"),
+            loadedDocument,
+            loadedBody,
+            error));
+        const auto loadedCopy = loadedBody.findFeature(copy.id);
+        QVERIFY(loadedCopy);
+        QCOMPARE(loadedCopy->placement().TranslationPart().X(), 25.0);
+        QCOMPARE(loadedCopy->placement().TranslationPart().Y(), 5.0);
     }
 };
 

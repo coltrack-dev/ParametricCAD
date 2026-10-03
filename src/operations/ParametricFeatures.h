@@ -19,6 +19,7 @@ class SketchFeature final : public ParametricFeature
 public:
     SketchFeature(std::string id, double width, double height);
     const char* typeId() const noexcept override { return "Sketch"; }
+    Ptr clone(std::string newId) const override;
     FeatureRole role() const noexcept override { return FeatureRole::Sketch; }
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
@@ -40,6 +41,7 @@ class FaceFeature final : public ParametricFeature
 public:
     FaceFeature(std::string id, const Ptr& source);
     const char* typeId() const noexcept override { return "Face"; }
+    Ptr clone(std::string newId) const override;
     FeatureRole role() const noexcept override { return FeatureRole::Face; }
     std::vector<FeatureProperty> properties() const override;
     const std::string& sourceFeatureId() const noexcept;
@@ -64,6 +66,7 @@ public:
         double height
     );
     const char* typeId() const noexcept override { return "Box"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
 
@@ -92,6 +95,7 @@ public:
         double height
     );
     const char* typeId() const noexcept override { return "Cylinder"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
 
@@ -120,6 +124,7 @@ public:
         double height
     );
     const char* typeId() const noexcept override { return "Cone"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
 
@@ -146,6 +151,7 @@ class SphereFeature final : public ParametricFeature
 public:
     SphereFeature(std::string id, double radius);
     const char* typeId() const noexcept override { return "Sphere"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
 
@@ -169,6 +175,7 @@ public:
         double minorRadius
     );
     const char* typeId() const noexcept override { return "Torus"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
 
@@ -197,6 +204,7 @@ public:
         double height
     );
     const char* typeId() const noexcept override { return "Hexagon"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
 
@@ -224,6 +232,7 @@ public:
         gp_Vec vector
     );
     const char* typeId() const noexcept override { return "Extrude"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
 
@@ -252,6 +261,7 @@ public:
         double distance
     );
     const char* typeId() const noexcept override { return "PushPull"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
     std::vector<std::string> hiddenDependencyIds() const override;
@@ -284,6 +294,7 @@ public:
         double angleRadians
     );
     const char* typeId() const noexcept override { return "Revolve"; }
+    Ptr clone(std::string newId) const override;
 
     void setAxis(gp_Ax1 axis);
     void setAngleRadians(double angleRadians);
@@ -318,6 +329,7 @@ public:
         BooleanOperation operation
     );
     const char* typeId() const noexcept override { return "Boolean"; }
+    Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string&, double) override { return false; }
 
@@ -349,6 +361,7 @@ public:
         double radius
     );
     const char* typeId() const noexcept override { return "Fillet"; }
+    Ptr clone(std::string newId) const override;
 
     void setEdges(std::vector<TopoDS_Edge> edges);
     void setRadius(double radius);
@@ -376,6 +389,7 @@ public:
         double distance
     );
     const char* typeId() const noexcept override { return "Chamfer"; }
+    Ptr clone(std::string newId) const override;
 
     void setEdges(std::vector<TopoDS_Edge> edges);
     void setDistance(double distance);
@@ -403,6 +417,7 @@ public:
         double thickness
     );
     const char* typeId() const noexcept override { return "Shell"; }
+    Ptr clone(std::string newId) const override;
 
     void setFacesToRemove(std::vector<TopoDS_Face> faces);
     void setThickness(double thickness);
@@ -429,6 +444,7 @@ public:
         double distance
     );
     const char* typeId() const noexcept override { return "Offset"; }
+    Ptr clone(std::string newId) const override;
 
     void setDistance(double distance);
 
@@ -453,6 +469,7 @@ public:
         bool ruled = false
     );
     const char* typeId() const noexcept override { return "Loft"; }
+    Ptr clone(std::string newId) const override;
 
     void setSections(std::vector<TopoDS_Wire> sections);
     void setMakeSolid(bool makeSolid);
@@ -480,6 +497,7 @@ public:
         const Ptr& profile
     );
     const char* typeId() const noexcept override { return "Sweep"; }
+    Ptr clone(std::string newId) const override;
 
     void setPath(TopoDS_Wire path);
 
