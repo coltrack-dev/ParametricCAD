@@ -43,6 +43,8 @@ public:
 
     bool isValidObjectHit(const SelectionHit& hit) const;
 
+    static bool isValidSubshapeHit(const SelectionHit& hit);
+
     std::vector<SelectionHit> selectedHits() const;
 
     static SelectionKind kindForShape(const TopoDS_Shape& shape) noexcept;

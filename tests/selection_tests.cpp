@@ -2,6 +2,7 @@
 
 #include <AIS_Point.hxx>
 #include <AIS_Shape.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <TopExp.hxx>
@@ -26,14 +27,22 @@ int main()
     assert(OcctSelectionAdapter::kindForShape(box) == SelectionKind::Object);
     assert(OcctSelectionAdapter::kindForShape(TopoDS::Edge(edge))
         == SelectionKind::Edge);
+    assert(OcctSelectionAdapter::kindForShape(
+        BRepBuilderAPI_MakeVertex(gp_Pnt(0.0, 0.0, 0.0)).Vertex())
+        == SelectionKind::Vertex);
     assert(OcctSelectionAdapter::kindForShape({}) == SelectionKind::Unknown);
 
     SelectionItem face{"box-1", SelectionKind::Face, 3};
     SelectionItem sameFace{"box-1", SelectionKind::Face, 3};
     SelectionItem otherFace{"box-1", SelectionKind::Face, 4};
+    SelectionItem edgeItem{"box-1", SelectionKind::Edge, 2};
+    SelectionItem vertexItem{"box-1", SelectionKind::Vertex, 1};
     assert(face.isValid());
     assert(face == sameFace);
     assert(!(face == otherFace));
+    assert(edgeItem.featureId == vertexItem.featureId);
+    assert(edgeItem.kind == SelectionKind::Edge);
+    assert(vertexItem.kind == SelectionKind::Vertex);
 
     auto presentation = Handle(AIS_Shape)(new AIS_Shape(box));
     SelectionHit faceHit{face, box, presentation};
@@ -55,11 +64,15 @@ int main()
         presentation
     };
     assert(OcctSelectionAdapter::isValidFaceHit(validFaceHit));
+    assert(OcctSelectionAdapter::isValidSubshapeHit(validFaceHit));
     assert(validFaceHit.item.currentSubshapeIndex == faces.FindIndex(selectedFace));
     assert(!OcctSelectionAdapter::isValidFaceHit(
         SelectionHit{SelectionItem{"box-1", SelectionKind::Object, std::nullopt},
                      box, presentation}));
     assert(!OcctSelectionAdapter::isValidFaceHit(
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Edge, 1},
+                     edge, presentation}));
+    assert(!OcctSelectionAdapter::isValidSubshapeHit(
         SelectionHit{SelectionItem{"box-1", SelectionKind::Edge, 1},
                      edge, presentation}));
     assert(!OcctSelectionAdapter::isValidFaceHit(

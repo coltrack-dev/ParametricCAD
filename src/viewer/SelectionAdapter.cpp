@@ -99,6 +99,28 @@ bool OcctSelectionAdapter::isValidFaceHit(const SelectionHit& hit)
     return resolvedIndex == *hit.item.currentSubshapeIndex;
 }
 
+bool OcctSelectionAdapter::isValidSubshapeHit(const SelectionHit& hit)
+{
+    if (!hit.item.isValid() || !hit.hasSubshape()
+        || hit.shape.IsNull() || hit.presentation.IsNull()
+        || !hit.item.currentSubshapeIndex
+        || *hit.item.currentSubshapeIndex <= 0) {
+        return false;
+    }
+
+    const auto parent = Handle(AIS_Shape)::DownCast(hit.presentation);
+    if (parent.IsNull() || parent->Shape().IsNull()) return false;
+    if (hit.shape.ShapeType() != TopAbs_VERTEX
+        && hit.shape.ShapeType() != TopAbs_EDGE
+        && hit.shape.ShapeType() != TopAbs_FACE) {
+        return false;
+    }
+
+    TopTools_IndexedMapOfShape subshapes;
+    TopExp::MapShapes(parent->Shape(), hit.shape.ShapeType(), subshapes);
+    return subshapes.FindIndex(hit.shape) == *hit.item.currentSubshapeIndex;
+}
+
 std::optional<SelectionHit> OcctSelectionAdapter::validatedSelectedFaceHit() const
 {
     for (const auto& hit : selectedHits()) {

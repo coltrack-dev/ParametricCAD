@@ -14,7 +14,8 @@ enum class SelectionMode
 {
     Object,
     Edge,
-    Face
+    Face,
+    Vertex
 };
 
 enum class SelectionKind

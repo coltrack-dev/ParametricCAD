@@ -219,6 +219,13 @@ void CadViewer::setupToolBar()
         setSelectionMode(SelectionMode::Face);
     });
 
+    selectVertexAction_ = toolBar_->addAction("Vertex [4]");
+    selectVertexAction_->setCheckable(true);
+    selectionActions->addAction(selectVertexAction_);
+    connect(selectVertexAction_, &QAction::triggered, this, [this]() {
+        setSelectionMode(SelectionMode::Vertex);
+    });
+
     toolBar_->addSeparator();
 
     pushPullAction_ = toolBar_->addAction("Push/Pull [P]");
@@ -277,6 +284,9 @@ void CadViewer::syncToolBarState()
     }
     if (selectFaceAction_ != nullptr) {
         selectFaceAction_->setChecked(selectionMode_ == SelectionMode::Face);
+    }
+    if (selectVertexAction_ != nullptr) {
+        selectVertexAction_->setChecked(selectionMode_ == SelectionMode::Vertex);
     }
     if (pushPullAction_ != nullptr) {
         pushPullAction_->setChecked(pushPullArmed_);
@@ -1037,6 +1047,9 @@ void CadViewer::applySelectionMode()
         break;
     case SelectionMode::Face:
         mode = AIS_Shape::SelectionMode(TopAbs_FACE);
+        break;
+    case SelectionMode::Vertex:
+        mode = AIS_Shape::SelectionMode(TopAbs_VERTEX);
         break;
     }
 
@@ -1860,6 +1873,9 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
         return;
     case Qt::Key_3:
         setSelectionMode(SelectionMode::Face);
+        return;
+    case Qt::Key_4:
+        setSelectionMode(SelectionMode::Vertex);
         return;
     case Qt::Key_P:
         setSelectionMode(SelectionMode::Face);

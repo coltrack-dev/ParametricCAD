@@ -42,12 +42,7 @@ class CadViewer final : public QWidget
     Q_OBJECT
 
 public:
-    enum class SelectionMode
-    {
-        Object,
-        Edge,
-        Face
-    };
+    using SelectionMode = cad::viewer::SelectionMode;
 
     enum class InteractionMode
     {
@@ -153,6 +148,7 @@ private:
     QAction* selectObjectAction_{nullptr};
     QAction* selectEdgeAction_{nullptr};
     QAction* selectFaceAction_{nullptr};
+    QAction* selectVertexAction_{nullptr};
     QAction* pushPullAction_{nullptr};
     QAction* transformAction_{nullptr};
     QAction* xRayAction_{nullptr};
