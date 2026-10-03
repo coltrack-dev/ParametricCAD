@@ -396,7 +396,11 @@ void CadViewer::beginTransform(
         transformFeatureId_, transformOriginalShape_);
     transformTargetReferences_.clear();
     for (const auto& [id, object] : featureObjects_) {
-        if (object == transformObject_ || object.IsNull()) continue;
+        // Snap only against geometry that is actually visible/selectable. Pattern,
+        // boolean and copy features hide their dependencies; traversing those
+        // presentations here duplicates the same topology in the snap target set.
+        if (object == transformObject_ || object.IsNull()
+            || !context_->IsDisplayed(object)) continue;
         const auto& references = cachedReferences(id, object->Shape());
         transformTargetReferences_.insert(
             transformTargetReferences_.end(), references.begin(), references.end());
@@ -453,8 +457,9 @@ void CadViewer::beginTransform(
     if (transformGizmo_) transformGizmo_->setHovered(handle);
 }
 
-void CadViewer::invalidateSnapReferenceCache()
+void CadViewer::invalidateSnapReferenceCache(const char* reason)
 {
+    qDebug() << "Snap cache invalidated:" << reason;
     snapReferenceCache_.clear();
     transformSnapCandidates_.clear();
 }
@@ -540,6 +545,12 @@ void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
 void CadViewer::updateTransformPreview(const QPoint& position)
 {
     if (!transformDragging_ || transformObject_.IsNull()) return;
+    QElapsedTimer frameTimer;
+    frameTimer.start();
+    qint64 rayAndMathMs = 0;
+    qint64 snapMs = 0;
+    qint64 presentationMs = 0;
+    qint64 viewerUpdateMs = 0;
     ViewRay currentRay;
     if (!makeViewRay(position, currentRay)) return;
 
@@ -576,10 +587,14 @@ void CadViewer::updateTransformPreview(const QPoint& position)
             *angle);
     }
 
+    rayAndMathMs = frameTimer.elapsed();
     const gp_Trsf previousDelta = transformDelta_;
     const gp_Trsf rawDelta = delta;
     gp_Pnt movedPivot = transformPivot_;
+    QElapsedTimer snapTimer;
+    snapTimer.start();
     updateTransformSnap(delta, movedPivot, rawDelta);
+    snapMs = snapTimer.elapsed();
     if (transformsClose(previousDelta, delta)) {
         return;
     }
@@ -596,11 +611,20 @@ void CadViewer::updateTransformPreview(const QPoint& position)
         qWarning() << "Transform preview SetLocation took"
                    << locationTimer.elapsed() << "ms";
     }
+    presentationMs = locationTimer.elapsed();
     QElapsedTimer redrawTimer;
     redrawTimer.start();
     context_->UpdateCurrentViewer();
+    viewerUpdateMs = redrawTimer.elapsed();
     if (redrawTimer.elapsed() > 2) {
         qWarning() << "Transform preview viewer update took" << redrawTimer.elapsed() << "ms";
+    }
+    if (frameTimer.elapsed() > 2) {
+        qWarning() << "Transform mouse move breakdown: ray/math" << rayAndMathMs
+                   << "ms, snapping" << snapMs
+                   << "ms, presentation" << presentationMs
+                   << "ms, viewer" << viewerUpdateMs
+                   << "ms, total" << frameTimer.elapsed() << "ms";
     }
 }
 
@@ -817,7 +841,7 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
     if (!featureId.isEmpty()) {
         featureObjects_[featureId] = interactiveShape;
     }
-    invalidateSnapReferenceCache();
+    invalidateSnapReferenceCache("MODEL_CHANGED: feature added");
     selectionState_.hovered.reset();
 
     applySelectionMode();
@@ -839,7 +863,7 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
 
     cancelPushPull();
     resetDetectedCycle();
-    invalidateSnapReferenceCache();
+    invalidateSnapReferenceCache("MODEL_CHANGED: feature shape updated");
     selectionState_.hovered.reset();
     object->SetShape(shape);
     context_->Redisplay(object, Standard_True);
@@ -861,7 +885,7 @@ void CadViewer::setHiddenFeatures(const QStringList& featureIds)
         changed = true;
     }
     if (changed) {
-        invalidateSnapReferenceCache();
+        invalidateSnapReferenceCache("MODEL_CHANGED: visibility changed");
         resetDetectedCycle();
         selectionState_.hovered.reset();
         syncSelectionStateFromOcct();
@@ -885,7 +909,7 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         changed = true;
     }
     if (changed) {
-        invalidateSnapReferenceCache();
+        invalidateSnapReferenceCache("MODEL_CHANGED: features retained");
         resetDetectedCycle();
         selectionState_.hovered.reset();
         syncSelectionStateFromOcct();
@@ -903,7 +927,7 @@ void CadViewer::clear()
     context_->RemoveAll(Standard_True);
     displayedShapes_.clear();
     featureObjects_.clear();
-    invalidateSnapReferenceCache();
+    invalidateSnapReferenceCache("MODEL_CHANGED: viewer cleared");
     resetDetectedCycle();
     selectionState_ = {};
 }

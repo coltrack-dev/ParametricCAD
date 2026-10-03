@@ -6,6 +6,7 @@
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <Graphic3d_Camera.hxx>
 #include <Quantity_Color.hxx>
+#include <TopLoc_Location.hxx>
 
 #include <algorithm>
 #include <cmath>
@@ -216,6 +217,14 @@ void TransformGizmo::setSnapTarget(
         context_->Remove(snapTargetPresentation_, Standard_False);
         snapTargetPresentation_.Nullify();
         snapTargetPoint_.reset();
+        return;
+    }
+    if (point && !snapTargetPresentation_.IsNull() && snapTargetPoint_) {
+        gp_Trsf translation;
+        translation.SetTranslation(gp_Vec(*snapTargetPoint_, *point));
+        context_->SetLocation(
+            snapTargetPresentation_, TopLoc_Location(translation));
+        snapTargetPoint_ = point;
         return;
     }
     if (!snapTargetPresentation_.IsNull()) {

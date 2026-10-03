@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace cad::viewer {
@@ -43,6 +44,9 @@ struct SnapReference
     std::optional<gp_Ax3> frame;
     std::optional<gp_Ax1> axis;
     QPointF screenPoint;
+    // Shared geometry is used by candidate pairs so a large pattern does not
+    // copy a TopoDS_Shape into every source/target combination.
+    std::shared_ptr<const TopoDS_Shape> geometry;
 };
 
 struct SnapCandidate

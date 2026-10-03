@@ -46,8 +46,12 @@ std::optional<gp_Pnt> closestPoint(const gp_Pnt& source, const SnapReference& ta
 {
     if (target.type == SnapReferenceType::Vertex
         || target.type == SnapReferenceType::CircleCenter) return target.point;
+    const TopoDS_Shape* targetShape = nullptr;
+    if (!target.shape.IsNull()) targetShape = &target.shape;
+    else if (target.geometry) targetShape = target.geometry.get();
+    if (!targetShape || targetShape->IsNull()) return std::nullopt;
     const auto vertex = BRepBuilderAPI_MakeVertex(source).Vertex();
-    BRepExtrema_DistShapeShape distance(vertex, target.shape);
+    BRepExtrema_DistShapeShape distance(vertex, *targetShape);
     if (!distance.IsDone() || distance.NbSolution() == 0) return std::nullopt;
     return distance.PointOnShape2(1);
 }
@@ -140,7 +144,7 @@ std::vector<SnapReference> SnapManager::collectReferences(
         const auto vertex = TopoDS::Vertex(explorer.Current());
         result.push_back({ownerId, QStringLiteral("vertex:%1").arg(index),
                           SnapReferenceType::Vertex, vertex, BRep_Tool::Pnt(vertex),
-                          std::nullopt, std::nullopt, {}});
+                          std::nullopt, std::nullopt, {}, {}});
     }
     if (vertexTimer.elapsed() > 2) {
         qWarning() << "SnapManager vertex extraction took"
@@ -161,14 +165,14 @@ std::vector<SnapReference> SnapManager::collectReferences(
         }
         result.push_back({ownerId, QStringLiteral("edge:%1").arg(index),
                           SnapReferenceType::Edge, edge, midpoint, std::nullopt,
-                          std::nullopt, {}});
+                          std::nullopt, {}, {}});
         const auto circle = Handle(Geom_Circle)::DownCast(curve);
         if (!circle.IsNull()) {
             const gp_Circ data = circle->Circ();
             result.push_back({ownerId, QStringLiteral("edge:%1:center").arg(index),
                               SnapReferenceType::CircleCenter, edge, data.Location(),
                               std::nullopt,
-                              gp_Ax1(data.Location(), data.Axis().Direction()), {}});
+                              gp_Ax1(data.Location(), data.Axis().Direction()), {}, {}});
         }
     }
     if (edgeTimer.elapsed() > 2) {
@@ -188,21 +192,26 @@ std::vector<SnapReference> SnapManager::collectReferences(
         auto frame = faceFrame(face, point);
         result.push_back({ownerId, QStringLiteral("face:%1").arg(index),
                           SnapReferenceType::Face, face, point, frame,
-                          std::nullopt, {}});
+                          std::nullopt, {}, {}});
         BRepAdaptor_Surface surface(face, Standard_True);
         if (surface.GetType() == GeomAbs_Cylinder) {
             const gp_Ax1 axis = surface.Cylinder().Axis();
             result.push_back({ownerId, QStringLiteral("face:%1:center").arg(index),
                               SnapReferenceType::CircleCenter, face, axis.Location(),
-                              std::nullopt, axis, {}});
+                              std::nullopt, axis, {}, {}});
             result.push_back({ownerId, QStringLiteral("face:%1:axis").arg(index),
                               SnapReferenceType::Axis, face, axis.Location(),
-                              std::nullopt, axis, {}});
+                              std::nullopt, axis, {}, {}});
         }
     }
     if (faceTimer.elapsed() > 2) {
         qWarning() << "SnapManager face extraction/frame construction took"
                    << faceTimer.elapsed() << "ms";
+    }
+    for (auto& reference : result) {
+        if (!reference.shape.IsNull()) {
+            reference.geometry = std::make_shared<TopoDS_Shape>(reference.shape);
+        }
     }
     return result;
 }
@@ -253,11 +262,15 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
             // Exact edge/face projection is deliberately deferred until a candidate
             // is actually close to the cursor. Doing it here made pattern features
             // turn source x target pairing into thousands of OCCT distance queries.
+            auto cachedSource = source;
+            auto cachedTarget = target;
+            if (cachedSource.geometry) cachedSource.shape.Nullify();
+            if (cachedTarget.geometry) cachedTarget.shape.Nullify();
             candidatesBySource[source.ownerId]++;
             candidatesByTarget[target.ownerId]++;
             result.push_back({
-                source,
-                target,
+                std::move(cachedSource),
+                std::move(cachedTarget),
                 *kind,
                 target.point,
                 gp_Trsf(),
