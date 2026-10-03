@@ -59,6 +59,8 @@ set(PARAMETRIC_CAD_SOURCES
     operations/SketchTrimService.h
     operations/SketchExtendService.cpp
     operations/SketchExtendService.h
+    operations/SketchConstraintSolver.cpp
+    operations/SketchConstraintSolver.h
     operations/PatternFeatures.cpp
     operations/PatternFeatures.h
     geometry/Point3D.h

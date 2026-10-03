@@ -167,6 +167,53 @@ void extendClosesExtrudeProfile()
     assert(std::abs(extendedLine.end.Y()) < 1.0e-6);
 }
 
+void constraintsSolveUndoAndPersist()
+{
+    cad::application::ModelingController controller;
+    const auto sketchResult = controller.createSketch();
+    assert(sketchResult.success);
+    assert(controller.addSketchLine(sketchResult.id, {0, 0}, {10, 3}).success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+        controller.body().findFeature(sketchResult.id));
+    assert(sketch);
+    const auto lineId = std::get<SketchLine>(sketch->entities().front()).id;
+    assert(controller.addSketchHorizontal(sketchResult.id, lineId).success);
+    assert(std::abs(std::get<SketchLine>(sketch->entities().front()).end.Y()) < 1.0e-9);
+    assert(sketch->constraintCount() == 1);
+    controller.undo();
+    assert(std::abs(std::get<SketchLine>(sketch->entities().front()).end.Y() - 3.0) < 1.0e-9);
+    controller.redo();
+    assert(std::abs(std::get<SketchLine>(sketch->entities().front()).end.Y()) < 1.0e-9);
+
+    assert(controller.addSketchLine(sketchResult.id, {10.4, 0.2}, {20, 5}).success);
+    const auto secondId = std::get<SketchLine>(sketch->entities().back()).id;
+    const auto firstEnd = cad::parametric::SketchPointRef{lineId,
+        cad::parametric::SketchPointRole::LineEnd};
+    const auto secondStart = cad::parametric::SketchPointRef{secondId,
+        cad::parametric::SketchPointRole::LineStart};
+    assert(controller.addSketchCoincident(sketchResult.id, firstEnd, secondStart).success);
+    const auto& first = std::get<SketchLine>(sketch->entities().front());
+    const auto& second = std::get<SketchLine>(sketch->entities().back());
+    assert(first.end.Distance(second.start) < 1.0e-9);
+
+    const auto beforeConflict = sketch->constraintCount();
+    assert(!controller.addSketchVertical(sketchResult.id, lineId).success);
+    assert(sketch->constraintCount() == beforeConflict);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("constraints.pcad");
+    assert(ProjectFile::save(path, controller.document(), controller.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+        loadedBody.findFeature(sketchResult.id));
+    assert(loadedSketch && loadedSketch->constraintCount() == 2);
+    assert(std::abs(std::get<SketchLine>(loadedSketch->entities().front()).end.Y()) < 1.0e-9);
+}
+
 void arcTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
@@ -302,6 +349,7 @@ int main()
     faceAttachedSketchCanReopenAfterUpstreamEdit();
     extendLineAndArc();
     extendClosesExtrudeProfile();
+    constraintsSolveUndoAndPersist();
     arcTrim();
     circleTrim();
     intersectionMatrix();

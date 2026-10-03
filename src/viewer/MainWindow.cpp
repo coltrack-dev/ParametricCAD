@@ -61,7 +61,7 @@ MainWindow::MainWindow(QWidget* parent)
                 viewer_->clearSketchTrimPreview();
             if (activeSketchId_.empty()
                 || (sketchTool_ != SketchTool::Trim && sketchTool_ != SketchTool::Extend)) {
-                handleSketchPoint(point);
+                handleSketchPoint(point, tolerance);
                 return;
             }
             const auto result = sketchTool_ == SketchTool::Trim
@@ -92,7 +92,11 @@ MainWindow::MainWindow(QWidget* parent)
     viewer_->setSketchCancelHandler(
         [this]() {
             sketchFirstPoint_.reset(); sketchSecondPoint_.reset();
-            if (sketchTool_ == SketchTool::Trim) selectSketchLineTool();
+            if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend
+                || sketchTool_ == SketchTool::Coincident
+                || sketchTool_ == SketchTool::Horizontal
+                || sketchTool_ == SketchTool::Vertical) selectSketchLineTool();
+            constraintFirstPoint_.reset();
         });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         viewer_->clearSketchTrimPreview();
@@ -331,6 +335,15 @@ void MainWindow::createActions()
     sketchExtendAction_ = modelingMenu->addAction("Extend");
     sketchExtendAction_->setEnabled(false);
     connect(sketchExtendAction_, &QAction::triggered, this, &MainWindow::selectSketchExtendTool);
+    sketchCoincidentAction_ = modelingMenu->addAction("Coincident");
+    sketchCoincidentAction_->setEnabled(false);
+    connect(sketchCoincidentAction_, &QAction::triggered, this, &MainWindow::selectSketchCoincidentTool);
+    sketchHorizontalAction_ = modelingMenu->addAction("Horizontal");
+    sketchHorizontalAction_->setEnabled(false);
+    connect(sketchHorizontalAction_, &QAction::triggered, this, &MainWindow::selectSketchHorizontalTool);
+    sketchVerticalAction_ = modelingMenu->addAction("Vertical");
+    sketchVerticalAction_->setEnabled(false);
+    connect(sketchVerticalAction_, &QAction::triggered, this, &MainWindow::selectSketchVerticalTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -429,6 +442,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchTool_ = SketchTool::Line;
         sketchFirstPoint_.reset();
         sketchSecondPoint_.reset();
+        constraintFirstPoint_.reset();
         viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
         viewer_->enterSketchMode(frame.origin, frame.xDirection,
             frame.yDirection, frame.normal);
@@ -438,6 +452,9 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchRectangleAction_->setEnabled(true);
         sketchTrimAction_->setEnabled(true);
         sketchExtendAction_->setEnabled(true);
+        sketchCoincidentAction_->setEnabled(true);
+        sketchHorizontalAction_->setEnabled(true);
+        sketchVerticalAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         updateActionState();
         statusBar()->showMessage("Sketch mode: select a drawing tool");
@@ -453,12 +470,16 @@ void MainWindow::finishSketch()
     sketchTool_ = SketchTool::None;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
+    constraintFirstPoint_.reset();
     sketchLineAction_->setEnabled(false);
     sketchCircleAction_->setEnabled(false);
     sketchArcAction_->setEnabled(false);
     sketchRectangleAction_->setEnabled(false);
     sketchTrimAction_->setEnabled(false);
     sketchExtendAction_->setEnabled(false);
+    sketchCoincidentAction_->setEnabled(false);
+    sketchHorizontalAction_->setEnabled(false);
+    sketchVerticalAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
     statusBar()->showMessage("Ready");
@@ -516,9 +537,63 @@ void MainWindow::selectSketchExtendTool()
     statusBar()->showMessage("Extend: hover and click a Line or Arc endpoint");
 }
 
-void MainWindow::handleSketchPoint(const gp_Pnt2d& point)
+void MainWindow::selectSketchCoincidentTool()
+{
+    sketchTool_ = SketchTool::Coincident;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Coincident: click two Line or Arc endpoints");
+}
+
+void MainWindow::selectSketchHorizontalTool()
+{
+    sketchTool_ = SketchTool::Horizontal;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Horizontal: click a Line");
+}
+
+void MainWindow::selectSketchVerticalTool()
+{
+    sketchTool_ = SketchTool::Vertical;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Vertical: click a Line");
+}
+
+void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    if (!sketch) return;
+    if (sketchTool_ == SketchTool::Horizontal || sketchTool_ == SketchTool::Vertical) {
+        const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
+            sketch->entities(), point, hitTolerance);
+        if (!lineId) { statusBar()->showMessage("Select a Line", 2000); return; }
+        const auto result = sketchTool_ == SketchTool::Horizontal
+            ? modeling_.addSketchHorizontal(activeSketchId_, *lineId)
+            : modeling_.addSketchVertical(activeSketchId_, *lineId);
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
+    if (sketchTool_ == SketchTool::Coincident) {
+        const auto pointRef = cad::operations::SketchConstraintSolver::pointAt(
+            sketch->entities(), point, hitTolerance);
+        if (!pointRef) { statusBar()->showMessage("Select a sketch endpoint", 2000); return; }
+        if (!constraintFirstPoint_) {
+            constraintFirstPoint_ = pointRef;
+            statusBar()->showMessage("Coincident: select second endpoint");
+            return;
+        }
+        const auto result = modeling_.addSketchCoincident(
+            activeSketchId_, *constraintFirstPoint_, *pointRef);
+        constraintFirstPoint_.reset();
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
     if (!sketchFirstPoint_) {
         sketchFirstPoint_ = point;
         return;

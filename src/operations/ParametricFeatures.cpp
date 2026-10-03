@@ -25,6 +25,7 @@
 #include <gp_Circ.hxx>
 #include <gp_Vec.hxx>
 #include <QJsonArray>
+#include <QUuid>
 #include <Standard_Failure.hxx>
 
 #include <array>
@@ -40,6 +41,31 @@ namespace cad::parametric {
 namespace {
 
 constexpr double sketchTwoPi = 6.283185307179586476925286766559;
+
+SketchEntityId entityId(const SketchEntity& entity)
+{
+    return std::visit([](const auto& value) { return value.id; }, entity);
+}
+
+void ensureEntityId(SketchEntity& entity)
+{
+    if (!entityId(entity).empty()) return;
+    const auto id = "entity-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    std::visit([&id](auto& value) { value.id = id; }, entity);
+}
+
+std::string pointRoleName(const SketchPointRole role)
+{
+    switch (role) {
+    case SketchPointRole::LineStart: return "LineStart";
+    case SketchPointRole::LineEnd: return "LineEnd";
+    case SketchPointRole::ArcStart: return "ArcStart";
+    case SketchPointRole::ArcEnd: return "ArcEnd";
+    case SketchPointRole::CircleCenter: return "CircleCenter";
+    case SketchPointRole::ArcCenter: return "ArcCenter";
+    }
+    return "LineStart";
+}
 
 double normalizedArcSweep(const double start, const double end, const bool clockwise)
 {
@@ -262,6 +288,7 @@ SketchFeature::SketchFeature(
 {
     if (support == SketchSupportType::Face)
         throw std::invalid_argument("Global Sketch constructor cannot use Face support");
+    for (auto& entity : entities_) ensureEntityId(entity);
 }
 
 SketchFeature::SketchFeature(
@@ -292,6 +319,7 @@ SketchFeature::SketchFeature(
         frame_ = globalSketchFrame(SketchSupportType::XY);
     }
     addDependency(supportSource);
+    for (auto& entity : entities_) ensureEntityId(entity);
 }
 
 std::vector<FeatureProperty> SketchFeature::properties() const
@@ -300,12 +328,13 @@ std::vector<FeatureProperty> SketchFeature::properties() const
         return {textProperty("supportType", "Support", "Face"),
                 textProperty("supportFeatureId", "Support feature",
                     supportSource_.lock() ? supportSource_.lock()->id() : ""),
-                textProperty("entityCount", "Entity count",
-                    std::to_string(entities_.size()))};
+                textProperty("entityCount", "Entity count", std::to_string(entities_.size())),
+                textProperty("constraintCount", "Constraint count", std::to_string(constraints_.size()))};
     }
     return {numericProperty("width", "Width", width_),
             numericProperty("height", "Height", height_),
-            textProperty("plane", "Plane", supportName(supportType_))};
+            textProperty("plane", "Plane", supportName(supportType_)),
+            textProperty("constraintCount", "Constraint count", std::to_string(constraints_.size()))};
 }
 
 bool SketchFeature::setNumericProperty(const std::string& key, const double value)
@@ -336,6 +365,7 @@ void SketchFeature::writeParameters(QJsonObject& object) const
         QJsonObject value;
         if (const auto* line = std::get_if<SketchLine>(&entity)) {
             value.insert("type", "Line");
+            value.insert("id", QString::fromStdString(line->id));
             QJsonArray start;
             writePoint2d(start, line->start);
             QJsonArray end;
@@ -344,6 +374,7 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             value.insert("end", end);
         } else if (const auto* circle = std::get_if<SketchCircle>(&entity)) {
             value.insert("type", "Circle");
+            value.insert("id", QString::fromStdString(circle->id));
             QJsonArray center;
             writePoint2d(center, circle->center);
             value.insert("center", center);
@@ -351,6 +382,7 @@ void SketchFeature::writeParameters(QJsonObject& object) const
         } else {
             const auto& arc = std::get<SketchArc>(entity);
             value.insert("type", "Arc");
+            value.insert("id", QString::fromStdString(arc.id));
             QJsonArray center;
             writePoint2d(center, arc.center);
             value.insert("center", center);
@@ -362,6 +394,28 @@ void SketchFeature::writeParameters(QJsonObject& object) const
         entities.append(value);
     }
     object.insert("entities", entities);
+    QJsonArray constraints;
+    for (const auto& constraint : constraints_) {
+        QJsonObject value;
+        if (const auto* coincident = std::get_if<CoincidentConstraint>(&constraint)) {
+            value.insert("type", "Coincident");
+            value.insert("aEntityId", QString::fromStdString(coincident->a.entityId));
+            value.insert("aRole", QString::fromStdString(pointRoleName(coincident->a.role)));
+            value.insert("bEntityId", QString::fromStdString(coincident->b.entityId));
+            value.insert("bRole", QString::fromStdString(pointRoleName(coincident->b.role)));
+        } else if (const auto* horizontal = std::get_if<HorizontalConstraint>(&constraint)) {
+            value.insert("type", "Horizontal");
+            value.insert("entityId", QString::fromStdString(horizontal->entityId));
+            value.insert("anchorStart", horizontal->anchorStart);
+        } else {
+            const auto& vertical = std::get<VerticalConstraint>(constraint);
+            value.insert("type", "Vertical");
+            value.insert("entityId", QString::fromStdString(vertical.entityId));
+            value.insert("anchorStart", vertical.anchorStart);
+        }
+        constraints.append(value);
+    }
+    object.insert("constraints", constraints);
 }
 
 void SketchFeature::setSize(double width, double height)
@@ -395,10 +449,38 @@ SketchFrame SketchFeature::currentFrame() const
 
 const std::vector<SketchEntity>& SketchFeature::entities() const noexcept { return entities_; }
 
+const std::vector<SketchConstraint>& SketchFeature::constraints() const noexcept { return constraints_; }
+std::size_t SketchFeature::constraintCount() const noexcept { return constraints_.size(); }
+
+void SketchFeature::setConstraints(std::vector<SketchConstraint> constraints)
+{
+    constraints_ = std::move(constraints);
+    markDirty();
+}
+
+void SketchFeature::replaceConstraints(std::vector<SketchConstraint> constraints)
+{
+    constraints_ = std::move(constraints);
+    markDirty();
+}
+
+bool SketchFeature::hasConstraintsForEntity(const SketchEntityId& entityId) const noexcept
+{
+    for (const auto& constraint : constraints_) {
+        if (const auto* coincident = std::get_if<CoincidentConstraint>(&constraint)) {
+            if (coincident->a.entityId == entityId || coincident->b.entityId == entityId) return true;
+        } else if (const auto* horizontal = std::get_if<HorizontalConstraint>(&constraint)) {
+            if (horizontal->entityId == entityId) return true;
+        } else if (std::get<VerticalConstraint>(constraint).entityId == entityId) return true;
+    }
+    return false;
+}
+
 std::size_t SketchFeature::entityCount() const noexcept { return entities_.size(); }
 
 void SketchFeature::addEntity(SketchEntity entity)
 {
+    ensureEntityId(entity);
     if (const auto* circle = std::get_if<SketchCircle>(&entity); circle
         && (!std::isfinite(circle->radius) || circle->radius <= 0.0)) {
         throw std::invalid_argument("Sketch circle radius must be positive");
@@ -429,6 +511,7 @@ void SketchFeature::replaceEntities(const std::size_t index, const std::size_t c
     if (index > entities_.size() || index + count > entities_.size()) {
         throw std::out_of_range("Sketch entity replacement range is invalid");
     }
+    for (auto& replacement : replacements) ensureEntityId(replacement);
     entities_.erase(entities_.begin() + static_cast<std::ptrdiff_t>(index),
                     entities_.begin() + static_cast<std::ptrdiff_t>(index + count));
     entities_.insert(entities_.begin() + static_cast<std::ptrdiff_t>(index),

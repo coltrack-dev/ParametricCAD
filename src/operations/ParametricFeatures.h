@@ -18,6 +18,8 @@
 
 namespace cad::parametric {
 
+using SketchEntityId = std::string;
+
 enum class SketchSupportType { XY, XZ, YZ, Face };
 
 struct SketchFrame
@@ -32,12 +34,14 @@ struct SketchLine
 {
     gp_Pnt2d start;
     gp_Pnt2d end;
+    SketchEntityId id;
 };
 
 struct SketchCircle
 {
     gp_Pnt2d center;
     double radius{0.0};
+    SketchEntityId id;
 };
 
 struct SketchArc
@@ -47,6 +51,7 @@ struct SketchArc
     double startAngle{0.0};
     double endAngle{0.0};
     bool clockwise{false};
+    SketchEntityId id;
 
     gp_Pnt2d startPoint() const;
     gp_Pnt2d endPoint() const;
@@ -54,6 +59,36 @@ struct SketchArc
 };
 
 using SketchEntity = std::variant<SketchLine, SketchCircle, SketchArc>;
+
+enum class SketchConstraintType { Coincident, Horizontal, Vertical };
+enum class SketchPointRole { LineStart, LineEnd, ArcStart, ArcEnd, CircleCenter, ArcCenter };
+
+struct SketchPointRef
+{
+    SketchEntityId entityId;
+    SketchPointRole role{SketchPointRole::LineStart};
+};
+
+struct CoincidentConstraint
+{
+    SketchPointRef a;
+    SketchPointRef b;
+};
+
+struct HorizontalConstraint
+{
+    SketchEntityId entityId;
+    bool anchorStart{true};
+};
+
+struct VerticalConstraint
+{
+    SketchEntityId entityId;
+    bool anchorStart{true};
+};
+
+using SketchConstraint = std::variant<CoincidentConstraint,
+    HorizontalConstraint, VerticalConstraint>;
 
 class SketchFeature final : public ParametricFeature
 {
@@ -85,6 +120,11 @@ public:
     void removeLastEntity();
     void replaceEntities(std::size_t index, std::size_t count,
                          std::vector<SketchEntity> replacements);
+    const std::vector<SketchConstraint>& constraints() const noexcept;
+    std::size_t constraintCount() const noexcept;
+    void setConstraints(std::vector<SketchConstraint> constraints);
+    void replaceConstraints(std::vector<SketchConstraint> constraints);
+    bool hasConstraintsForEntity(const SketchEntityId& entityId) const noexcept;
     static SketchFrame frameForFace(const TopoDS_Face& face);
     static bool isPlanarFace(const TopoDS_Shape& shape) noexcept;
 
@@ -100,6 +140,7 @@ private:
     std::optional<cad::topology::TopologicalReference> faceReference_;
     SketchFrame frame_;
     std::vector<SketchEntity> entities_;
+    std::vector<SketchConstraint> constraints_;
 };
 
 class FaceFeature final : public ParametricFeature

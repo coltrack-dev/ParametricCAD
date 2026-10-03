@@ -7,6 +7,7 @@
 #include "model/Feature.h"
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
+#include "operations/SketchConstraintSolver.h"
 
 #include <QUndoStack>
 #include <QStringList>
@@ -42,6 +43,13 @@ public:
                                     double hitTolerance);
     ModelingResult extendSketchEntity(const std::string& sketchId, const gp_Pnt2d& click,
                                       double endpointTolerance);
+    ModelingResult addSketchHorizontal(const std::string& sketchId,
+                                       const std::string& lineId, bool anchorStart = true);
+    ModelingResult addSketchVertical(const std::string& sketchId,
+                                     const std::string& lineId, bool anchorStart = true);
+    ModelingResult addSketchCoincident(const std::string& sketchId,
+                                       const cad::parametric::SketchPointRef& a,
+                                       const cad::parametric::SketchPointRef& b);
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;

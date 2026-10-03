@@ -66,6 +66,7 @@ add_library(model_test_support STATIC
     ../src/operations/SketchProfileBuilder.cpp
     ../src/operations/SketchTrimService.cpp
     ../src/operations/SketchExtendService.cpp
+    ../src/operations/SketchConstraintSolver.cpp
     ../src/operations/PatternFeatures.cpp
     ../src/viewer/PushPullDrag.cpp
 )

@@ -7,6 +7,7 @@
 #include "operations/SketchProfileBuilder.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
+#include "operations/SketchConstraintSolver.h"
 
 #include <QLoggingCategory>
 #include <TopoDS.hxx>
@@ -175,6 +176,12 @@ ModelingResult ModelingController::trimSketchEntity(const std::string& sketchId,
     if (!sketch) return {false, {}, "Active Sketch does not exist"};
     const auto trim = cad::operations::SketchTrimService::trim(*sketch, click, hitTolerance);
     if (!trim.changed) return {false, {}, trim.error};
+    if (trim.entityIndex < sketch->entities().size()) {
+        const auto id = std::visit([](const auto& entity) { return entity.id; },
+            sketch->entities()[trim.entityIndex]);
+        if (sketch->hasConstraintsForEntity(id))
+            return {false, {}, "Trim of constrained entity is not supported yet"};
+    }
     try {
         undoStack_.push(new cad::commands::TrimSketchEntityCommand(
             body_, sketch, trim.entityIndex, sketch->entities()[trim.entityIndex], trim.replacements));
@@ -194,13 +201,108 @@ ModelingResult ModelingController::extendSketchEntity(const std::string& sketchI
     const auto plan = cad::operations::SketchExtendService::extend(
         *sketch, click, endpointTolerance);
     if (!plan.changed) return {false, {}, plan.error};
+    auto beforeEntities = sketch->entities();
+    auto afterEntities = beforeEntities;
+    afterEntities[plan.entityIndex] = plan.extendedEntity;
+    if (!sketch->constraints().empty()) {
+        const auto solved = cad::operations::SketchConstraintSolver::solve(
+            afterEntities, sketch->constraints());
+        if (solved.status != cad::operations::SolveStatus::Solved)
+            return {false, {}, solved.error};
+        afterEntities = solved.entities;
+    }
     try {
         undoStack_.push(new cad::commands::ExtendSketchEntityCommand(
-            body_, sketch, plan.entityIndex, plan.originalEntity, plan.extendedEntity));
+            body_, sketch, plan.entityIndex, plan.originalEntity, plan.extendedEntity,
+            beforeEntities, afterEntities));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);
     }
+}
+
+namespace {
+std::shared_ptr<cad::parametric::SketchFeature> sketchFor(
+    cad::parametric::Body& body, const std::string& id)
+{
+    return std::dynamic_pointer_cast<cad::parametric::SketchFeature>(body.findFeature(id));
+}
+
+bool hasEntity(const cad::parametric::SketchFeature& sketch, const std::string& id)
+{
+    return std::any_of(sketch.entities().begin(), sketch.entities().end(),
+        [&id](const auto& entity) {
+            return std::visit([&id](const auto& value) { return value.id == id; }, entity);
+        });
+}
+
+ModelingResult pushConstraint(
+    cad::parametric::Body& body, QUndoStack& stack,
+    const std::shared_ptr<cad::parametric::SketchFeature>& sketch,
+    cad::parametric::SketchConstraint constraint)
+{
+    auto beforeEntities = sketch->entities();
+    auto beforeConstraints = sketch->constraints();
+    auto afterConstraints = beforeConstraints;
+    afterConstraints.push_back(constraint);
+    const auto solved = cad::operations::SketchConstraintSolver::solve(
+        beforeEntities, afterConstraints);
+    if (solved.status != cad::operations::SolveStatus::Solved)
+        return {false, {}, solved.error};
+    try {
+        stack.push(new cad::commands::AddSketchConstraintCommand(
+            body, sketch, std::move(constraint), beforeEntities, solved.entities,
+            beforeConstraints, afterConstraints));
+        return {true, sketch->id(), {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+}
+
+ModelingResult ModelingController::addSketchHorizontal(
+    const std::string& sketchId, const std::string& lineId, const bool anchorStart)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !hasEntity(*sketch, lineId)) return {false, {}, "Sketch Line does not exist"};
+    const auto entity = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+        [&lineId](const auto& value) {
+            return std::visit([&lineId](const auto& item) {
+                return item.id == lineId && std::is_same_v<std::decay_t<decltype(item)>, cad::parametric::SketchLine>;
+            }, value);
+        });
+    if (entity == sketch->entities().end() || !std::holds_alternative<cad::parametric::SketchLine>(*entity))
+        return {false, {}, "Horizontal constraint requires a Line"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::HorizontalConstraint{lineId, anchorStart});
+}
+
+ModelingResult ModelingController::addSketchVertical(
+    const std::string& sketchId, const std::string& lineId, const bool anchorStart)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !hasEntity(*sketch, lineId)) return {false, {}, "Sketch Line does not exist"};
+    const auto entity = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+        [&lineId](const auto& value) {
+            return std::visit([&lineId](const auto& item) {
+                return item.id == lineId && std::is_same_v<std::decay_t<decltype(item)>, cad::parametric::SketchLine>;
+            }, value);
+        });
+    if (entity == sketch->entities().end() || !std::holds_alternative<cad::parametric::SketchLine>(*entity))
+        return {false, {}, "Vertical constraint requires a Line"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::VerticalConstraint{lineId, anchorStart});
+}
+
+ModelingResult ModelingController::addSketchCoincident(
+    const std::string& sketchId, const cad::parametric::SketchPointRef& a,
+    const cad::parametric::SketchPointRef& b)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !hasEntity(*sketch, a.entityId) || !hasEntity(*sketch, b.entityId))
+        return {false, {}, "Coincident constraint references missing entity"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::CoincidentConstraint{a, b});
 }
 
 ModelingResult ModelingController::createPrimitive(const PrimitiveKind kind)

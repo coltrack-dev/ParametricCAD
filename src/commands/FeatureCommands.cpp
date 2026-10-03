@@ -61,25 +61,61 @@ void TrimSketchEntityCommand::undo()
 ExtendSketchEntityCommand::ExtendSketchEntityCommand(
     parametric::Body& body, std::shared_ptr<parametric::SketchFeature> sketch,
     const std::size_t index, parametric::SketchEntity original,
-    parametric::SketchEntity extended)
+    parametric::SketchEntity extended,
+    std::vector<parametric::SketchEntity> beforeEntities,
+    std::vector<parametric::SketchEntity> afterEntities)
     : QUndoCommand("Extend Sketch Entity"), body_(body), sketch_(std::move(sketch)),
-      index_(index), original_(std::move(original)), extended_(std::move(extended))
+      index_(index), original_(std::move(original)), extended_(std::move(extended)),
+      beforeEntities_(std::move(beforeEntities)), afterEntities_(std::move(afterEntities))
 {
     if (!sketch_ || body_.findFeature(sketch_->id()) != sketch_ || index_ >= sketch_->entityCount())
         throw std::invalid_argument("Extend command requires an active sketch entity");
+    if (beforeEntities_.empty()) beforeEntities_ = sketch_->entities();
+    if (afterEntities_.empty()) {
+        afterEntities_ = beforeEntities_;
+        afterEntities_[index_] = extended_;
+    }
 }
 
 void ExtendSketchEntityCommand::redo()
 {
-    sketch_->replaceEntities(index_, 1, {extended_});
+    sketch_->replaceEntities(0, sketch_->entityCount(), afterEntities_);
     body_.markDirtyFrom(sketch_->id());
 }
 
 void ExtendSketchEntityCommand::undo()
 {
-    sketch_->replaceEntities(index_, 1, {original_});
+    sketch_->replaceEntities(0, sketch_->entityCount(), beforeEntities_);
     body_.markDirtyFrom(sketch_->id());
 }
+
+AddSketchConstraintCommand::AddSketchConstraintCommand(
+    parametric::Body& body, std::shared_ptr<parametric::SketchFeature> sketch,
+    parametric::SketchConstraint constraint,
+    std::vector<parametric::SketchEntity> beforeEntities,
+    std::vector<parametric::SketchEntity> afterEntities,
+    std::vector<parametric::SketchConstraint> beforeConstraints,
+    std::vector<parametric::SketchConstraint> afterConstraints)
+    : QUndoCommand("Add Sketch Constraint"), body_(body), sketch_(std::move(sketch)),
+      constraint_(std::move(constraint)), beforeEntities_(std::move(beforeEntities)),
+      afterEntities_(std::move(afterEntities)), beforeConstraints_(std::move(beforeConstraints)),
+      afterConstraints_(std::move(afterConstraints))
+{
+    if (!sketch_ || body_.findFeature(sketch_->id()) != sketch_)
+        throw std::invalid_argument("Constraint command requires an active sketch");
+}
+
+void AddSketchConstraintCommand::apply(
+    const std::vector<parametric::SketchEntity>& entities,
+    const std::vector<parametric::SketchConstraint>& constraints)
+{
+    sketch_->replaceEntities(0, sketch_->entityCount(), entities);
+    sketch_->replaceConstraints(constraints);
+    body_.markDirtyFrom(sketch_->id());
+}
+
+void AddSketchConstraintCommand::redo() { apply(afterEntities_, afterConstraints_); }
+void AddSketchConstraintCommand::undo() { apply(beforeEntities_, beforeConstraints_); }
 
 void AddSketchEntityCommand::redo()
 {

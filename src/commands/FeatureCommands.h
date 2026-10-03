@@ -70,7 +70,9 @@ public:
                               std::shared_ptr<parametric::SketchFeature> sketch,
                               std::size_t index,
                               parametric::SketchEntity original,
-                              parametric::SketchEntity extended);
+                              parametric::SketchEntity extended,
+                              std::vector<parametric::SketchEntity> beforeEntities = {},
+                              std::vector<parametric::SketchEntity> afterEntities = {});
     void undo() override;
     void redo() override;
 
@@ -80,6 +82,34 @@ private:
     std::size_t index_;
     parametric::SketchEntity original_;
     parametric::SketchEntity extended_;
+    std::vector<parametric::SketchEntity> beforeEntities_;
+    std::vector<parametric::SketchEntity> afterEntities_;
+};
+
+class AddSketchConstraintCommand final : public QUndoCommand
+{
+public:
+    AddSketchConstraintCommand(
+        parametric::Body& body,
+        std::shared_ptr<parametric::SketchFeature> sketch,
+        parametric::SketchConstraint constraint,
+        std::vector<parametric::SketchEntity> beforeEntities,
+        std::vector<parametric::SketchEntity> afterEntities,
+        std::vector<parametric::SketchConstraint> beforeConstraints,
+        std::vector<parametric::SketchConstraint> afterConstraints);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const std::vector<parametric::SketchEntity>& entities,
+               const std::vector<parametric::SketchConstraint>& constraints);
+    parametric::Body& body_;
+    std::shared_ptr<parametric::SketchFeature> sketch_;
+    parametric::SketchConstraint constraint_;
+    std::vector<parametric::SketchEntity> beforeEntities_;
+    std::vector<parametric::SketchEntity> afterEntities_;
+    std::vector<parametric::SketchConstraint> beforeConstraints_;
+    std::vector<parametric::SketchConstraint> afterConstraints_;
 };
 
 class DuplicateFeatureCommand final : public QUndoCommand

@@ -135,8 +135,8 @@ ExtendPlan SketchExtendService::analyzeExtend(
         if (!candidate) { result.error = "No Extend boundary found"; return result; }
         const gp_Pnt2d point = candidate->point;
         if (result.endpoint == ExtendEndpoint::End)
-            result.extendedEntity = cad::parametric::SketchLine{line->start, point};
-        else result.extendedEntity = cad::parametric::SketchLine{point, line->end};
+            result.extendedEntity = cad::parametric::SketchLine{line->start, point, line->id};
+        else result.extendedEntity = cad::parametric::SketchLine{point, line->end, line->id};
         const gp_Pnt2d endpoint = result.endpoint == ExtendEndpoint::End ? line->end : line->start;
         result.extensionSpan.push_back(cad::parametric::SketchLine{endpoint, point});
     } else {
@@ -150,13 +150,13 @@ ExtendPlan SketchExtendService::analyzeExtend(
         if (result.endpoint == ExtendEndpoint::End) {
             result.extendedEntity = cad::parametric::SketchArc{
                 arc->center, arc->radius, arc->startAngle,
-                arc->endAngle + signedTravel, arc->clockwise};
+                arc->endAngle + signedTravel, arc->clockwise, arc->id};
             result.extensionSpan.push_back(cad::parametric::SketchArc{
                 arc->center, arc->radius, arc->endAngle, angle, arc->clockwise});
         } else {
             result.extendedEntity = cad::parametric::SketchArc{
                 arc->center, arc->radius, arc->startAngle - signedTravel,
-                arc->endAngle, arc->clockwise};
+                arc->endAngle, arc->clockwise, arc->id};
             result.extensionSpan.push_back(cad::parametric::SketchArc{
                 arc->center, arc->radius, angle, arc->startAngle, arc->clockwise});
         }

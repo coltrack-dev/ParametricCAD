@@ -1,4 +1,5 @@
 #include "model/ProjectFile.h"
+#include "operations/SketchConstraintSolver.h"
 #include "model/Feature.h"
 #include "model/Document.h"
 #include "model/Body.h"
@@ -102,12 +103,13 @@ std::vector<SketchEntity> sketchEntities(const QJsonObject& object)
                 {entity.value("start").toArray().at(0).toDouble(),
                  entity.value("start").toArray().at(1).toDouble()},
                 {entity.value("end").toArray().at(0).toDouble(),
-                 entity.value("end").toArray().at(1).toDouble()}});
+                 entity.value("end").toArray().at(1).toDouble()},
+                entity.value("id").toString().toStdString()});
         } else if (type == "Circle") {
             result.push_back(SketchCircle{
                 {entity.value("center").toArray().at(0).toDouble(),
                  entity.value("center").toArray().at(1).toDouble()},
-                number(entity, "radius")});
+                number(entity, "radius"), entity.value("id").toString().toStdString()});
         } else if (type == "Arc") {
             result.push_back(SketchArc{
                 {entity.value("center").toArray().at(0).toDouble(),
@@ -115,9 +117,44 @@ std::vector<SketchEntity> sketchEntities(const QJsonObject& object)
                 number(entity, "radius"),
                 number(entity, "startAngle"),
                 number(entity, "endAngle"),
-                boolean(entity, "clockwise")});
+                boolean(entity, "clockwise"), entity.value("id").toString().toStdString()});
         } else {
             throw std::invalid_argument("Unsupported sketch entity type");
+        }
+    }
+    return result;
+}
+
+SketchPointRole pointRole(const std::string& value)
+{
+    if (value == "LineStart") return SketchPointRole::LineStart;
+    if (value == "LineEnd") return SketchPointRole::LineEnd;
+    if (value == "ArcStart") return SketchPointRole::ArcStart;
+    if (value == "ArcEnd") return SketchPointRole::ArcEnd;
+    if (value == "CircleCenter") return SketchPointRole::CircleCenter;
+    if (value == "ArcCenter") return SketchPointRole::ArcCenter;
+    throw std::invalid_argument("Invalid Sketch point role");
+}
+
+std::vector<SketchConstraint> sketchConstraints(const QJsonObject& object)
+{
+    std::vector<SketchConstraint> result;
+    for (const auto& value : object.value("constraints").toArray()) {
+        require(value.isObject(), "Invalid Sketch constraint");
+        const auto constraint = value.toObject();
+        const auto type = string(constraint, "type");
+        if (type == "Coincident") {
+            result.push_back(CoincidentConstraint{
+                {string(constraint, "aEntityId"), pointRole(string(constraint, "aRole"))},
+                {string(constraint, "bEntityId"), pointRole(string(constraint, "bRole"))}});
+        } else if (type == "Horizontal") {
+            result.push_back(HorizontalConstraint{string(constraint, "entityId"),
+                boolean(constraint, "anchorStart")});
+        } else if (type == "Vertical") {
+            result.push_back(VerticalConstraint{string(constraint, "entityId"),
+                boolean(constraint, "anchorStart")});
+        } else {
+            throw std::invalid_argument("Unsupported Sketch constraint type");
         }
     }
     return result;
@@ -146,13 +183,27 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 const auto source = body.findFeature(reference.featureId);
                 require(source && reference.kind == cad::topology::TopologicalKind::Face,
                         "Sketch references missing or invalid support face");
-                return std::make_shared<SketchFeature>(string(o, "id"), source,
+                auto sketch = std::make_shared<SketchFeature>(string(o, "id"), source,
                     reference, sketchEntities(o));
+                sketch->setConstraints(sketchConstraints(o));
+                const auto solved = cad::operations::SketchConstraintSolver::solve(
+                    sketch->entities(), sketch->constraints());
+                if (solved.status != cad::operations::SolveStatus::Solved)
+                    throw std::runtime_error(solved.error);
+                sketch->replaceEntities(0, sketch->entityCount(), solved.entities);
+                return sketch;
             }
             const auto supportType = support == "XZ" ? SketchSupportType::XZ
                 : support == "YZ" ? SketchSupportType::YZ : SketchSupportType::XY;
-            return std::make_shared<SketchFeature>(string(o, "id"), supportType,
+            auto sketch = std::make_shared<SketchFeature>(string(o, "id"), supportType,
                 number(o, "width"), number(o, "height"), sketchEntities(o));
+            sketch->setConstraints(sketchConstraints(o));
+            const auto solved = cad::operations::SketchConstraintSolver::solve(
+                sketch->entities(), sketch->constraints());
+            if (solved.status != cad::operations::SolveStatus::Solved)
+                throw std::runtime_error(solved.error);
+            sketch->replaceEntities(0, sketch->entityCount(), solved.entities);
+            return sketch;
         }},
         {"Face", [](const QJsonObject& o, const Body& body) {
             const auto sourceId = string(o, "sourceFeatureId");

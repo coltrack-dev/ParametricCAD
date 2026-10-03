@@ -53,8 +53,11 @@ private:
     void selectSketchRectangleTool();
     void selectSketchTrimTool();
     void selectSketchExtendTool();
+    void selectSketchCoincidentTool();
+    void selectSketchHorizontalTool();
+    void selectSketchVerticalTool();
     void enterSketchEditing(const std::string& sketchId);
-    void handleSketchPoint(const gp_Pnt2d& point);
+    void handleSketchPoint(const gp_Pnt2d& point, double hitTolerance);
     void createFace();
     void createExtrude();
     void createPocket();
@@ -85,12 +88,17 @@ private:
     QAction* sketchRectangleAction_{nullptr};
     QAction* sketchTrimAction_{nullptr};
     QAction* sketchExtendAction_{nullptr};
+    QAction* sketchCoincidentAction_{nullptr};
+    QAction* sketchHorizontalAction_{nullptr};
+    QAction* sketchVerticalAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
-    enum class SketchTool { None, Line, Circle, Arc, Rectangle, Trim, Extend };
+    enum class SketchTool { None, Line, Circle, Arc, Rectangle, Trim, Extend,
+                            Coincident, Horizontal, Vertical };
     SketchTool sketchTool_{SketchTool::None};
     std::string activeSketchId_;
     std::optional<gp_Pnt2d> sketchFirstPoint_;
     std::optional<gp_Pnt2d> sketchSecondPoint_;
+    std::optional<cad::parametric::SketchPointRef> constraintFirstPoint_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this
     // mirror supplies MainWindow actions and model operation inputs without
