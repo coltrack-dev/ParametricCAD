@@ -462,6 +462,7 @@ void CadViewer::enterSketchMode(
     const gp_Pnt& origin, const gp_Dir& xDirection,
     const gp_Dir& yDirection, const gp_Dir& normal)
 {
+    sketchPreviousSelectionMode_ = selectionMode_;
     sketchMode_ = true;
     sketchOrigin_ = origin;
     sketchXDirection_ = xDirection;
@@ -491,6 +492,7 @@ void CadViewer::enterSketchMode(
 void CadViewer::exitSketchMode()
 {
     sketchMode_ = false;
+    setSelectionMode(sketchPreviousSelectionMode_);
     sketchPreviewFirstPoint_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
         context_->Remove(sketchPreviewObject_, Standard_True);

@@ -178,6 +178,12 @@ void FeatureEditorPanel::setFeatureSelectedHandler(
     featureSelectedHandler_ = std::move(handler);
 }
 
+void FeatureEditorPanel::setFeatureDoubleClickedHandler(
+    std::function<void(const QString&)> handler)
+{
+    featureDoubleClickedHandler_ = std::move(handler);
+}
+
 void FeatureEditorPanel::createUi()
 {
     auto* rootLayout = new QVBoxLayout(this);
@@ -362,6 +368,13 @@ void FeatureEditorPanel::createUi()
 
     connect(tree_, &QTreeWidget::currentItemChanged, this,
         [this](QTreeWidgetItem*, QTreeWidgetItem*) { updateSelectedProperties(); });
+    connect(tree_, &QTreeWidget::itemDoubleClicked, this,
+        [this](QTreeWidgetItem* item, int) {
+            if (featureDoubleClickedHandler_ && item) {
+                const auto id = item->data(0, FeatureIdRole).toString();
+                if (!id.isEmpty()) featureDoubleClickedHandler_(id);
+            }
+        });
 
     clearProperties();
 }

@@ -25,6 +25,59 @@ void lineTrim()
     assert(std::get<SketchLine>(result.replacements[1]).start.X() == 7.0);
 }
 
+void editSketchValidationAndReopen()
+{
+    cad::application::ModelingController controller;
+    const auto sketch = controller.createSketch();
+    assert(sketch.success);
+    const cad::application::SelectionSnapshot objectSelection{{
+        {sketch.id, cad::application::SelectionKind::Object, std::nullopt}}};
+    assert(controller.canEditSketch(objectSelection));
+    assert(controller.actionState(objectSelection).canEditSketch);
+    assert(controller.addSketchCircle(sketch.id, {0, 0}, 5.0).success);
+    // Re-entering uses the same SketchFeature; new geometry is appended to it.
+    assert(controller.addSketchLine(sketch.id, {-5, 0}, {5, 0}).success);
+    const auto sketchFeature = std::dynamic_pointer_cast<SketchFeature>(
+        controller.body().findFeature(sketch.id));
+    assert(sketchFeature && sketchFeature->entityCount() == 2);
+
+    const auto box = controller.createBox();
+    assert(box.success);
+    const cad::application::SelectionSnapshot boxSelection{{
+        {box.id, cad::application::SelectionKind::Object, std::nullopt}}};
+    assert(!controller.canEditSketch(boxSelection));
+    const cad::application::SelectionSnapshot faceSelection{{
+        {box.id, cad::application::SelectionKind::Face, 1}}};
+    assert(!controller.canEditSketch(faceSelection));
+    assert(!controller.canEditSketch({{
+        {sketch.id, cad::application::SelectionKind::Object, std::nullopt},
+        {box.id, cad::application::SelectionKind::Object, std::nullopt}}}));
+}
+
+void faceAttachedSketchCanReopenAfterUpstreamEdit()
+{
+    cad::application::ModelingController controller;
+    const auto box = controller.createBox();
+    assert(box.success);
+    const cad::application::SelectionSnapshot faceSelection{{
+        {box.id, cad::application::SelectionKind::Face, 1}}};
+    const auto sketch = controller.createSketchOnFace(faceSelection);
+    assert(sketch.success);
+    const auto sketchFeature = std::dynamic_pointer_cast<SketchFeature>(
+        controller.body().findFeature(sketch.id));
+    assert(sketchFeature);
+    const auto firstFrame = sketchFeature->currentFrame();
+    assert(controller.setFeatureProperty(box.id, "width", 80.0).success);
+    assert(controller.body().recompute());
+    const auto secondFrame = sketchFeature->currentFrame();
+    assert(secondFrame.normal.IsParallel(firstFrame.normal, 1.0e-6));
+    const cad::application::SelectionSnapshot sketchSelection{{
+        {sketch.id, cad::application::SelectionKind::Object, std::nullopt}}};
+    assert(controller.canEditSketch(sketchSelection));
+    assert(controller.addSketchCircle(sketch.id, {0, 0}, 5.0).success);
+    assert(sketchFeature->entityCount() == 1);
+}
+
 void arcTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
@@ -144,12 +197,20 @@ void downstreamAndPersistence()
     const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
         loadedBody.findFeature(persisted.id));
     assert(loadedSketch && loadedSketch->entityCount() == 3);
+    cad::application::ModelingController reloadedController;
+    reloadedController.replaceProject(std::move(loadedDocument), std::move(loadedBody));
+    const cad::application::SelectionSnapshot reloadedSelection{{
+        {persisted.id, cad::application::SelectionKind::Object, std::nullopt}}};
+    assert(reloadedController.canEditSketch(reloadedSelection));
+    assert(reloadedController.addSketchLine(persisted.id, {-20, 0}, {20, 0}).success);
 }
 }
 
 int main()
 {
     lineTrim();
+    editSketchValidationAndReopen();
+    faceAttachedSketchCanReopenAfterUpstreamEdit();
     arcTrim();
     circleTrim();
     intersectionMatrix();

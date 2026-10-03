@@ -26,6 +26,7 @@ public:
     void setFeatureSelectedHandler(
         std::function<void(const QStringList&)> handler
     );
+    void setFeatureDoubleClickedHandler(std::function<void(const QString&)> handler);
     void refresh();
     QStringList selectedFeatureIds() const;
     void selectFeatures(const QStringList& featureIds);
@@ -84,4 +85,5 @@ private:
 
     std::function<void()> modelChangedHandler_;
     std::function<void(const QStringList&)> featureSelectedHandler_;
+    std::function<void(const QString&)> featureDoubleClickedHandler_;
 };

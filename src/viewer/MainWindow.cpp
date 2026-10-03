@@ -131,6 +131,8 @@ void MainWindow::createParametricPanel()
             applySelection(featureIds);
         }
     );
+    featureEditorPanel_->setFeatureDoubleClickedHandler(
+        [this](const QString& featureId) { editSketchById(featureId); });
 
     connect(viewer_, &CadViewer::selectionChanged, this,
         [this](const cad::application::SelectionSnapshot& selection) {
@@ -210,6 +212,8 @@ void MainWindow::updateActionState()
     faceAction_->setEnabled(state.canCreateFace);
     extrudeAction_->setEnabled(state.canExtrude);
     if (pocketAction_) pocketAction_->setEnabled(state.canPocket);
+    if (editSketchAction_) editSketchAction_->setEnabled(
+        state.canEditSketch && activeSketchId_.empty());
     if (sketchOnFaceAction_) sketchOnFaceAction_->setEnabled(state.canSketchOnFace);
     if (linearPatternAction_) linearPatternAction_->setEnabled(selectedIds().size() == 1);
     if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
@@ -293,6 +297,9 @@ void MainWindow::createActions()
     sketchOnFaceAction_ = modelingMenu->addAction("Sketch on Face");
     sketchOnFaceAction_->setEnabled(false);
     connect(sketchOnFaceAction_, &QAction::triggered, this, &MainWindow::createSketchOnFace);
+    editSketchAction_ = modelingMenu->addAction("Edit Sketch");
+    editSketchAction_->setEnabled(false);
+    connect(editSketchAction_, &QAction::triggered, this, &MainWindow::editSelectedSketch);
     sketchLineAction_ = modelingMenu->addAction("Sketch Line");
     sketchLineAction_->setEnabled(false);
     connect(sketchLineAction_, &QAction::triggered, this, &MainWindow::selectSketchLineTool);
@@ -376,6 +383,25 @@ void MainWindow::createSketchOnFace()
     if (result.success) enterSketchEditing(result.id);
 }
 
+void MainWindow::editSelectedSketch()
+{
+    if (!modeling_.canEditSketch(currentSelection_)) return;
+    editSketchById(QString::fromStdString(currentSelection_.items.front().featureId));
+}
+
+void MainWindow::editSketchById(const QString& sketchId)
+{
+    if (sketchId.isEmpty() || !activeSketchId_.empty()) return;
+    const cad::application::SelectionSnapshot selection{{
+        {sketchId.toStdString(), cad::application::SelectionKind::Object, std::nullopt}}};
+    if (!modeling_.canEditSketch(selection)) {
+        statusBar()->showMessage("Selected feature is not a Sketch", 3000);
+        return;
+    }
+    applySelection({sketchId});
+    enterSketchEditing(sketchId.toStdString());
+}
+
 void MainWindow::enterSketchEditing(const std::string& sketchId)
 {
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
@@ -396,6 +422,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchRectangleAction_->setEnabled(true);
         sketchTrimAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
+        updateActionState();
         statusBar()->showMessage("Sketch mode: select a drawing tool");
     } catch (const std::exception& error) {
         QMessageBox::warning(this, "Sketch editing failed", error.what());
@@ -415,6 +442,7 @@ void MainWindow::finishSketch()
     sketchRectangleAction_->setEnabled(false);
     sketchTrimAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
+    updateActionState();
     statusBar()->showMessage("Ready");
     refreshModelView(false);
 }

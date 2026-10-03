@@ -44,6 +44,8 @@ private:
     void createCylinder();
     void createRectangleSketch();
     void createSketchOnFace();
+    void editSelectedSketch();
+    void editSketchById(const QString& sketchId);
     void finishSketch();
     void selectSketchLineTool();
     void selectSketchCircleTool();
@@ -75,6 +77,7 @@ private:
     QAction* filletAction_{nullptr};
     QAction* chamferAction_{nullptr};
     QAction* sketchOnFaceAction_{nullptr};
+    QAction* editSketchAction_{nullptr};
     QAction* sketchLineAction_{nullptr};
     QAction* sketchCircleAction_{nullptr};
     QAction* sketchArcAction_{nullptr};

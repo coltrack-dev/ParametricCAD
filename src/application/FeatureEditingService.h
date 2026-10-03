@@ -37,6 +37,7 @@ struct ModelingActionState
     bool canFillet{false};
     bool canChamfer{false};
     bool canSketchOnFace{false};
+    bool canEditSketch{false};
 };
 
 class FeatureEditingService

@@ -649,7 +649,16 @@ ModelingActionState ModelingController::actionState(
             }
         }
     }
+    state.canEditSketch = canEditSketch(selection);
     return state;
+}
+
+bool ModelingController::canEditSketch(const SelectionSnapshot& selection) const
+{
+    if (selection.items.size() != 1
+        || selection.items.front().kind != SelectionKind::Object) return false;
+    const auto feature = body_.findFeature(selection.items.front().featureId);
+    return std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature) != nullptr;
 }
 
 void ModelingController::replaceProject(Document document, cad::parametric::Body body)

@@ -202,6 +202,7 @@ private:
     std::function<void(const QString&, const gp_Trsf&)> transformCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCopyCommittedHandler_;
     bool sketchMode_{false};
+    SelectionMode sketchPreviousSelectionMode_{SelectionMode::Object};
     gp_Pnt sketchOrigin_;
     gp_Dir sketchXDirection_;
     gp_Dir sketchYDirection_;

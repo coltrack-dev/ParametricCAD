@@ -104,6 +104,7 @@ public:
     ModelingActionState actionState(
         const SelectionSnapshot& selection
     ) const;
+    bool canEditSketch(const SelectionSnapshot& selection) const;
 
     void replaceProject(Document document, cad::parametric::Body body);
 
