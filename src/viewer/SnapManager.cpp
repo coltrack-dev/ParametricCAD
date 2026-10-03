@@ -138,7 +138,8 @@ std::optional<SnapKind> compatible(const SnapReference& source, const SnapRefere
         if (target.type == SnapReferenceType::Edge) return SnapKind::VertexToEdge;
         if (target.type == SnapReferenceType::Face) return SnapKind::VertexToFace;
     }
-    if (source.type == SnapReferenceType::Face && target.type == SnapReferenceType::Face)
+    if (source.type == SnapReferenceType::Face && target.type == SnapReferenceType::Face
+        && source.frame && target.frame)
         return SnapKind::FaceToFace;
     if (source.type == SnapReferenceType::CircleCenter
         && target.type == SnapReferenceType::CircleCenter)
@@ -151,12 +152,14 @@ std::optional<SnapKind> compatible(const SnapReference& source, const SnapRefere
 int specificity(const SnapKind kind)
 {
     switch (kind) {
-    case SnapKind::CenterToCenter:
-    case SnapKind::AxisToAxis: return 5;
-    case SnapKind::FaceToFace: return 4;
-    case SnapKind::VertexToVertex: return 3;
-    case SnapKind::VertexToEdge: return 2;
-    case SnapKind::VertexToFace: return 1;
+    // Point snaps are the most precise result. Axis/edge snaps win over a
+    // face-plane result only when screen distances are effectively equal.
+    case SnapKind::VertexToVertex:
+    case SnapKind::CenterToCenter: return 3;
+    case SnapKind::VertexToEdge:
+    case SnapKind::AxisToAxis: return 2;
+    case SnapKind::VertexToFace:
+    case SnapKind::FaceToFace: return 1;
     }
     return 0;
 }
@@ -186,7 +189,11 @@ gp_Trsf correctionFor(
         normal.Reverse();
         mating.SetDirection(normal);
         gp_Trsf result;
-        result.SetTransformation(*source.frame, mating);
+        // SetDisplacement maps the source coordinate frame itself onto the
+        // mating frame. SetTransformation expresses coordinates between
+        // systems and therefore does not produce the placement correction
+        // required by an interactive object transform.
+        result.SetDisplacement(*source.frame, mating);
         return result;
     }
     if (source.type == SnapReferenceType::Axis && target.type == SnapReferenceType::Axis
@@ -265,9 +272,15 @@ std::vector<SnapReference> SnapManager::collectReferences(
         gp_Vec normal;
         properties.Normal(0.5, 0.5, point, normal);
         auto frame = faceFrame(face, point);
-        result.push_back({ownerId, QStringLiteral("face:%1").arg(index),
-                          SnapReferenceType::Face, face, point, frame,
-                          std::nullopt, {}, {}});
+        // Face alignment is intentionally limited to planar faces. Keeping
+        // non-planar faces out of the reference cache also prevents them from
+        // entering the generic FaceToFace candidate pipeline and falling back
+        // to an ambiguous point translation.
+        if (frame) {
+            result.push_back({ownerId, QStringLiteral("face:%1").arg(index),
+                              SnapReferenceType::Face, face, point, frame,
+                              std::nullopt, {}, {}});
+        }
         BRepAdaptor_Surface surface(face, Standard_True);
         if (surface.GetType() == GeomAbs_Cylinder) {
             const gp_Ax1 axis = surface.Cylinder().Axis();
@@ -346,6 +359,12 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     std::size_t sourceIndex = 0;
     for (const auto& source : uniqueSources) {
         for (const auto& target : uniqueTargets) {
+            // A feature must never snap to its own references. In the viewer
+            // this is normally filtered while building the target cache, but
+            // keeping the invariant here also protects direct/test callers.
+            if (!source.ownerId.isEmpty() && source.ownerId == target.ownerId) {
+                continue;
+            }
             const auto kind = compatible(source, target);
             if (!kind) continue;
             // Exact edge/face projection is deliberately deferred until a candidate

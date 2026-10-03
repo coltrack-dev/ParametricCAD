@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cmath>
 #include <algorithm>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <QElapsedTimer>
@@ -199,6 +200,66 @@ int main()
     auto faceToFace = snapManager.findCandidate(
         {sourceFace}, {faceTarget}, std::nullopt);
     assert(faceToFace && faceToFace->kind == SnapKind::FaceToFace);
+
+    auto pointTarget = targets.front();
+    pointTarget.subshapeId = QStringLiteral("point-priority");
+    pointTarget.screenPoint = QPointF(0.0, 0.0);
+    const auto pointWins = snapManager.findCandidate(
+        {sourceVertex}, {faceTarget, pointTarget}, std::nullopt);
+    assert(pointWins && pointWins->kind == SnapKind::VertexToVertex);
+
+    // Once a face candidate is active, a nearby point candidate must not
+    // replace it until the normal hysteresis release distance is exceeded.
+    sourceFace.screenPoint = QPointF(5.0, 0.0);
+    faceTarget.screenPoint = QPointF(5.0, 0.0);
+    pointTarget.screenPoint = QPointF(4.0, 0.0);
+    const auto heldFace = snapManager.findCandidate(
+        {sourceFace, sourceVertex}, {faceTarget, pointTarget}, faceToFace);
+    assert(heldFace && heldFace->kind == SnapKind::FaceToFace);
+
+    // Face-to-face correction is one absolute transform: it both moves the
+    // source plane onto the target plane and mates the normals.
+    const auto sourcePlane = BRepBuilderAPI_MakeFace(
+        gp_Pln(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)),
+        -5.0, 5.0, -5.0, 5.0).Face();
+    const auto targetPlane = BRepBuilderAPI_MakeFace(
+        gp_Pln(gp_Pnt(10.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)),
+        -5.0, 5.0, -5.0, 5.0).Face();
+    SnapReference orientedSource{
+        QStringLiteral("moving"), QStringLiteral("face:oriented"),
+        SnapReferenceType::Face, sourcePlane, gp_Pnt(0.0, 0.0, 0.0),
+        gp_Ax3(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0),
+               gp_Dir(1.0, 0.0, 0.0)), std::nullopt, QPointF(0.0, 0.0)};
+    SnapReference orientedTarget{
+        QStringLiteral("target"), QStringLiteral("face:oriented"),
+        SnapReferenceType::Face, targetPlane, gp_Pnt(10.0, 0.0, 0.0),
+        gp_Ax3(gp_Pnt(10.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0),
+               gp_Dir(0.0, 1.0, 0.0)), std::nullopt, QPointF(0.0, 0.0)};
+    const auto oriented = snapManager.findCandidate(
+        {orientedSource}, {orientedTarget}, std::nullopt);
+    assert(oriented && oriented->kind == SnapKind::FaceToFace);
+    gp_Pnt alignedOrigin = orientedSource.frame->Location();
+    alignedOrigin.Transform(oriented->correction);
+    assert(alignedOrigin.Distance(orientedTarget.frame->Location()) < 1.0e-7);
+    gp_Dir alignedNormal = orientedSource.frame->Direction();
+    alignedNormal.Transform(oriented->correction);
+    assert(alignedNormal.Dot(orientedTarget.frame->Direction()) < -1.0 + 1.0e-7);
+
+    // Opposing target normals still produce mating (opposite) normals rather
+    // than stacking the two faces with identical orientation.
+    orientedTarget.frame = gp_Ax3(
+        gp_Pnt(0.0, 0.0, 10.0), gp_Dir(0.0, 0.0, -1.0),
+        gp_Dir(1.0, 0.0, 0.0));
+    orientedTarget.point = gp_Pnt(0.0, 0.0, 10.0);
+    orientedTarget.shape = BRepBuilderAPI_MakeFace(
+        gp_Pln(orientedTarget.point, orientedTarget.frame->Direction()),
+        -5.0, 5.0, -5.0, 5.0).Face();
+    const auto opposing = snapManager.findCandidate(
+        {orientedSource}, {orientedTarget}, std::nullopt);
+    assert(opposing && opposing->kind == SnapKind::FaceToFace);
+    gp_Dir opposingNormal = orientedSource.frame->Direction();
+    opposingNormal.Transform(opposing->correction);
+    assert(opposingNormal.Dot(orientedTarget.frame->Direction()) < -1.0 + 1.0e-7);
 
     const auto cylinder = BRepPrimAPI_MakeCylinder(5.0, 10.0).Shape();
     const auto cylinderReferences = snapManager.collectReferences(
