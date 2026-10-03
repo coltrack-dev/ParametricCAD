@@ -3,6 +3,7 @@
 #include "model/Feature.h"
 #include "model/Document.h"
 #include "model/Body.h"
+#include "operations/ParametricFeatures.h"
 #include <QUndoCommand>
 #include <QStringList>
 #include <functional>
@@ -24,6 +25,23 @@ private:
     parametric::Body& body_;
     parametric::ParametricFeature::Ptr feature_;
     std::size_t position_;
+};
+
+class AddSketchEntityCommand final : public QUndoCommand
+{
+public:
+    AddSketchEntityCommand(
+        parametric::Body& body,
+        std::shared_ptr<parametric::SketchFeature> sketch,
+        parametric::SketchEntity entity
+    );
+    void undo() override;
+    void redo() override;
+
+private:
+    parametric::Body& body_;
+    std::shared_ptr<parametric::SketchFeature> sketch_;
+    parametric::SketchEntity entity_;
 };
 
 class DuplicateFeatureCommand final : public QUndoCommand

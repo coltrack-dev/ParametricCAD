@@ -5,6 +5,10 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepGProp.hxx>
+#include <BRep_Builder.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
@@ -15,6 +19,7 @@
 #include <TopAbs_ShapeEnum.hxx>
 
 #include <gp_Pnt.hxx>
+#include <gp_Circ.hxx>
 #include <gp_Vec.hxx>
 #include <QJsonArray>
 
@@ -58,6 +63,46 @@ FeatureProperty textProperty(
 )
 {
     return {key, label, std::move(value), std::nullopt, std::nullopt, false};
+}
+
+SketchFrame globalSketchFrame(const SketchSupportType support)
+{
+    switch (support) {
+    case SketchSupportType::XY:
+        return {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    case SketchSupportType::XZ:
+        return {{0, 0, 0}, {1, 0, 0}, {0, 0, 1}, {0, -1, 0}};
+    case SketchSupportType::YZ:
+        return {{0, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 0}};
+    case SketchSupportType::Face:
+        break;
+    }
+    throw std::invalid_argument("Face support requires a planar face");
+}
+
+gp_Pnt worldPoint(const SketchFrame& frame, const gp_Pnt2d& point)
+{
+    gp_Pnt result = frame.origin;
+    result.Translate(gp_Vec(frame.xDirection) * point.X()
+        + gp_Vec(frame.yDirection) * point.Y());
+    return result;
+}
+
+void writePoint2d(QJsonArray& array, const gp_Pnt2d& point)
+{
+    array.append(point.X());
+    array.append(point.Y());
+}
+
+std::string supportName(const SketchSupportType type)
+{
+    switch (type) {
+    case SketchSupportType::XY: return "XY";
+    case SketchSupportType::XZ: return "XZ";
+    case SketchSupportType::YZ: return "YZ";
+    case SketchSupportType::Face: return "Face";
+    }
+    return "XY";
 }
 
 std::vector<cad::topology::TopologicalReference> referencesFor(
@@ -143,16 +188,61 @@ std::vector<cad::topology::TopologicalReference> legacyReferences(
 } // namespace
 
 SketchFeature::SketchFeature(std::string id, double width, double height)
-    : ParametricFeature(std::move(id), "Rectangle Sketch"),
-      width_(width), height_(height)
+    : SketchFeature(std::move(id), SketchSupportType::XY, width, height)
 {
+}
+
+SketchFeature::SketchFeature(
+    std::string id, const SketchSupportType support, const double width, const double height)
+    : ParametricFeature(std::move(id), "Rectangle Sketch"),
+      width_(width), height_(height), supportType_(support), frame_(globalSketchFrame(support))
+{
+    if (support == SketchSupportType::Face)
+        throw std::invalid_argument("Global Sketch constructor cannot use Face support");
+}
+
+SketchFeature::SketchFeature(
+    std::string id,
+    const Ptr& supportSource,
+    cad::topology::TopologicalReference faceReference,
+    std::vector<SketchEntity> entities
+)
+    : ParametricFeature(std::move(id), "Sketch on Face"),
+      width_(0.0), height_(0.0), supportType_(SketchSupportType::Face),
+      supportSource_(supportSource), faceReference_(std::move(faceReference)),
+      entities_(std::move(entities))
+{
+    requireFeature(supportSource, "Sketch support");
+    if (faceReference_->featureId != supportSource->id()
+        || faceReference_->kind != cad::topology::TopologicalKind::Face) {
+        throw std::invalid_argument("Sketch support reference must identify a Face of the source");
+    }
+    if (!supportSource->shape().IsNull()) {
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *faceReference_, supportSource->shape());
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+            || resolved.shape->ShapeType() != TopAbs_FACE) {
+            throw std::invalid_argument("Sketch support face could not be resolved: " + resolved.error);
+        }
+        frame_ = frameForFace(TopoDS::Face(*resolved.shape));
+    } else {
+        frame_ = globalSketchFrame(SketchSupportType::XY);
+    }
+    addDependency(supportSource);
 }
 
 std::vector<FeatureProperty> SketchFeature::properties() const
 {
+    if (supportType_ == SketchSupportType::Face) {
+        return {textProperty("supportType", "Support", "Face"),
+                textProperty("supportFeatureId", "Support feature",
+                    supportSource_.lock() ? supportSource_.lock()->id() : ""),
+                textProperty("entityCount", "Entity count",
+                    std::to_string(entities_.size()))};
+    }
     return {numericProperty("width", "Width", width_),
             numericProperty("height", "Height", height_),
-            textProperty("plane", "Plane", "XY")};
+            textProperty("plane", "Plane", supportName(supportType_))};
 }
 
 bool SketchFeature::setNumericProperty(const std::string& key, const double value)
@@ -165,9 +255,41 @@ bool SketchFeature::setNumericProperty(const std::string& key, const double valu
 
 void SketchFeature::writeParameters(QJsonObject& object) const
 {
-    object.insert("plane", "XY");
-    object.insert("width", width_);
-    object.insert("height", height_);
+    object.insert("supportType", QString::fromStdString(supportName(supportType_)));
+    if (supportType_ != SketchSupportType::Face) {
+        object.insert("plane", QString::fromStdString(supportName(supportType_)));
+        object.insert("width", width_);
+        object.insert("height", height_);
+        return;
+    }
+    object.insert("supportReference", cad::topology::toJson(*faceReference_));
+    object.insert("frame", QJsonObject{
+        {"origin", QJsonArray{frame_.origin.X(), frame_.origin.Y(), frame_.origin.Z()}},
+        {"xDirection", QJsonArray{frame_.xDirection.X(), frame_.xDirection.Y(), frame_.xDirection.Z()}},
+        {"yDirection", QJsonArray{frame_.yDirection.X(), frame_.yDirection.Y(), frame_.yDirection.Z()}},
+        {"normal", QJsonArray{frame_.normal.X(), frame_.normal.Y(), frame_.normal.Z()}}});
+    QJsonArray entities;
+    for (const auto& entity : entities_) {
+        QJsonObject value;
+        if (const auto* line = std::get_if<SketchLine>(&entity)) {
+            value.insert("type", "Line");
+            QJsonArray start;
+            writePoint2d(start, line->start);
+            QJsonArray end;
+            writePoint2d(end, line->end);
+            value.insert("start", start);
+            value.insert("end", end);
+        } else {
+            const auto& circle = std::get<SketchCircle>(entity);
+            value.insert("type", "Circle");
+            QJsonArray center;
+            writePoint2d(center, circle.center);
+            value.insert("center", center);
+            value.insert("radius", circle.radius);
+        }
+        entities.append(value);
+    }
+    object.insert("entities", entities);
 }
 
 void SketchFeature::setSize(double width, double height)
@@ -180,9 +302,122 @@ void SketchFeature::setSize(double width, double height)
 double SketchFeature::width() const noexcept { return width_; }
 double SketchFeature::height() const noexcept { return height_; }
 
+SketchSupportType SketchFeature::supportType() const noexcept { return supportType_; }
+
+const std::optional<cad::topology::TopologicalReference>&
+SketchFeature::faceReference() const noexcept { return faceReference_; }
+
+const SketchFrame& SketchFeature::frame() const noexcept { return frame_; }
+
+SketchFrame SketchFeature::currentFrame() const
+{
+    if (supportType_ != SketchSupportType::Face) return frame_;
+    const auto source = supportSource_.lock();
+    if (!source) throw std::runtime_error("Sketch support feature no longer exists");
+    const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+        *faceReference_, source->shape());
+    if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape)
+        throw std::runtime_error("Sketch support face could not be resolved: " + resolved.error);
+    return frameForFace(TopoDS::Face(*resolved.shape));
+}
+
+const std::vector<SketchEntity>& SketchFeature::entities() const noexcept { return entities_; }
+
+std::size_t SketchFeature::entityCount() const noexcept { return entities_.size(); }
+
+void SketchFeature::addEntity(SketchEntity entity)
+{
+    if (const auto* circle = std::get_if<SketchCircle>(&entity); circle
+        && (!std::isfinite(circle->radius) || circle->radius <= 0.0)) {
+        throw std::invalid_argument("Sketch circle radius must be positive");
+    }
+    entities_.push_back(std::move(entity));
+    markDirty();
+}
+
+void SketchFeature::removeLastEntity()
+{
+    if (entities_.empty()) throw std::runtime_error("Sketch has no entity to remove");
+    entities_.pop_back();
+    markDirty();
+}
+
+bool SketchFeature::isPlanarFace(const TopoDS_Shape& shape) noexcept
+{
+    if (shape.IsNull() || shape.ShapeType() != TopAbs_FACE) return false;
+    try {
+        return BRepAdaptor_Surface(TopoDS::Face(shape), Standard_True).GetType()
+            == GeomAbs_Plane;
+    } catch (...) {
+        return false;
+    }
+}
+
+SketchFrame SketchFeature::frameForFace(const TopoDS_Face& face)
+{
+    BRepAdaptor_Surface surface(face, Standard_True);
+    if (surface.GetType() != GeomAbs_Plane)
+        throw std::invalid_argument("Sketch on Face currently supports planar faces only");
+
+    GProp_GProps properties;
+    BRepGProp::SurfaceProperties(face, properties);
+    gp_Dir normal = surface.Plane().Axis().Direction();
+    if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+
+    const gp_Vec z(0, 0, 1);
+    const gp_Vec x(1, 0, 0);
+    const gp_Vec reference = std::abs(gp_Vec(normal).Dot(z)) < 0.95 ? z : x;
+    gp_Dir xDirection(reference.Crossed(gp_Vec(normal)));
+    gp_Dir yDirection(gp_Vec(normal).Crossed(gp_Vec(xDirection)));
+    return {properties.CentreOfMass(), xDirection, yDirection, normal};
+}
+
 TopoDS_Shape SketchFeature::build() const
 {
-    return cad::modeling::BasicFeatures::rectangleWire(width_, height_);
+    SketchFrame frame = frame_;
+    if (supportType_ == SketchSupportType::Face) {
+        const auto source = supportSource_.lock();
+        if (!source) throw std::runtime_error("Sketch support feature no longer exists");
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *faceReference_, source->shape());
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape) {
+            throw std::runtime_error("Sketch support face could not be resolved: " + resolved.error);
+        }
+        frame = frameForFace(TopoDS::Face(*resolved.shape));
+    } else if (entities_.empty()) {
+        return cad::modeling::BasicFeatures::rectangleWire(width_, height_);
+    }
+
+    if (entities_.empty()) {
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        return compound;
+    }
+
+    std::vector<TopoDS_Edge> edges;
+    for (const auto& entity : entities_) {
+        if (const auto* line = std::get_if<SketchLine>(&entity)) {
+            edges.push_back(BRepBuilderAPI_MakeEdge(
+                worldPoint(frame, line->start), worldPoint(frame, line->end)).Edge());
+        } else {
+            const auto& circle = std::get<SketchCircle>(entity);
+            const gp_Ax2 axis(worldPoint(frame, circle.center), frame.normal);
+            edges.push_back(BRepBuilderAPI_MakeEdge(
+                gp_Circ(axis, circle.radius)).Edge());
+        }
+    }
+    if (edges.size() == 1 || std::all_of(entities_.begin(), entities_.end(),
+        [](const SketchEntity& entity) { return std::holds_alternative<SketchLine>(entity); })) {
+        BRepBuilderAPI_MakeWire wire;
+        for (const auto& edge : edges) wire.Add(edge);
+        if (wire.IsDone()) return wire.Wire();
+    }
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const auto& edge : edges) builder.Add(compound, edge);
+    return compound;
 }
 
 FaceFeature::FaceFeature(std::string id, const Ptr& source)
@@ -1485,7 +1720,13 @@ TopoDS_Shape SweepFeature::build() const
 
 ParametricFeature::Ptr SketchFeature::clone(std::string newId) const
 {
-    auto copy = std::make_shared<SketchFeature>(std::move(newId), width_, height_);
+    ParametricFeature::Ptr copy;
+    if (supportType_ == SketchSupportType::Face) {
+        copy = std::make_shared<SketchFeature>(
+            std::move(newId), supportSource_.lock(), *faceReference_, entities_);
+    } else {
+        copy = std::make_shared<SketchFeature>(std::move(newId), width_, height_);
+    }
     copyPlacementTo(copy);
     return copy;
 }

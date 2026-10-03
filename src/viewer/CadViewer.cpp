@@ -352,6 +352,63 @@ bool CadViewer::makeViewRay(const QPoint& position, ViewRay& ray) const
     return ::makeViewRay(view_, position, ray.origin, ray.direction);
 }
 
+void CadViewer::enterSketchMode(
+    const gp_Pnt& origin, const gp_Dir& xDirection,
+    const gp_Dir& yDirection, const gp_Dir& normal)
+{
+    sketchMode_ = true;
+    sketchOrigin_ = origin;
+    sketchXDirection_ = xDirection;
+    sketchYDirection_ = yDirection;
+    sketchNormal_ = normal;
+    setSelectionMode(SelectionMode::Object);
+    if (view_ && !view_->Camera().IsNull()) {
+        const auto camera = view_->Camera();
+        const double distance = std::max(camera->Distance(), 1.0);
+        gp_Pnt eye = origin;
+        eye.Translate(-gp_Vec(normal) * distance);
+        camera->SetEyeAndCenter(eye, origin);
+        camera->SetUp(yDirection);
+        invalidateSnapProjectionCache("SKETCH_MODE: aligned camera");
+        view_->Redraw();
+    }
+}
+
+void CadViewer::exitSketchMode()
+{
+    sketchMode_ = false;
+}
+
+bool CadViewer::sketchMode() const noexcept
+{
+    return sketchMode_;
+}
+
+void CadViewer::setSketchPointClickedHandler(
+    std::function<void(const gp_Pnt2d&)> handler)
+{
+    sketchPointClickedHandler_ = std::move(handler);
+}
+
+void CadViewer::setSketchCancelHandler(std::function<void()> handler)
+{
+    sketchCancelHandler_ = std::move(handler);
+}
+
+std::optional<gp_Pnt2d> CadViewer::sketchPointAtScreen(const QPoint& position) const
+{
+    if (!sketchMode_) return std::nullopt;
+    gp_Pnt rayOrigin;
+    gp_Dir rayDirection;
+    if (!::makeViewRay(view_, position, rayOrigin, rayDirection)) return std::nullopt;
+    const auto world = cad::viewer::intersectRayWithPlane(
+        rayOrigin, rayDirection, gp_Pln(sketchOrigin_, sketchNormal_));
+    if (!world) return std::nullopt;
+    const gp_Vec offset(sketchOrigin_, *world);
+    return gp_Pnt2d(offset.Dot(gp_Vec(sketchXDirection_)),
+                    offset.Dot(gp_Vec(sketchYDirection_)));
+}
+
 void CadViewer::updateTransformGizmo()
 {
     if (!initialized_ || !transformMode_ || !transformGizmo_ || transformDragging_) {
@@ -1590,6 +1647,14 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     interactionMode_ = InteractionMode::None;
     clearAxisHover();
 
+    if (sketchMode_ && event->button() == Qt::LeftButton) {
+        if (sketchPointClickedHandler_) {
+            const auto point = sketchPointAtScreen(lastMousePosition_);
+            if (point) sketchPointClickedHandler_(*point);
+        }
+        return;
+    }
+
     if (transformDragging_) {
         if (event->button() == Qt::RightButton) {
             cancelTransform();
@@ -1850,6 +1915,11 @@ void CadViewer::wheelEvent(QWheelEvent* event)
 
 void CadViewer::keyPressEvent(QKeyEvent* event)
 {
+    if (sketchMode_ && event->key() == Qt::Key_Escape) {
+        if (sketchCancelHandler_) sketchCancelHandler_();
+        event->accept();
+        return;
+    }
     if (pushPullActive_) {
         if (event->key() == Qt::Key_Escape) {
             cancelPushPull();

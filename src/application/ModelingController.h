@@ -30,6 +30,11 @@ public:
     ModelingResult createBox();
     ModelingResult createCylinder();
     ModelingResult createSketch();
+    ModelingResult createSketchOnFace(const SelectionSnapshot& selection);
+    ModelingResult addSketchLine(
+        const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end);
+    ModelingResult addSketchCircle(
+        const std::string& sketchId, const gp_Pnt2d& center, double radius);
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;

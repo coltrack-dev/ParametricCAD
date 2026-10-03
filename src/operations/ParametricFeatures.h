@@ -8,17 +8,51 @@
 #include <TopoDS_Wire.hxx>
 
 #include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace cad::parametric {
+
+enum class SketchSupportType { XY, XZ, YZ, Face };
+
+struct SketchFrame
+{
+    gp_Pnt origin;
+    gp_Dir xDirection;
+    gp_Dir yDirection;
+    gp_Dir normal;
+};
+
+struct SketchLine
+{
+    gp_Pnt2d start;
+    gp_Pnt2d end;
+};
+
+struct SketchCircle
+{
+    gp_Pnt2d center;
+    double radius{0.0};
+};
+
+using SketchEntity = std::variant<SketchLine, SketchCircle>;
 
 class SketchFeature final : public ParametricFeature
 {
 public:
     SketchFeature(std::string id, double width, double height);
+    SketchFeature(std::string id, SketchSupportType support, double width, double height);
+    SketchFeature(
+        std::string id,
+        const Ptr& supportSource,
+        cad::topology::TopologicalReference faceReference,
+        std::vector<SketchEntity> entities = {}
+    );
     const char* typeId() const noexcept override { return "Sketch"; }
     Ptr clone(std::string newId) const override;
     FeatureRole role() const noexcept override { return FeatureRole::Sketch; }
@@ -27,6 +61,16 @@ public:
     void setSize(double width, double height);
     double width() const noexcept;
     double height() const noexcept;
+    SketchSupportType supportType() const noexcept;
+    const std::optional<cad::topology::TopologicalReference>& faceReference() const noexcept;
+    const SketchFrame& frame() const noexcept;
+    SketchFrame currentFrame() const;
+    const std::vector<SketchEntity>& entities() const noexcept;
+    std::size_t entityCount() const noexcept;
+    void addEntity(SketchEntity entity);
+    void removeLastEntity();
+    static SketchFrame frameForFace(const TopoDS_Face& face);
+    static bool isPlanarFace(const TopoDS_Shape& shape) noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -35,6 +79,11 @@ protected:
 private:
     double width_;
     double height_;
+    SketchSupportType supportType_{SketchSupportType::XY};
+    std::weak_ptr<ParametricFeature> supportSource_;
+    std::optional<cad::topology::TopologicalReference> faceReference_;
+    SketchFrame frame_;
+    std::vector<SketchEntity> entities_;
 };
 
 class FaceFeature final : public ParametricFeature

@@ -81,6 +81,7 @@ void FeatureEditorPanel::setActionState(
     canBoolean_ = state.canBoolean;
     canFillet_ = state.canFillet;
     canChamfer_ = state.canChamfer;
+    canSketchOnFace_ = state.canSketchOnFace;
     refresh();
 }
 

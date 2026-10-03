@@ -89,6 +89,31 @@ std::vector<cad::topology::TopologicalReference> topologicalReferences(
     }
     return result;
 }
+
+std::vector<SketchEntity> sketchEntities(const QJsonObject& object)
+{
+    std::vector<SketchEntity> result;
+    for (const auto& value : object.value("entities").toArray()) {
+        require(value.isObject(), "Invalid sketch entity");
+        const auto entity = value.toObject();
+        const auto type = string(entity, "type");
+        if (type == "Line") {
+            result.push_back(SketchLine{
+                {entity.value("start").toArray().at(0).toDouble(),
+                 entity.value("start").toArray().at(1).toDouble()},
+                {entity.value("end").toArray().at(0).toDouble(),
+                 entity.value("end").toArray().at(1).toDouble()}});
+        } else if (type == "Circle") {
+            result.push_back(SketchCircle{
+                {entity.value("center").toArray().at(0).toDouble(),
+                 entity.value("center").toArray().at(1).toDouble()},
+                number(entity, "radius")});
+        } else {
+            throw std::invalid_argument("Unsupported sketch entity type");
+        }
+    }
+    return result;
+}
 QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
 {
     for (const auto& weak : feature->dependencies()) {
@@ -104,9 +129,22 @@ using FeatureFactory = std::function<ParametricFeature::Ptr(const QJsonObject&, 
 const std::unordered_map<std::string, FeatureFactory>& factories()
 {
     static const std::unordered_map<std::string, FeatureFactory> registry{
-        {"Sketch", [](const QJsonObject& o, const Body&) {
-            require(string(o, "plane") == "XY", "Unsupported Sketch plane (expected XY)");
-            return std::make_shared<SketchFeature>(string(o, "id"), number(o, "width"), number(o, "height"));
+        {"Sketch", [](const QJsonObject& o, const Body& body) {
+            const auto support = o.value("supportType").toString(
+                o.value("plane").toString("XY"));
+            if (support == "Face") {
+                const auto reference = cad::topology::topologicalReferenceFromJson(
+                    o.value("supportReference").toObject());
+                const auto source = body.findFeature(reference.featureId);
+                require(source && reference.kind == cad::topology::TopologicalKind::Face,
+                        "Sketch references missing or invalid support face");
+                return std::make_shared<SketchFeature>(string(o, "id"), source,
+                    reference, sketchEntities(o));
+            }
+            const auto supportType = support == "XZ" ? SketchSupportType::XZ
+                : support == "YZ" ? SketchSupportType::YZ : SketchSupportType::XY;
+            return std::make_shared<SketchFeature>(string(o, "id"), supportType,
+                number(o, "width"), number(o, "height"));
         }},
         {"Face", [](const QJsonObject& o, const Body& body) {
             const auto sourceId = string(o, "sourceFeatureId");

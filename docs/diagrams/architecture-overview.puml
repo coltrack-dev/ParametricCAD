@@ -30,6 +30,7 @@ package "Parametric model" {
     component Body
     component ParametricFeature <<abstract>>
     component TopologicalReference
+    component "SketchFeature\nlocal 2D entities / frame" as SketchFeature
     component "Primitive / profile features" as PrimitiveFeatures
     component "Operation features\nExtrude, Boolean, PushPull, ..." as OperationFeatures
 }
@@ -65,6 +66,8 @@ TransformFeatureCommand --> Body : placement before / after
 Body *-- ParametricFeature
 PrimitiveFeatures --|> ParametricFeature
 OperationFeatures --|> ParametricFeature
+SketchFeature --|> ParametricFeature
+SketchFeature --> TopologicalReference : Face support
 
 ParametricFeature --> BasicFeatures : build geometry
 ParametricFeature --> TopologicalReference : stable subshape dependencies

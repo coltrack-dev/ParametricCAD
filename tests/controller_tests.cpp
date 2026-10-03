@@ -431,6 +431,77 @@ private slots:
         QCOMPARE(resolved.status, ResolveStatus::Resolved);
     }
 
+    void sketchOnFaceIsParametricAndUndoable()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        SelectionSnapshot selection{{{box.id, SelectionKind::Face, 1}}};
+        QVERIFY(controller.actionState(selection).canSketchOnFace);
+
+        const auto created = controller.createSketchOnFace(selection);
+        QVERIFY(created.success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(created.id));
+        QVERIFY(sketch);
+        QCOMPARE(sketch->supportType(), SketchSupportType::Face);
+        QCOMPARE(sketch->dependencies().size(), std::size_t{1});
+        QVERIFY(sketch->shape().ShapeType() == TopAbs_COMPOUND);
+        const auto frame = sketch->currentFrame();
+        QVERIFY(std::abs(gp_Vec(frame.xDirection).Crossed(
+            gp_Vec(frame.yDirection)).Dot(gp_Vec(frame.normal)) - 1.0) < 1.0e-9);
+
+        QVERIFY(controller.addSketchLine(created.id, {0, 0}, {20, 0}).success);
+        QVERIFY(controller.addSketchCircle(created.id, {10, 10}, 5.0).success);
+        QCOMPARE(sketch->entityCount(), std::size_t{2});
+        controller.undo();
+        QCOMPARE(sketch->entityCount(), std::size_t{1});
+        controller.redo();
+        QCOMPARE(sketch->entityCount(), std::size_t{2});
+
+        const auto changed = controller.setFeatureProperty(box.id, "width", 150.0);
+        QVERIFY(changed.success);
+        QVERIFY(sketch->state() == FeatureState::UpToDate);
+        QCOMPARE(sketch->entityCount(), std::size_t{2});
+        const auto recreated = std::make_shared<BoxParametricFeature>(box.id, 150.0, 70.0, 30.0);
+        QVERIFY(recreated->recompute());
+        const auto rematched = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *sketch->faceReference(), recreated->shape());
+        QCOMPARE(rematched.status, cad::topology::ResolveStatus::Resolved);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("attached-sketch.pcad");
+        QVERIFY(ProjectFile::save(path, controller.document(), controller.body(), error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(created.id));
+        QVERIFY(loaded);
+        QCOMPARE(loaded->entityCount(), std::size_t{2});
+        QCOMPARE(loaded->supportType(), SketchSupportType::Face);
+        QVERIFY(!loaded->shape().IsNull());
+
+        ModelingController cylinderController;
+        const auto cylinder = cylinderController.createCylinder();
+        QVERIFY(cylinder.success);
+        TopTools_IndexedMapOfShape cylinderFaces;
+        TopExp::MapShapes(cylinderController.body().findFeature(cylinder.id)->shape(),
+            TopAbs_FACE, cylinderFaces);
+        int curvedFaceIndex = 0;
+        for (int index = 1; index <= cylinderFaces.Extent(); ++index) {
+            if (!SketchFeature::isPlanarFace(cylinderFaces(index))) {
+                curvedFaceIndex = index;
+                break;
+            }
+        }
+        QVERIFY(curvedFaceIndex > 0);
+        const SelectionSnapshot curvedFace{{{cylinder.id, SelectionKind::Face, curvedFaceIndex}}};
+        QVERIFY(!cylinderController.actionState(curvedFace).canSketchOnFace);
+        QVERIFY(!cylinderController.createSketchOnFace(curvedFace).success);
+    }
+
     void duplicateCreatesIndependentFeatureAndRepeatsDelta()
     {
         ModelingController controller;

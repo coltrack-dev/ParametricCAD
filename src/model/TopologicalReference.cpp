@@ -163,6 +163,14 @@ bool closeDirection(const std::optional<gp_Dir>& a, const std::optional<gp_Dir>&
     return std::abs(a->Dot(*b)) >= std::cos(tolerance.angular);
 }
 
+bool closeOrientedDirection(const std::optional<gp_Dir>& a,
+                            const std::optional<gp_Dir>& b,
+                            const TopologicalMatchTolerance& tolerance)
+{
+    if (!a || !b) return !a && !b;
+    return a->Dot(*b) >= std::cos(tolerance.angular);
+}
+
 FaceSignature makeFaceSignature(const TopoDS_Face& face)
 {
     BRepAdaptor_Surface surface(face, Standard_True);
@@ -225,12 +233,22 @@ TopologicalSignature makeSignature(const TopoDS_Shape& shape)
 bool faceMatches(const FaceSignature& reference, const FaceSignature& candidate,
                  const TopologicalMatchTolerance& tolerance)
 {
-    return reference.surfaceKind == candidate.surfaceKind
-        && closePoint(reference.centroid, candidate.centroid, tolerance)
+    if (reference.surfaceKind != candidate.surfaceKind
+        || !closeOrientedDirection(reference.normal, candidate.normal, tolerance)) return false;
+    if (reference.surfaceKind == SurfaceKind::Plane) return true;
+    return closePoint(reference.centroid, candidate.centroid, tolerance)
         && closeRelative(reference.area, candidate.area, tolerance.relativeArea)
-        && closeDirection(reference.normal, candidate.normal, tolerance)
         && (!reference.radius || (candidate.radius
             && closeRelative(*reference.radius, *candidate.radius, tolerance.radius)));
+}
+
+bool facePlaneMatchesIgnoringOrientation(const FaceSignature& reference,
+                                         const FaceSignature& candidate,
+                                         const TopologicalMatchTolerance& tolerance)
+{
+    return reference.surfaceKind == SurfaceKind::Plane
+        && candidate.surfaceKind == SurfaceKind::Plane
+        && closeDirection(reference.normal, candidate.normal, tolerance);
 }
 
 bool edgeMatches(const EdgeSignature& reference, const EdgeSignature& candidate,
@@ -349,6 +367,19 @@ TopologicalResolveResult TopologicalReferenceResolver::resolveAgainstShape(
         const auto candidate = map(index);
         if (signatureMatches(*reference.signature, makeSignature(candidate), tolerance))
             matches.emplace_back(index, candidate);
+    }
+    if (matches.empty()) {
+        if (const auto* face = std::get_if<FaceSignature>(&*reference.signature)) {
+            for (int index = 1; index <= map.Extent(); ++index) {
+                const auto candidate = map(index);
+                const auto candidateSignature = makeSignature(candidate);
+                if (const auto* candidateFace = std::get_if<FaceSignature>(&candidateSignature);
+                    candidateFace && facePlaneMatchesIgnoringOrientation(
+                        *face, *candidateFace, tolerance)) {
+                    matches.emplace_back(index, candidate);
+                }
+            }
+        }
     }
     if (matches.empty())
         return {ResolveStatus::Missing, std::nullopt, std::nullopt,

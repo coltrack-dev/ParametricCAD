@@ -19,6 +19,8 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Vec.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt2d.hxx>
 
 #include "viewer/PushPullDrag.h"
 #include "viewer/SnapManager.h"
@@ -73,6 +75,13 @@ public:
     SelectionMode selectionMode() const;
     cad::application::SelectionSnapshot selectionSnapshot() const;
     void clearSelection();
+    void enterSketchMode(const gp_Pnt& origin, const gp_Dir& xDirection,
+                         const gp_Dir& yDirection, const gp_Dir& normal);
+    void exitSketchMode();
+    bool sketchMode() const noexcept;
+    void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&)> handler);
+    void setSketchCancelHandler(std::function<void()> handler);
+    std::optional<gp_Pnt2d> sketchPointAtScreen(const QPoint& position) const;
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler
     );
@@ -185,6 +194,13 @@ private:
     std::function<void(const QString&, int, const gp_Vec&, double)> pushPullCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCopyCommittedHandler_;
+    bool sketchMode_{false};
+    gp_Pnt sketchOrigin_;
+    gp_Dir sketchXDirection_;
+    gp_Dir sketchYDirection_;
+    gp_Dir sketchNormal_;
+    std::function<void(const gp_Pnt2d&)> sketchPointClickedHandler_;
+    std::function<void()> sketchCancelHandler_;
 
     std::unique_ptr<cad::viewer::TransformGizmo> transformGizmo_;
     cad::viewer::SnapManager snapManager_;

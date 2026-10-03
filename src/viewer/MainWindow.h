@@ -5,6 +5,8 @@
 #include "application/ProjectController.h"
 
 #include <memory>
+#include <optional>
+#include <gp_Pnt2d.hxx>
 
 class CadViewer;
 class FeatureEditorPanel;
@@ -41,6 +43,13 @@ private:
     void createBox();
     void createCylinder();
     void createRectangleSketch();
+    void createSketchOnFace();
+    void finishSketch();
+    void selectSketchLineTool();
+    void selectSketchCircleTool();
+    void selectSketchRectangleTool();
+    void enterSketchEditing(const std::string& sketchId);
+    void handleSketchPoint(const gp_Pnt2d& point);
     void createFace();
     void createExtrude();
     void createLinearPattern();
@@ -61,6 +70,15 @@ private:
     QAction* pathPatternAction_{nullptr};
     QAction* filletAction_{nullptr};
     QAction* chamferAction_{nullptr};
+    QAction* sketchOnFaceAction_{nullptr};
+    QAction* sketchLineAction_{nullptr};
+    QAction* sketchCircleAction_{nullptr};
+    QAction* sketchRectangleAction_{nullptr};
+    QAction* finishSketchAction_{nullptr};
+    enum class SketchTool { None, Line, Circle, Rectangle };
+    SketchTool sketchTool_{SketchTool::None};
+    std::string activeSketchId_;
+    std::optional<gp_Pnt2d> sketchFirstPoint_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this
     // mirror supplies MainWindow actions and model operation inputs without

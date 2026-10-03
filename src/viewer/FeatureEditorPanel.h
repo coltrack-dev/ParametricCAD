@@ -72,6 +72,7 @@ private:
     bool canBoolean_{false};
     bool canFillet_{false};
     bool canChamfer_{false};
+    bool canSketchOnFace_{false};
     bool refreshPending_{false};
     bool updatingProperties_{false};
     bool committingPendingEdit_{false};

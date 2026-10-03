@@ -80,6 +80,64 @@ ModelingResult ModelingController::createSketch()
         id("sketch"), 100.0, 60.0));
 }
 
+ModelingResult ModelingController::createSketchOnFace(
+    const SelectionSnapshot& selection)
+{
+    if (selection.items.size() != 1
+        || selection.items.front().kind != SelectionKind::Face
+        || !selection.items.front().subshapeIndex) {
+        return {false, {}, "Sketch on Face requires exactly one Face"};
+    }
+    const auto& item = selection.items.front();
+    const auto source = body_.findFeature(item.featureId);
+    if (!source) return {false, {}, "Sketch support feature does not exist"};
+    SelectionResolver resolver(body_);
+    const auto face = resolver.resolve(item);
+    if (!face || !cad::parametric::SketchFeature::isPlanarFace(*face)) {
+        return {false, {}, "Sketch on Face currently supports planar faces only"};
+    }
+    try {
+        const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            source->id(), source->shape(), *face);
+        return addFeature(std::make_shared<cad::parametric::SketchFeature>(
+            id("sketch"), source, reference));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::addSketchLine(
+    const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end)
+{
+    const auto feature = body_.findFeature(sketchId);
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+    if (!sketch || sketch->supportType() != cad::parametric::SketchSupportType::Face)
+        return {false, {}, "Active sketch does not exist"};
+    try {
+        undoStack_.push(new cad::commands::AddSketchEntityCommand(
+            body_, sketch, cad::parametric::SketchLine{start, end}));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::addSketchCircle(
+    const std::string& sketchId, const gp_Pnt2d& center, const double radius)
+{
+    const auto feature = body_.findFeature(sketchId);
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+    if (!sketch || sketch->supportType() != cad::parametric::SketchSupportType::Face)
+        return {false, {}, "Active sketch does not exist"};
+    try {
+        undoStack_.push(new cad::commands::AddSketchEntityCommand(
+            body_, sketch, cad::parametric::SketchCircle{center, radius}));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::createPrimitive(const PrimitiveKind kind)
 {
     switch (kind) {
@@ -466,6 +524,16 @@ ModelingActionState ModelingController::actionState(
             });
         state.canFillet = sameSource;
         state.canChamfer = sameSource;
+        if (selection.items.size() == 1 && first.kind == SelectionKind::Face
+            && first.subshapeIndex && !first.featureId.empty()) {
+            const auto feature = body_.findFeature(first.featureId);
+            if (feature) {
+                SelectionResolver resolver(body_);
+                const auto face = resolver.resolve(first);
+                state.canSketchOnFace = face
+                    && cad::parametric::SketchFeature::isPlanarFace(*face);
+            }
+        }
     }
     return state;
 }

@@ -52,6 +52,10 @@ MainWindow::MainWindow(QWidget* parent)
                 featureId.toStdString(), delta));
         }
     );
+    viewer_->setSketchPointClickedHandler(
+        [this](const gp_Pnt2d& point) { handleSketchPoint(point); });
+    viewer_->setSketchCancelHandler(
+        [this]() { sketchFirstPoint_.reset(); });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         refreshModelView();
         featureEditorPanel_->scheduleRefresh();
@@ -179,6 +183,7 @@ void MainWindow::updateActionState()
     if (duplicateAction_) duplicateAction_->setEnabled(selectedIds().size() == 1);
     faceAction_->setEnabled(state.canCreateFace);
     extrudeAction_->setEnabled(state.canExtrude);
+    if (sketchOnFaceAction_) sketchOnFaceAction_->setEnabled(state.canSketchOnFace);
     if (linearPatternAction_) linearPatternAction_->setEnabled(selectedIds().size() == 1);
     if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
     if (filletAction_) filletAction_->setEnabled(state.canFillet);
@@ -258,6 +263,21 @@ void MainWindow::createActions()
     modelingMenu->addSeparator();
     auto* sketchAction = modelingMenu->addAction("Add Rectangle Sketch");
     connect(sketchAction, &QAction::triggered, this, &MainWindow::createRectangleSketch);
+    sketchOnFaceAction_ = modelingMenu->addAction("Sketch on Face");
+    sketchOnFaceAction_->setEnabled(false);
+    connect(sketchOnFaceAction_, &QAction::triggered, this, &MainWindow::createSketchOnFace);
+    sketchLineAction_ = modelingMenu->addAction("Sketch Line");
+    sketchLineAction_->setEnabled(false);
+    connect(sketchLineAction_, &QAction::triggered, this, &MainWindow::selectSketchLineTool);
+    sketchCircleAction_ = modelingMenu->addAction("Sketch Circle");
+    sketchCircleAction_->setEnabled(false);
+    connect(sketchCircleAction_, &QAction::triggered, this, &MainWindow::selectSketchCircleTool);
+    sketchRectangleAction_ = modelingMenu->addAction("Sketch Rectangle");
+    sketchRectangleAction_->setEnabled(false);
+    connect(sketchRectangleAction_, &QAction::triggered, this, &MainWindow::selectSketchRectangleTool);
+    finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
+    finishSketchAction_->setEnabled(false);
+    connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
     faceAction_ = modelingMenu->addAction("Create Face");
     faceAction_->setEnabled(false);
     connect(faceAction_, &QAction::triggered, this, &MainWindow::createFace);
@@ -309,6 +329,99 @@ void MainWindow::createCylinder()
 void MainWindow::createRectangleSketch()
 {
     reportResult(modeling_.createSketch());
+}
+
+void MainWindow::createSketchOnFace()
+{
+    const auto result = modeling_.createSketchOnFace(currentSelection_);
+    reportResult(result);
+    if (result.success) enterSketchEditing(result.id);
+}
+
+void MainWindow::enterSketchEditing(const std::string& sketchId)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(sketchId));
+    if (!sketch) return;
+    try {
+        const auto frame = sketch->currentFrame();
+        activeSketchId_ = sketchId;
+        sketchTool_ = SketchTool::Line;
+        sketchFirstPoint_.reset();
+        viewer_->enterSketchMode(frame.origin, frame.xDirection,
+            frame.yDirection, frame.normal);
+        sketchLineAction_->setEnabled(true);
+        sketchCircleAction_->setEnabled(true);
+        sketchRectangleAction_->setEnabled(true);
+        finishSketchAction_->setEnabled(true);
+        statusBar()->showMessage("Sketch mode: select a drawing tool");
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, "Sketch editing failed", error.what());
+    }
+}
+
+void MainWindow::finishSketch()
+{
+    viewer_->exitSketchMode();
+    activeSketchId_.clear();
+    sketchTool_ = SketchTool::None;
+    sketchFirstPoint_.reset();
+    sketchLineAction_->setEnabled(false);
+    sketchCircleAction_->setEnabled(false);
+    sketchRectangleAction_->setEnabled(false);
+    finishSketchAction_->setEnabled(false);
+    statusBar()->showMessage("Ready");
+    refreshModelView(false);
+}
+
+void MainWindow::selectSketchLineTool()
+{
+    sketchTool_ = SketchTool::Line;
+    sketchFirstPoint_.reset();
+}
+
+void MainWindow::selectSketchCircleTool()
+{
+    sketchTool_ = SketchTool::Circle;
+    sketchFirstPoint_.reset();
+}
+
+void MainWindow::selectSketchRectangleTool()
+{
+    sketchTool_ = SketchTool::Rectangle;
+    sketchFirstPoint_.reset();
+}
+
+void MainWindow::handleSketchPoint(const gp_Pnt2d& point)
+{
+    if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
+    if (!sketchFirstPoint_) {
+        sketchFirstPoint_ = point;
+        return;
+    }
+    const auto first = *sketchFirstPoint_;
+    sketchFirstPoint_.reset();
+    cad::application::ModelingResult result;
+    if (sketchTool_ == SketchTool::Line) {
+        result = modeling_.addSketchLine(activeSketchId_, first, point);
+    } else if (sketchTool_ == SketchTool::Circle) {
+        result = modeling_.addSketchCircle(activeSketchId_, first, first.Distance(point));
+    } else {
+        result = modeling_.addSketchLine(activeSketchId_, first,
+            {point.X(), first.Y()});
+        if (result.success) result = modeling_.addSketchLine(activeSketchId_,
+            {point.X(), first.Y()}, point);
+        if (result.success) result = modeling_.addSketchLine(activeSketchId_,
+            point, {first.X(), point.Y()});
+        if (result.success) result = modeling_.addSketchLine(activeSketchId_,
+            {first.X(), point.Y()}, first);
+    }
+    if (!result.success) {
+        QMessageBox::warning(this, "Sketch entity failed",
+            QString::fromStdString(result.error));
+    } else {
+        refreshModelView(false);
+    }
 }
 
 void MainWindow::createFace()

@@ -23,6 +23,32 @@ AddFeatureCommand::AddFeatureCommand(parametric::Body& body,
     if (!feature_->recompute()) throw std::invalid_argument(feature_->error());
 }
 
+AddSketchEntityCommand::AddSketchEntityCommand(
+    parametric::Body& body,
+    std::shared_ptr<parametric::SketchFeature> sketch,
+    parametric::SketchEntity entity
+)
+    : QUndoCommand("Add Sketch Entity"), body_(body),
+      sketch_(std::move(sketch)), entity_(std::move(entity))
+{
+    if (!sketch_ || body_.findFeature(sketch_->id()) != sketch_)
+        throw std::invalid_argument("Sketch entity command requires an active sketch");
+}
+
+void AddSketchEntityCommand::redo()
+{
+    sketch_->addEntity(entity_);
+    body_.markDirtyFrom(sketch_->id());
+    if (!body_.recompute()) throw std::runtime_error(body_.lastError());
+}
+
+void AddSketchEntityCommand::undo()
+{
+    sketch_->removeLastEntity();
+    body_.markDirtyFrom(sketch_->id());
+    body_.recompute();
+}
+
 DuplicateFeatureCommand::DuplicateFeatureCommand(
     parametric::Body& body,
     parametric::ParametricFeature::Ptr feature,
