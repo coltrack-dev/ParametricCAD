@@ -2,10 +2,13 @@
 
 #include <cmath>
 #include <algorithm>
+#include <array>
 
 #include <QAction>
+#include <QApplication>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QFocusEvent>
 #include <QActionGroup>
 #include <QLabel>
 #include <QKeyEvent>
@@ -60,6 +63,10 @@ constexpr double PushPullTolerance = 1.0e-6;
 constexpr double TransformPreviewTolerance = 1.0e-9;
 constexpr Standard_Real XRayTransparency = 0.65;
 constexpr int DetectedCyclePositionTolerance = 3;
+
+constexpr double AxisIndicatorScale = 0.12;
+constexpr double AxisIndicatorArm = 0.65;
+constexpr double AxisIndicatorHitRadius = 0.30;
 
 bool makeViewRay(
     const Handle(V3d_View)& view,
@@ -469,6 +476,46 @@ void CadViewer::updateTransformSnap(
     }
 }
 
+std::optional<gp_Pnt> CadViewer::worldAnchorAtScreenPoint(const QPoint& position) const
+{
+    if (!view_ || view_->Camera().IsNull()) return std::nullopt;
+
+    ViewRay ray;
+    if (!makeViewRay(position, ray)) return std::nullopt;
+
+    const auto camera = view_->Camera();
+    const gp_Pln anchorPlane(camera->Center(), camera->Direction());
+    return cad::viewer::intersectRayWithPlane(
+        ray.origin,
+        ray.direction,
+        anchorPlane
+    );
+}
+
+void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
+{
+    const auto pointBefore = worldAnchorAtScreenPoint(position);
+    view_->SetZoom(factor);
+
+    if (pointBefore) {
+        const auto pointAfter = worldAnchorAtScreenPoint(position);
+        if (pointAfter) {
+            const gp_Vec correction = cad::viewer::zoomAnchorCorrection(
+                *pointBefore,
+                *pointAfter
+            );
+            const auto camera = view_->Camera();
+            gp_Pnt eye = camera->Eye();
+            gp_Pnt center = camera->Center();
+            eye.Translate(correction);
+            center.Translate(correction);
+            camera->SetEyeAndCenter(eye, center);
+        }
+    }
+
+    view_->Redraw();
+}
+
 void CadViewer::updateTransformPreview(const QPoint& position)
 {
     if (!transformDragging_ || transformObject_.IsNull()) return;
@@ -690,6 +737,10 @@ void CadViewer::resizeEvent(QResizeEvent* event)
     if (toolBar_ != nullptr) {
         toolBar_->move(8, 8);
         toolBar_->raise();
+    }
+
+    if (axisHoverActive_) {
+        updateAxisHover(lastMousePosition_);
     }
 }
 
@@ -1256,11 +1307,169 @@ void CadViewer::cancelPushPull()
     syncToolBarState();
 }
 
+void CadViewer::stopMousePan()
+{
+    if (interactionMode_ == InteractionMode::Pan && mouseGrabber() == this) {
+        releaseMouse();
+    }
+    interactionMode_ = InteractionMode::None;
+}
+
+std::optional<QPointF> CadViewer::axisIndicatorPosition(const int axis) const
+{
+    if (!view_ || view_->Camera().IsNull()) return std::nullopt;
+
+    Standard_Integer width = 0;
+    Standard_Integer height = 0;
+    view_->Window()->Size(width, height);
+    if (width <= 0 || height <= 0) return std::nullopt;
+
+    const double indicatorSize = std::clamp(
+        std::min(this->width(), this->height()) * AxisIndicatorScale,
+        48.0,
+        120.0
+    );
+    const QPointF base(
+        indicatorSize * 0.85,
+        this->height() - indicatorSize * 0.85
+    );
+    const double armLength = indicatorSize * AxisIndicatorArm;
+
+    const auto project = [this, width, height](const gp_Pnt& point) {
+        return projectWorldPoint(view_, point, width, height);
+    };
+    const gp_Pnt origin = view_->Camera()->Center();
+    const std::array<gp_Dir, 3> axes{
+        gp_Dir(1.0, 0.0, 0.0),
+        gp_Dir(0.0, 1.0, 0.0),
+        gp_Dir(0.0, 0.0, 1.0)
+    };
+    if (axis < 0 || axis >= static_cast<int>(axes.size())) {
+        return std::nullopt;
+    }
+
+    gp_Pnt axisPoint = origin;
+    axisPoint.Translate(gp_Vec(axes[axis]));
+    const QPointF screenDirection = project(axisPoint) - project(origin);
+    const double length = std::hypot(
+        screenDirection.x(),
+        screenDirection.y()
+    );
+    if (length <= 1.0e-6) return std::nullopt;
+
+    return base + screenDirection * (armLength / length);
+}
+
+std::optional<int> CadViewer::axisIndicatorHitTest(const QPoint& position) const
+{
+    const double indicatorSize = std::clamp(
+        std::min(this->width(), this->height()) * AxisIndicatorScale,
+        48.0,
+        120.0
+    );
+    const QPointF base(
+        indicatorSize * 0.85,
+        this->height() - indicatorSize * 0.85
+    );
+    const double hitRadius = std::clamp(
+        indicatorSize * AxisIndicatorHitRadius,
+        18.0,
+        28.0
+    );
+
+    std::optional<int> closestAxis;
+    double closestDistance = hitRadius;
+    for (int index = 0; index < 3; ++index) {
+        const auto endpoint = axisIndicatorPosition(index);
+        if (!endpoint) continue;
+        const QPointF start = base;
+        const QPointF cursor(position);
+        const QPointF segment = *endpoint - start;
+        const double segmentLengthSquared = QPointF::dotProduct(segment, segment);
+        if (segmentLengthSquared <= 1.0e-6) continue;
+        const double projection = std::clamp(
+            QPointF::dotProduct(cursor - start, segment)
+                / segmentLengthSquared,
+            0.0,
+            1.0
+        );
+        const QPointF nearest = start + segment * projection;
+        const double distance = std::hypot(
+            cursor.x() - nearest.x(),
+            cursor.y() - nearest.y()
+        );
+        if (distance <= closestDistance) {
+            closestDistance = distance;
+            closestAxis = index;
+        }
+    }
+
+    return closestAxis;
+}
+
+void CadViewer::updateAxisHover(const QPoint& position)
+{
+    const auto axis = axisIndicatorHitTest(position);
+    if (axis) {
+        if (!axisHoverActive_) {
+            setCursor(Qt::PointingHandCursor);
+            axisHoverActive_ = true;
+        }
+        return;
+    }
+
+    clearAxisHover();
+}
+
+void CadViewer::clearAxisHover()
+{
+    if (axisHoverActive_) {
+        unsetCursor();
+        axisHoverActive_ = false;
+    }
+}
+
+void CadViewer::setStandardView(const StandardView view)
+{
+    if (!view_ || view_->Camera().IsNull()) return;
+
+    gp_Dir direction;
+    gp_Dir up;
+    switch (view) {
+    case StandardView::Right:
+        direction = gp_Dir(-1.0, 0.0, 0.0);
+        up = gp_Dir(0.0, 0.0, 1.0);
+        break;
+    case StandardView::Front:
+        direction = gp_Dir(0.0, -1.0, 0.0);
+        up = gp_Dir(0.0, 0.0, 1.0);
+        break;
+    case StandardView::Top:
+        direction = gp_Dir(0.0, 0.0, -1.0);
+        up = gp_Dir(0.0, 1.0, 0.0);
+        break;
+    }
+
+    const auto camera = view_->Camera();
+    const gp_Pnt center = camera->Center();
+    const double distance = std::max(camera->Distance(), 1.0e-6);
+    gp_Pnt eye = center;
+    eye.Translate(-gp_Vec(direction) * distance);
+    camera->SetEyeAndCenter(eye, center);
+    camera->SetUp(up);
+    view_->Redraw();
+    if (transformMode_) {
+        updateTransformGizmo();
+    }
+}
+
 void CadViewer::mousePressEvent(QMouseEvent* event)
 {
     lastMousePosition_ =
         event->position().toPoint();
     mousePressPosition_ = lastMousePosition_;
+    interactionMode_ = InteractionMode::None;
+    clearAxisHover();
 
     if (transformDragging_) {
         if (event->button() == Qt::RightButton) {
@@ -1268,6 +1477,26 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
             return;
         }
         if (event->button() == Qt::LeftButton) return;
+    }
+
+    if (initialized_ && event->button() == Qt::LeftButton && !pushPullActive_) {
+        const auto axis = axisIndicatorHitTest(lastMousePosition_);
+        if (axis) {
+            switch (*axis) {
+            case 0:
+                setStandardView(StandardView::Right);
+                break;
+            case 1:
+                setStandardView(StandardView::Front);
+                break;
+            case 2:
+                setStandardView(StandardView::Top);
+                break;
+            }
+            clearAxisHover();
+            interactionMode_ = InteractionMode::None;
+            return;
+        }
     }
 
     if (transformMode_ && event->button() == Qt::LeftButton
@@ -1314,6 +1543,15 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         );
     }
 
+    if (initialized_ &&
+        event->button() == Qt::LeftButton &&
+        !pushPullArmed_) {
+        selectionAdapter_->moveTo(lastMousePosition_, view_, true);
+        if (!selectionAdapter_->detectedHit()) {
+            interactionMode_ = InteractionMode::PendingEmptyPan;
+        }
+    }
+
     QWidget::mousePressEvent(event);
 }
 
@@ -1325,6 +1563,10 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
     const QPoint currentPosition =
         event->position().toPoint();
+
+    if (event->buttons() != Qt::NoButton) {
+        clearAxisHover();
+    }
 
     if (transformDragging_) {
         QElapsedTimer gizmoTimer;
@@ -1342,6 +1584,33 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         updatePushPullPreview(currentPosition);
         lastMousePosition_ = currentPosition;
         return;
+    }
+
+    if (interactionMode_ == InteractionMode::Pan) {
+        if (!event->buttons().testFlag(Qt::LeftButton)) {
+            stopMousePan();
+            return;
+        }
+
+        const int deltaX = currentPosition.x() - lastMousePosition_.x();
+        const int deltaY = lastMousePosition_.y() - currentPosition.y();
+        view_->Pan(deltaX, deltaY);
+        lastMousePosition_ = currentPosition;
+        return;
+    }
+
+    if (interactionMode_ == InteractionMode::PendingEmptyPan) {
+        if (!event->buttons().testFlag(Qt::LeftButton)) {
+            interactionMode_ = InteractionMode::None;
+        } else if ((currentPosition - mousePressPosition_).manhattanLength()
+                   >= QApplication::startDragDistance()) {
+            interactionMode_ = InteractionMode::Pan;
+            grabMouse();
+            lastMousePosition_ = currentPosition;
+        }
+        if (interactionMode_ == InteractionMode::Pan) {
+            return;
+        }
     }
 
     if (event->buttons().testFlag(Qt::MiddleButton)) {
@@ -1367,6 +1636,13 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         }
 
     } else if (event->buttons() == Qt::NoButton) {
+        const auto axis = axisIndicatorHitTest(currentPosition);
+        updateAxisHover(currentPosition);
+        if (axis) {
+            lastMousePosition_ = currentPosition;
+            return;
+        }
+
         if (transformMode_ && transformGizmo_) {
             QElapsedTimer gizmoTimer;
             gizmoTimer.start();
@@ -1397,6 +1673,16 @@ void CadViewer::mouseReleaseEvent(QMouseEvent* event)
         return;
     }
 
+    if (event->button() == Qt::LeftButton) {
+        if (interactionMode_ == InteractionMode::Pan) {
+            stopMousePan();
+            return;
+        }
+        if (interactionMode_ == InteractionMode::PendingEmptyPan) {
+            interactionMode_ = InteractionMode::None;
+        }
+    }
+
     if (initialized_ &&
         event->button() == Qt::LeftButton &&
         event->position().toPoint() == mousePressPosition_) {
@@ -1411,6 +1697,15 @@ void CadViewer::mouseReleaseEvent(QMouseEvent* event)
     QWidget::mouseReleaseEvent(event);
 }
 
+void CadViewer::focusOutEvent(QFocusEvent* event)
+{
+    clearAxisHover();
+    if (interactionMode_ != InteractionMode::None) {
+        stopMousePan();
+    }
+    QWidget::focusOutEvent(event);
+}
+
 void CadViewer::wheelEvent(QWheelEvent* event)
 {
     if (!initialized_) {
@@ -1422,8 +1717,7 @@ void CadViewer::wheelEvent(QWheelEvent* event)
             ? 0.8
             : 1.25;
 
-    view_->SetZoom(factor);
-    view_->Redraw();
+    zoomAtCursor(event->position().toPoint(), factor);
 }
 
 void CadViewer::keyPressEvent(QKeyEvent* event)
@@ -1439,6 +1733,12 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
             commitPushPull();
             return;
         }
+    }
+
+    if (interactionMode_ != InteractionMode::None &&
+        event->key() == Qt::Key_Escape) {
+        stopMousePan();
+        return;
     }
 
     switch (event->key()) {

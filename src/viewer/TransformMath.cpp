@@ -59,4 +59,9 @@ gp_Trsf rotationTransform(
     return result;
 }
 
+gp_Vec zoomAnchorCorrection(const gp_Pnt& pointBefore, const gp_Pnt& pointAfter)
+{
+    return gp_Vec(pointAfter, pointBefore);
+}
+
 } // namespace cad::viewer

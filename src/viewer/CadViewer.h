@@ -28,6 +28,7 @@ class QAction;
 class QLabel;
 class QToolBar;
 class QKeyEvent;
+class QFocusEvent;
 class QMouseEvent;
 class QPaintEvent;
 class QResizeEvent;
@@ -44,6 +45,20 @@ public:
         Object,
         Edge,
         Face
+    };
+
+    enum class InteractionMode
+    {
+        None,
+        PendingEmptyPan,
+        Pan
+    };
+
+    enum class StandardView
+    {
+        Right,
+        Front,
+        Top
     };
 
     explicit CadViewer(QWidget* parent = nullptr);
@@ -78,6 +93,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
@@ -94,6 +110,8 @@ private:
     void commitTransform();
     void cancelTransform();
     void updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot, const gp_Trsf& rawDelta);
+    std::optional<gp_Pnt> worldAnchorAtScreenPoint(const QPoint& position) const;
+    void zoomAtCursor(const QPoint& position, double factor);
     void invalidateSnapReferenceCache();
     bool makeViewRay(const QPoint& position, cad::viewer::ViewRay& ray) const;
     void bindWindow();
@@ -113,6 +131,12 @@ private:
     TopoDS_Shape buildPushPullResult(double distance) const;
     void commitPushPull();
     void cancelPushPull();
+    void stopMousePan();
+    std::optional<int> axisIndicatorHitTest(const QPoint& position) const;
+    std::optional<QPointF> axisIndicatorPosition(int axis) const;
+    void updateAxisHover(const QPoint& position);
+    void clearAxisHover();
+    void setStandardView(StandardView view);
 
     QToolBar* toolBar_{nullptr};
     QLabel* xRayStatusLabel_{nullptr};
@@ -129,6 +153,7 @@ private:
 
     QPoint lastMousePosition_;
     QPoint mousePressPosition_;
+    InteractionMode interactionMode_{InteractionMode::None};
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
 
@@ -173,6 +198,7 @@ private:
 
     std::unique_ptr<cad::viewer::OcctSelectionAdapter> selectionAdapter_;
     cad::viewer::SelectionState selectionState_;
+    bool axisHoverActive_{false};
 
     Handle(Aspect_DisplayConnection) displayConnection_;
 };

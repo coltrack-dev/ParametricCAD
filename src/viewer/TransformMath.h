@@ -31,4 +31,7 @@ std::optional<double> rotationDelta(
 gp_Trsf translationTransform(const gp_Dir& axis, double distance);
 gp_Trsf rotationTransform(const gp_Pnt& pivot, const gp_Dir& axis, double angle);
 
+// Camera translation that restores the pre-zoom world anchor at the cursor.
+gp_Vec zoomAnchorCorrection(const gp_Pnt& pointBefore, const gp_Pnt& pointAfter);
+
 } // namespace cad::viewer

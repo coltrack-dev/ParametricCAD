@@ -95,6 +95,14 @@ int main()
     translated.Transform(translation);
     assert(almostEqual(translated.Z(), 2.5));
 
+    const gp_Vec zoomCorrection = zoomAnchorCorrection(
+        gp_Pnt(10.0, 20.0, 30.0),
+        gp_Pnt(8.0, 17.0, 25.0)
+    );
+    assert(almostEqual(zoomCorrection.X(), 2.0));
+    assert(almostEqual(zoomCorrection.Y(), 3.0));
+    assert(almostEqual(zoomCorrection.Z(), 5.0));
+
     const auto angle = rotationDelta(
         gp_Pnt(0.0, 0.0, 0.0),
         gp_Dir(0.0, 0.0, 1.0),
