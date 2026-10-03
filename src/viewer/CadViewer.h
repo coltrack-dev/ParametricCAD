@@ -93,7 +93,7 @@ private:
     void updateTransformPreview(const QPoint& position);
     void commitTransform();
     void cancelTransform();
-    void updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot);
+    void updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot, const gp_Trsf& rawDelta);
     void invalidateSnapReferenceCache();
     bool makeViewRay(const QPoint& position, cad::viewer::ViewRay& ray) const;
     void bindWindow();

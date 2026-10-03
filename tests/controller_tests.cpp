@@ -219,6 +219,30 @@ private slots:
         QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().Y(), -3.0);
         QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().Z(), 7.0);
     }
+
+    void snappedTransformDeltaCommitsAndRestoresExactly()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+
+        gp_Trsf rawDelta;
+        rawDelta.SetTranslation(gp_Vec(7.0, 0.0, 0.0));
+        gp_Trsf snapCorrection;
+        snapCorrection.SetTranslation(gp_Vec(3.0, 0.0, 0.0));
+
+        gp_Trsf snappedDelta = snapCorrection;
+        snappedDelta.Multiply(rawDelta);
+
+        const auto result = controller.transformFeatureDelta(box.id, snappedDelta);
+        QVERIFY(result.success);
+        QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().X(), 10.0);
+
+        controller.undo();
+        QCOMPARE(controller.body().findFeature(box.id)->placement().Form(), gp_Identity);
+        controller.redo();
+        QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().X(), 10.0);
+    }
 };
 
 QTEST_APPLESS_MAIN(ControllerTests)

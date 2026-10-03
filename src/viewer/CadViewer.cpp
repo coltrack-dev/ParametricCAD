@@ -431,7 +431,10 @@ void CadViewer::invalidateSnapReferenceCache()
     transformSnapCandidates_.clear();
 }
 
-void CadViewer::updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot)
+void CadViewer::updateTransformSnap(
+    gp_Trsf& delta,
+    gp_Pnt& pivot,
+    const gp_Trsf& rawDelta)
 {
     Standard_Integer width = 0;
     Standard_Integer height = 0;
@@ -453,7 +456,7 @@ void CadViewer::updateTransformSnap(gp_Trsf& delta, gp_Pnt& pivot)
     if (activeSnap_) {
         const gp_Trsf correction = activeSnap_->correction;
         delta = correction;
-        delta.Multiply(transformDelta_);
+        delta.Multiply(rawDelta);
         pivot = transformPivot_;
         pivot.Transform(delta);
         if (transformGizmo_) transformGizmo_->setSnapActive(true);
@@ -506,9 +509,9 @@ void CadViewer::updateTransformPreview(const QPoint& position)
     }
 
     const gp_Trsf previousDelta = transformDelta_;
-    transformDelta_ = delta;
+    const gp_Trsf rawDelta = delta;
     gp_Pnt movedPivot = transformPivot_;
-    updateTransformSnap(delta, movedPivot);
+    updateTransformSnap(delta, movedPivot, rawDelta);
     if (transformsClose(previousDelta, delta)) {
         return;
     }
