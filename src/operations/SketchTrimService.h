@@ -3,6 +3,7 @@
 #include "operations/ParametricFeatures.h"
 
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace cad::operations {
@@ -21,21 +22,28 @@ struct TrimPreview
     double removedEnd{0.0};
 };
 
-struct SketchTrimResult
+struct TrimPlan
 {
     bool changed{false};
     std::string error;
     std::size_t entityIndex{0};
+    std::vector<cad::parametric::SketchEntity> removedEntities;
     std::vector<cad::parametric::SketchEntity> replacements;
     TrimPreview preview;
 };
 
+using SketchTrimResult = TrimPlan;
+
 class SketchTrimService final
 {
 public:
-    static SketchTrimResult trim(const cad::parametric::SketchFeature& sketch,
-                                 const gp_Pnt2d& click,
-                                 double hitTolerance = 0.25);
+    static TrimPlan analyzeTrim(const cad::parametric::SketchFeature& sketch,
+                                const gp_Pnt2d& click, double hitTolerance);
+    static std::optional<TrimPlan> previewTrim(
+        const cad::parametric::SketchFeature& sketch,
+        const gp_Pnt2d& click, double hitTolerance);
+    static TrimPlan trim(const cad::parametric::SketchFeature& sketch,
+                         const gp_Pnt2d& click, double hitTolerance);
 
     static std::vector<SketchIntersection> intersections(
         const cad::parametric::SketchEntity& a,

@@ -1,8 +1,10 @@
 #include "operations/SketchTrimService.h"
 #include "application/ModelingController.h"
+#include "model/ProjectFile.h"
 
 #include <cassert>
 #include <cmath>
+#include <QTemporaryDir>
 
 using namespace cad::parametric;
 using cad::operations::SketchTrimService;
@@ -15,7 +17,9 @@ void lineTrim()
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
         SketchLine{{0, 0}, {10, 0}}, SketchLine{{3, -5}, {3, 5}},
         SketchLine{{7, -5}, {7, 5}}});
-    const auto result = SketchTrimService::trim(sketch, {5, 0});
+    const auto result = SketchTrimService::trim(sketch, {5, 0}, 0.25);
+    const auto preview = SketchTrimService::previewTrim(sketch, {5, 0}, 0.25);
+    assert(preview && preview->removedEntities.size() == 1);
     assert(result.changed && result.replacements.size() == 2);
     assert(std::get<SketchLine>(result.replacements[0]).end.X() == 3.0);
     assert(std::get<SketchLine>(result.replacements[1]).start.X() == 7.0);
@@ -26,7 +30,7 @@ void arcTrim()
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
         SketchArc{{0, 0}, 10.0, 0.0, 3.141592653589793, false},
         SketchLine{{-5, -20}, {-5, 20}}, SketchLine{{5, -20}, {5, 20}}});
-    const auto result = SketchTrimService::trim(sketch, {0, 10});
+    const auto result = SketchTrimService::trim(sketch, {0, 10}, 0.25);
     assert(result.changed && result.replacements.size() == 2);
     assert(std::holds_alternative<SketchArc>(result.replacements.front()));
 }
@@ -35,7 +39,7 @@ void circleTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
         SketchCircle{{0, 0}, 10.0}, SketchLine{{0, -20}, {0, 20}}});
-    const auto result = SketchTrimService::trim(sketch, {10, 0});
+    const auto result = SketchTrimService::trim(sketch, {10, 0}, 0.25);
     assert(result.changed && result.replacements.size() == 1);
     const auto& arc = std::get<SketchArc>(result.replacements.front());
     assert(near(std::abs(arc.signedSweep()), 3.141592653589793));
@@ -43,7 +47,7 @@ void circleTrim()
     SketchFeature four("four", SketchSupportType::XY, 100.0, 100.0, {
         SketchCircle{{0, 0}, 10.0}, SketchLine{{-20, 0}, {20, 0}},
         SketchLine{{0, -20}, {0, 20}}});
-    const auto fourResult = SketchTrimService::trim(four, {7, 7});
+    const auto fourResult = SketchTrimService::trim(four, {7, 7}, 0.25);
     assert(fourResult.changed && fourResult.replacements.size() == 3);
     double totalSweep = 0.0;
     for (const auto& entity : fourResult.replacements) totalSweep += std::abs(std::get<SketchArc>(entity).signedSweep());
@@ -76,13 +80,70 @@ void undoRedo()
     assert(controller.addSketchLine(created.id, {0, 0}, {10, 0}).success);
     assert(controller.addSketchLine(created.id, {3, -5}, {3, 5}).success);
     assert(controller.addSketchLine(created.id, {7, -5}, {7, 5}).success);
-    assert(controller.trimSketchEntity(created.id, {5, 0}).success);
+    assert(controller.trimSketchEntity(created.id, {5, 0}, 0.25).success);
     auto sketch = std::dynamic_pointer_cast<SketchFeature>(controller.body().findFeature(created.id));
     assert(sketch && sketch->entityCount() == 4);
     controller.undo();
     assert(sketch->entityCount() == 3);
     controller.redo();
     assert(sketch->entityCount() == 4);
+}
+
+void downstreamAndPersistence()
+{
+    cad::application::ModelingController controller;
+    const auto sketchResult = controller.createSketch();
+    assert(sketchResult.success);
+    const auto add = [&controller, &sketchResult](gp_Pnt2d a, gp_Pnt2d b) {
+        return controller.addSketchLine(sketchResult.id, a, b).success;
+    };
+    assert(add({-40, -30}, {40, -30}));
+    assert(add({40, -30}, {40, 30}));
+    assert(add({40, 30}, {-40, 30}));
+    assert(add({-40, 30}, {-40, -30}));
+    const auto extrude = controller.createExtrudeFromSketch({{
+        {sketchResult.id, cad::application::SelectionKind::Object, std::nullopt}}}, 20.0);
+    assert(extrude.success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+        controller.body().findFeature(sketchResult.id));
+    auto feature = controller.body().findFeature(extrude.id);
+    assert(sketch && feature && feature->state() == FeatureState::UpToDate);
+
+    assert(controller.trimSketchEntity(sketchResult.id, {0, -30}, 0.25).success);
+    assert(!controller.body().recompute());
+    assert(feature->state() == FeatureState::Failed);
+    assert(feature->error().find("open") != std::string::npos);
+
+    controller.undo();
+    assert(controller.body().recompute());
+    assert(feature->state() == FeatureState::UpToDate && !feature->shape().IsNull());
+    controller.redo();
+    assert(!controller.body().recompute());
+    assert(feature->state() == FeatureState::Failed);
+
+    cad::application::ModelingController persistence;
+    const auto persisted = persistence.createSketch();
+    assert(persisted.success);
+    const auto addPersisted = [&persistence, &persisted](gp_Pnt2d a, gp_Pnt2d b) {
+        return persistence.addSketchLine(persisted.id, a, b).success;
+    };
+    assert(addPersisted({-40, -30}, {40, -30}));
+    assert(addPersisted({40, -30}, {40, 30}));
+    assert(addPersisted({40, 30}, {-40, 30}));
+    assert(addPersisted({-40, 30}, {-40, -30}));
+    assert(persistence.trimSketchEntity(persisted.id, {0, -30}, 0.25).success);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("trimmed.pcad");
+    assert(ProjectFile::save(path, persistence.document(), persistence.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+        loadedBody.findFeature(persisted.id));
+    assert(loadedSketch && loadedSketch->entityCount() == 3);
 }
 }
 
@@ -93,5 +154,6 @@ int main()
     circleTrim();
     intersectionMatrix();
     undoRedo();
+    downstreamAndPersistence();
     return 0;
 }

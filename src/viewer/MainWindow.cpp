@@ -2,6 +2,7 @@
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
 #include "viewer/ModelPresenter.h"
+#include "operations/SketchTrimService.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -54,13 +55,34 @@ MainWindow::MainWindow(QWidget* parent)
         }
     );
     viewer_->setSketchPointClickedHandler(
-        [this](const gp_Pnt2d& point) { handleSketchPoint(point); });
+        [this](const gp_Pnt2d& point, const double tolerance) {
+            if (sketchTool_ == SketchTool::Trim) viewer_->clearSketchTrimPreview();
+            if (activeSketchId_.empty() || sketchTool_ != SketchTool::Trim) {
+                handleSketchPoint(point);
+                return;
+            }
+            const auto result = modeling_.trimSketchEntity(activeSketchId_, point, tolerance);
+            if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+            else refreshModelView(false);
+        });
+    viewer_->setSketchMouseMovedHandler(
+        [this](const gp_Pnt2d& point, const double tolerance) {
+            if (activeSketchId_.empty() || sketchTool_ != SketchTool::Trim) return;
+            const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+                modeling_.body().findFeature(activeSketchId_));
+            if (!sketch) { viewer_->clearSketchTrimPreview(); return; }
+            const auto plan = cad::operations::SketchTrimService::previewTrim(
+                *sketch, point, tolerance);
+            if (plan) viewer_->setSketchTrimPreview(plan->removedEntities);
+            else viewer_->clearSketchTrimPreview();
+        });
     viewer_->setSketchCancelHandler(
         [this]() {
             sketchFirstPoint_.reset(); sketchSecondPoint_.reset();
             if (sketchTool_ == SketchTool::Trim) selectSketchLineTool();
         });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
+        viewer_->clearSketchTrimPreview();
         refreshModelView();
         featureEditorPanel_->scheduleRefresh();
     });
@@ -435,19 +457,13 @@ void MainWindow::selectSketchTrimTool()
     sketchTool_ = SketchTool::Trim;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
-    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Trim);
     statusBar()->showMessage("Trim: click a Line, Arc, or Circle segment");
 }
 
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
-    if (sketchTool_ == SketchTool::Trim) {
-        const auto result = modeling_.trimSketchEntity(activeSketchId_, point);
-        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
-        else refreshModelView(false);
-        return;
-    }
     if (!sketchFirstPoint_) {
         sketchFirstPoint_ = point;
         return;

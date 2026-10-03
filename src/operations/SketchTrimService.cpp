@@ -213,10 +213,10 @@ std::vector<SketchIntersection> SketchTrimService::intersections(
     return result;
 }
 
-SketchTrimResult SketchTrimService::trim(const cad::parametric::SketchFeature& sketch,
-                                         const gp_Pnt2d& click, const double hitTolerance)
+TrimPlan SketchTrimService::analyzeTrim(const cad::parametric::SketchFeature& sketch,
+                                        const gp_Pnt2d& click, const double hitTolerance)
 {
-    SketchTrimResult result;
+    TrimPlan result;
     double bestDistance = std::numeric_limits<double>::max(), clickParameter = 0.0;
     for (std::size_t i = 0; i < sketch.entities().size(); ++i) {
         double parameter = 0.0;
@@ -245,6 +245,9 @@ SketchTrimResult SketchTrimService::trim(const cad::parametric::SketchFeature& s
         const double clickWrapped = clickParameter < spanStart ? clickParameter + 1.0 : clickParameter;
         if (clickWrapped < spanStart - tolerance || clickWrapped > spanEnd + tolerance) { result.error = "Trim not possible at tangent contact"; return result; }
         result.preview = {result.entityIndex, spanStart, spanEnd};
+        result.removedEntities.push_back(cad::parametric::SketchArc{
+            circle.center, circle.radius, spanStart * twoPi,
+            (spanEnd > 1.0 ? spanEnd - 1.0 : spanEnd) * twoPi, false});
         for (std::size_t i = 0; i < boundaries.size(); ++i) {
             const double start = boundaries[i], end = i + 1 < boundaries.size() ? boundaries[i + 1] : boundaries.front() + 1.0;
             if (i == interval) continue;
@@ -259,12 +262,24 @@ SketchTrimResult SketchTrimService::trim(const cad::parametric::SketchFeature& s
             if (clickParameter >= boundaries[i] - tolerance && clickParameter <= boundaries[i + 1] + tolerance) { interval = i; break; }
         result.preview = {result.entityIndex, boundaries[interval], boundaries[interval + 1]};
         if (const auto* line = std::get_if<cad::parametric::SketchLine>(&target)) {
+            const auto removedStart = pointAt(*line, boundaries[interval]);
+            const auto removedEnd = pointAt(*line, boundaries[interval + 1]);
+            if (removedStart.Distance(removedEnd) > minimumLength)
+                result.removedEntities.push_back(cad::parametric::SketchLine{removedStart, removedEnd});
             for (std::size_t i = 0; i + 1 < boundaries.size(); ++i) if (i != interval) {
                 const auto a = pointAt(*line, boundaries[i]), b = pointAt(*line, boundaries[i + 1]);
                 if (a.Distance(b) > minimumLength) result.replacements.push_back(cad::parametric::SketchLine{a, b});
             }
         } else {
             const auto& arc = std::get<cad::parametric::SketchArc>(target);
+            const double removedSweep = arcSweep(arc)
+                * (boundaries[interval + 1] - boundaries[interval]);
+            if (std::abs(removedSweep) > tolerance) {
+                result.removedEntities.push_back(cad::parametric::SketchArc{
+                    arc.center, arc.radius,
+                    arc.startAngle + arcSweep(arc) * boundaries[interval],
+                    arc.startAngle + removedSweep, arc.clockwise});
+            }
             for (std::size_t i = 0; i + 1 < boundaries.size(); ++i) if (i != interval) {
                 const double sweep = arcSweep(arc) * (boundaries[i + 1] - boundaries[i]);
                 if (std::abs(sweep) > tolerance) result.replacements.push_back(cad::parametric::SketchArc{
@@ -273,9 +288,24 @@ SketchTrimResult SketchTrimService::trim(const cad::parametric::SketchFeature& s
             }
         }
     }
-    result.changed = !result.replacements.empty();
+    result.changed = !result.removedEntities.empty();
     if (!result.changed) result.error = "Trim not possible at tangent contact";
     return result;
+}
+
+std::optional<TrimPlan> SketchTrimService::previewTrim(
+    const cad::parametric::SketchFeature& sketch, const gp_Pnt2d& click,
+    const double hitTolerance)
+{
+    auto plan = analyzeTrim(sketch, click, hitTolerance);
+    if (!plan.changed || plan.removedEntities.empty()) return std::nullopt;
+    return plan;
+}
+
+TrimPlan SketchTrimService::trim(const cad::parametric::SketchFeature& sketch,
+                                 const gp_Pnt2d& click, const double hitTolerance)
+{
+    return analyzeTrim(sketch, click, hitTolerance);
 }
 
 } // namespace cad::operations

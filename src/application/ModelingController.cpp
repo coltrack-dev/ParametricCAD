@@ -166,12 +166,13 @@ ModelingResult ModelingController::addSketchArc(
 }
 
 ModelingResult ModelingController::trimSketchEntity(const std::string& sketchId,
-                                                    const gp_Pnt2d& click)
+                                                    const gp_Pnt2d& click,
+                                                    const double hitTolerance)
 {
     const auto feature = body_.findFeature(sketchId);
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
     if (!sketch) return {false, {}, "Active Sketch does not exist"};
-    const auto trim = cad::operations::SketchTrimService::trim(*sketch, click);
+    const auto trim = cad::operations::SketchTrimService::trim(*sketch, click, hitTolerance);
     if (!trim.changed) return {false, {}, trim.error};
     try {
         undoStack_.push(new cad::commands::TrimSketchEntityCommand(

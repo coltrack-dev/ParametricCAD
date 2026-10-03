@@ -27,6 +27,7 @@
 #include "viewer/TransformGizmo.h"
 #include "viewer/TransformMath.h"
 #include "viewer/SelectionAdapter.h"
+#include "operations/ParametricFeatures.h"
 
 class QAction;
 class QLabel;
@@ -79,11 +80,15 @@ public:
                          const gp_Dir& yDirection, const gp_Dir& normal);
     void exitSketchMode();
     bool sketchMode() const noexcept;
-    enum class SketchPreviewTool { None, Line, Circle, Rectangle };
+    enum class SketchPreviewTool { None, Line, Circle, Rectangle, Trim };
     void setSketchPreviewTool(SketchPreviewTool tool);
-    void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&)> handler);
+    void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
+    void setSketchMouseMovedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
     void setSketchCancelHandler(std::function<void()> handler);
     std::optional<gp_Pnt2d> sketchPointAtScreen(const QPoint& position) const;
+    double sketchLocalToleranceFromPixels(const QPoint& position, double pixels) const;
+    void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities);
+    void clearSketchTrimPreview();
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler
     );
@@ -204,8 +209,10 @@ private:
     SketchPreviewTool sketchPreviewTool_{SketchPreviewTool::None};
     std::optional<gp_Pnt> sketchPreviewFirstPoint_;
     Handle(AIS_Shape) sketchPreviewObject_;
-    std::function<void(const gp_Pnt2d&)> sketchPointClickedHandler_;
+    std::function<void(const gp_Pnt2d&, double)> sketchPointClickedHandler_;
+    std::function<void(const gp_Pnt2d&, double)> sketchMouseMovedHandler_;
     std::function<void()> sketchCancelHandler_;
+    Handle(AIS_Shape) sketchTrimPreviewObject_;
 
     std::unique_ptr<cad::viewer::TransformGizmo> transformGizmo_;
     cad::viewer::SnapManager snapManager_;

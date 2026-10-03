@@ -38,7 +38,8 @@ public:
     ModelingResult addSketchArc(
         const std::string& sketchId, const gp_Pnt2d& center,
         const gp_Pnt2d& start, const gp_Pnt2d& end);
-    ModelingResult trimSketchEntity(const std::string& sketchId, const gp_Pnt2d& click);
+    ModelingResult trimSketchEntity(const std::string& sketchId, const gp_Pnt2d& click,
+                                    double hitTolerance);
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;

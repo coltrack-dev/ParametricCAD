@@ -426,7 +426,7 @@ void SketchFeature::removeLastEntity()
 void SketchFeature::replaceEntities(const std::size_t index, const std::size_t count,
                                     std::vector<SketchEntity> replacements)
 {
-    if (index >= entities_.size() || count == 0 || index + count > entities_.size()) {
+    if (index > entities_.size() || index + count > entities_.size()) {
         throw std::out_of_range("Sketch entity replacement range is invalid");
     }
     entities_.erase(entities_.begin() + static_cast<std::ptrdiff_t>(index),

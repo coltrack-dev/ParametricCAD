@@ -76,6 +76,7 @@ constexpr int DetectedCyclePositionTolerance = 3;
 constexpr double AxisIndicatorScale = 0.12;
 constexpr double AxisIndicatorArm = 0.65;
 constexpr double AxisIndicatorHitRadius = 0.30;
+constexpr double SketchTrimHitPixels = 8.0;
 
 bool makeViewRay(
     const Handle(V3d_View)& view,
@@ -199,6 +200,50 @@ TopoDS_Shape makeSketchPreviewShape(
             const TopoDS_Shape edge = markerEdge.Edge();
             builder.Add(compound, edge);
         }
+    }
+    return compound;
+}
+
+gp_Pnt sketchWorldPoint(const cad::parametric::SketchFrame& frame, const gp_Pnt2d& point)
+{
+    gp_Pnt result = frame.origin;
+    result.Translate(gp_Vec(frame.xDirection) * point.X()
+        + gp_Vec(frame.yDirection) * point.Y());
+    return result;
+}
+
+TopoDS_Shape makeTrimPreviewShape(
+    const cad::parametric::SketchFrame& frame,
+    const std::vector<cad::parametric::SketchEntity>& entities)
+{
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    for (const auto& entity : entities) {
+        TopoDS_Edge edge;
+        if (const auto* line = std::get_if<cad::parametric::SketchLine>(&entity)) {
+            auto edgeBuilder = BRepBuilderAPI_MakeEdge(
+                sketchWorldPoint(frame, line->start), sketchWorldPoint(frame, line->end));
+            if (edgeBuilder.IsDone()) edge = edgeBuilder.Edge();
+        } else if (const auto* arc = std::get_if<cad::parametric::SketchArc>(&entity)) {
+            const gp_Circ circle(gp_Ax2(sketchWorldPoint(frame, arc->center), frame.normal), arc->radius);
+            const double sweep = arc->signedSweep();
+            if (sweep > 0.0) {
+                auto edgeBuilder = BRepBuilderAPI_MakeEdge(circle, arc->startAngle,
+                    arc->startAngle + sweep);
+                if (edgeBuilder.IsDone()) edge = edgeBuilder.Edge();
+            } else {
+                auto edgeBuilder = BRepBuilderAPI_MakeEdge(circle, arc->startAngle + sweep,
+                    arc->startAngle);
+                if (edgeBuilder.IsDone()) edge = TopoDS::Edge(edgeBuilder.Edge().Reversed());
+            }
+        } else {
+            const auto& circle = std::get<cad::parametric::SketchCircle>(entity);
+            auto edgeBuilder = BRepBuilderAPI_MakeEdge(gp_Circ(
+                gp_Ax2(sketchWorldPoint(frame, circle.center), frame.normal), circle.radius));
+            if (edgeBuilder.IsDone()) edge = edgeBuilder.Edge();
+        }
+        if (!edge.IsNull()) builder.Add(compound, edge);
     }
     return compound;
 }
@@ -451,6 +496,7 @@ void CadViewer::exitSketchMode()
         context_->Remove(sketchPreviewObject_, Standard_True);
     }
     sketchPreviewObject_.Nullify();
+    clearSketchTrimPreview();
 }
 
 bool CadViewer::sketchMode() const noexcept
@@ -466,12 +512,19 @@ void CadViewer::setSketchPreviewTool(const SketchPreviewTool tool)
         context_->Remove(sketchPreviewObject_, Standard_True);
     }
     sketchPreviewObject_.Nullify();
+    clearSketchTrimPreview();
 }
 
 void CadViewer::setSketchPointClickedHandler(
-    std::function<void(const gp_Pnt2d&)> handler)
+    std::function<void(const gp_Pnt2d&, double)> handler)
 {
     sketchPointClickedHandler_ = std::move(handler);
+}
+
+void CadViewer::setSketchMouseMovedHandler(
+    std::function<void(const gp_Pnt2d&, double)> handler)
+{
+    sketchMouseMovedHandler_ = std::move(handler);
 }
 
 void CadViewer::setSketchCancelHandler(std::function<void()> handler)
@@ -491,6 +544,52 @@ std::optional<gp_Pnt2d> CadViewer::sketchPointAtScreen(const QPoint& position) c
     const gp_Vec offset(sketchOrigin_, *world);
     return gp_Pnt2d(offset.Dot(gp_Vec(sketchXDirection_)),
                     offset.Dot(gp_Vec(sketchYDirection_)));
+}
+
+double CadViewer::sketchLocalToleranceFromPixels(const QPoint& position, const double pixels) const
+{
+    if (pixels <= 0.0) return 0.0;
+    const auto origin = sketchPointAtScreen(position);
+    const auto horizontal = sketchPointAtScreen(position + QPoint(
+        std::max(1, static_cast<int>(std::ceil(pixels))), 0));
+    if (origin && horizontal) {
+        const double scale = origin->Distance(*horizontal)
+            / static_cast<double>(std::max(1, static_cast<int>(std::ceil(pixels))));
+        return scale * pixels;
+    }
+    return 0.0;
+}
+
+void CadViewer::setSketchTrimPreview(
+    const std::vector<cad::parametric::SketchEntity>& entities)
+{
+    if (entities.empty() || !sketchMode_ || context_.IsNull()) {
+        clearSketchTrimPreview();
+        return;
+    }
+    const auto shape = makeTrimPreviewShape(
+        {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_}, entities);
+    if (shape.IsNull()) {
+        clearSketchTrimPreview();
+        return;
+    }
+    if (sketchTrimPreviewObject_.IsNull()) {
+        sketchTrimPreviewObject_ = new AIS_Shape(shape);
+        sketchTrimPreviewObject_->SetDisplayMode(AIS_WireFrame);
+        sketchTrimPreviewObject_->SetColor(Quantity_NOC_YELLOW);
+        sketchTrimPreviewObject_->SetWidth(4.0);
+        context_->Display(sketchTrimPreviewObject_, Standard_True);
+    } else {
+        sketchTrimPreviewObject_->SetShape(shape);
+        context_->Redisplay(sketchTrimPreviewObject_, Standard_True);
+    }
+}
+
+void CadViewer::clearSketchTrimPreview()
+{
+    if (!sketchTrimPreviewObject_.IsNull() && !context_.IsNull())
+        context_->Remove(sketchTrimPreviewObject_, Standard_True);
+    sketchTrimPreviewObject_.Nullify();
 }
 
 void CadViewer::updateTransformGizmo()
@@ -1785,7 +1884,8 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
             }
         }
         if (sketchPointClickedHandler_) {
-            if (point) sketchPointClickedHandler_(*point);
+            if (point) sketchPointClickedHandler_(*point,
+                sketchLocalToleranceFromPixels(lastMousePosition_, SketchTrimHitPixels));
         }
         return;
     }
@@ -1888,7 +1988,18 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     const QPoint currentPosition =
         event->position().toPoint();
 
-    if (sketchMode_ && sketchPreviewFirstPoint_) {
+    if (sketchMode_ && sketchPreviewTool_ == SketchPreviewTool::Trim) {
+        const auto point = sketchPointAtScreen(currentPosition);
+        if (point && sketchMouseMovedHandler_) {
+            sketchMouseMovedHandler_(*point, sketchLocalToleranceFromPixels(currentPosition,
+                SketchTrimHitPixels));
+        } else if (!point) {
+            clearSketchTrimPreview();
+        }
+    }
+
+    if (sketchMode_ && sketchPreviewFirstPoint_
+        && sketchPreviewTool_ != SketchPreviewTool::Trim) {
         const auto point = sketchPointAtScreen(currentPosition);
         if (point && sketchPreviewTool_ != SketchPreviewTool::None) {
             gp_Pnt current = sketchOrigin_;
