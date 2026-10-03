@@ -39,6 +39,8 @@ private:
     void createRectangleSketch();
     void createFace();
     void createExtrude();
+    void createLinearPattern();
+    void createPathPattern();
     void deleteFeature();
     void clearDocument();
 
@@ -49,6 +51,8 @@ private:
     QAction* duplicateAction_{nullptr};
     QAction* faceAction_{nullptr};
     QAction* extrudeAction_{nullptr};
+    QAction* linearPatternAction_{nullptr};
+    QAction* pathPatternAction_{nullptr};
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this
     // mirror supplies MainWindow actions and model operation inputs without

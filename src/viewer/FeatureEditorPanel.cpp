@@ -8,10 +8,13 @@
 #include <QLineEdit>
 #include <QScopedValueRollback>
 #include <QDoubleSpinBox>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTimer>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
@@ -509,6 +512,51 @@ void FeatureEditorPanel::rebuildProperties(
     for (const auto& property : properties) {
         if (property.editable && std::holds_alternative<double>(property.value)) {
             addParameter(property);
+        } else if (property.editable && std::holds_alternative<int>(property.value)) {
+            auto* editor = new QSpinBox(propertiesWidget_);
+            editor->setRange(
+                property.minimum ? static_cast<int>(*property.minimum) : -1'000'000,
+                property.maximum ? static_cast<int>(*property.maximum) : 1'000'000
+            );
+            editor->setValue(std::get<int>(property.value));
+            editor->setKeyboardTracking(false);
+            editor->installEventFilter(this);
+            const QString label = QString::fromStdString(property.label);
+            propertiesLayout_->addRow(label, editor);
+            connect(editor, &QSpinBox::editingFinished, this,
+                [this, feature, property, editor]() {
+                    if (updatingProperties_ || refreshPending_ || !service_) return;
+                    reportResult(service_->setFeatureProperty(
+                        feature->id, property.key, editor->value()));
+                });
+        } else if (property.editable && std::holds_alternative<bool>(property.value)) {
+            auto* editor = new QCheckBox(propertiesWidget_);
+            editor->setChecked(std::get<bool>(property.value));
+            const QString label = QString::fromStdString(property.label);
+            propertiesLayout_->addRow(label, editor);
+            connect(editor, &QCheckBox::toggled, this,
+                [this, feature, property](const bool checked) {
+                    if (updatingProperties_ || refreshPending_ || !service_) return;
+                    reportResult(service_->setFeatureProperty(
+                        feature->id, property.key, checked));
+                });
+        } else if (property.editable && std::holds_alternative<std::string>(property.value)
+                   && (property.key == "distribution" || property.key == "orientation")) {
+            auto* editor = new QComboBox(propertiesWidget_);
+            if (property.key == "distribution") {
+                editor->addItems({QStringLiteral("FixedSpacing"), QStringLiteral("FitCount")});
+            } else {
+                editor->addItems({QStringLiteral("Fixed"), QStringLiteral("Tangent")});
+            }
+            editor->setCurrentText(QString::fromStdString(std::get<std::string>(property.value)));
+            const QString label = QString::fromStdString(property.label);
+            propertiesLayout_->addRow(label, editor);
+            connect(editor, &QComboBox::currentTextChanged, this,
+                [this, feature, property](const QString& value) {
+                    if (updatingProperties_ || refreshPending_ || !service_) return;
+                    reportResult(service_->setFeatureProperty(
+                        feature->id, property.key, value.toStdString()));
+                });
         } else {
             const auto value = std::visit([](const auto& item) {
                 using Value = std::decay_t<decltype(item)>;

@@ -5,6 +5,7 @@
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
+#include "operations/PatternFeatures.h"
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -39,6 +40,23 @@ std::string string(const QJsonObject& o, const char* key)
     const auto v = o.value(QLatin1String(key));
     require(v.isString(), "Invalid string field");
     return v.toString().toStdString();
+}
+bool boolean(const QJsonObject& o, const char* key)
+{
+    const auto v = o.value(QLatin1String(key));
+    require(v.isBool(), "Invalid boolean field");
+    return v.toBool();
+}
+std::vector<std::string> strings(const QJsonObject& o, const char* key)
+{
+    const auto array = o.value(QLatin1String(key)).toArray();
+    require(!array.isEmpty(), "Invalid string array");
+    std::vector<std::string> result;
+    for (const auto& value : array) {
+        require(value.isString(), "Invalid string array item");
+        result.push_back(value.toString().toStdString());
+    }
+    return result;
 }
 QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
 {
@@ -113,6 +131,37 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             const auto kind = operation == "Fuse" ? BooleanOperation::Fuse
                 : operation == "Cut" ? BooleanOperation::Cut : BooleanOperation::Common;
             return std::make_shared<BooleanFeature>(string(o,"id"), left, right, kind);
+        }},
+        {"LinearPattern", [](const QJsonObject& o, const Body& body) {
+            std::vector<ParametricFeature::Ptr> sources;
+            for (const auto& sourceId : strings(o, "sourceIds")) {
+                const auto source = body.findFeature(sourceId);
+                require(static_cast<bool>(source), "LinearPattern references missing source");
+                sources.push_back(source);
+            }
+            return std::make_shared<LinearPatternFeature>(
+                string(o, "id"), sources,
+                gp_Vec(number(o, "directionX"), number(o, "directionY"), number(o, "directionZ")),
+                number(o, "spacing"), static_cast<int>(number(o, "count")),
+                boolean(o, "includeSource"));
+        }},
+        {"PathPattern", [](const QJsonObject& o, const Body& body) {
+            std::vector<ParametricFeature::Ptr> sources;
+            for (const auto& sourceId : strings(o, "sourceIds")) {
+                const auto source = body.findFeature(sourceId);
+                require(static_cast<bool>(source), "PathPattern references missing source");
+                sources.push_back(source);
+            }
+            const auto path = body.findFeature(string(o, "pathId"));
+            require(static_cast<bool>(path), "PathPattern references missing path");
+            const auto distribution = string(o, "distribution") == "FixedSpacing"
+                ? PathPatternDistribution::FixedSpacing : PathPatternDistribution::FitCount;
+            const auto orientation = string(o, "orientation") == "Fixed"
+                ? PathPatternOrientation::Fixed : PathPatternOrientation::Tangent;
+            return std::make_shared<PathPatternFeature>(
+                string(o, "id"), sources, path, number(o, "spacing"),
+                static_cast<int>(number(o, "count")), distribution, orientation,
+                number(o, "startOffset"), number(o, "endOffset"), boolean(o, "includeSource"));
         }}
     };
     return registry;

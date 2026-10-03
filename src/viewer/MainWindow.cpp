@@ -160,6 +160,8 @@ void MainWindow::updateActionState()
     if (duplicateAction_) duplicateAction_->setEnabled(selectedObjectIds_.size() == 1);
     faceAction_->setEnabled(state.canCreateFace);
     extrudeAction_->setEnabled(state.canExtrude);
+    if (linearPatternAction_) linearPatternAction_->setEnabled(selectedObjectIds_.size() == 1);
+    if (pathPatternAction_) pathPatternAction_->setEnabled(selectedObjectIds_.size() == 2);
 }
 
 void MainWindow::reportResult(const cad::application::ModelingResult& result)
@@ -240,6 +242,12 @@ void MainWindow::createActions()
     extrudeAction_ = modelingMenu->addAction("Extrude Face");
     extrudeAction_->setEnabled(false);
     connect(extrudeAction_, &QAction::triggered, this, &MainWindow::createExtrude);
+    linearPatternAction_ = modelingMenu->addAction("Linear Pattern");
+    linearPatternAction_->setEnabled(false);
+    connect(linearPatternAction_, &QAction::triggered, this, &MainWindow::createLinearPattern);
+    pathPatternAction_ = modelingMenu->addAction("Path Pattern");
+    pathPatternAction_->setEnabled(false);
+    connect(pathPatternAction_, &QAction::triggered, this, &MainWindow::createPathPattern);
     modelingMenu->addSeparator();
 
     auto* clearAction = new QAction("Clear", this);
@@ -275,6 +283,16 @@ void MainWindow::createFace()
 void MainWindow::createExtrude()
 {
     reportResult(modeling_.createExtrude(selectedIds()));
+}
+
+void MainWindow::createLinearPattern()
+{
+    reportResult(modeling_.createLinearPattern(selectedIds()));
+}
+
+void MainWindow::createPathPattern()
+{
+    reportResult(modeling_.createPathPattern(selectedIds()));
 }
 
 void MainWindow::deleteFeature()

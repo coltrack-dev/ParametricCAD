@@ -314,6 +314,57 @@ private slots:
         QCOMPARE(loadedCopy->placement().TranslationPart().X(), 25.0);
         QCOMPARE(loadedCopy->placement().TranslationPart().Y(), 5.0);
     }
+
+    void linearAndPathPatternsRecomputeAsSingleFeatures()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto linear = controller.createLinearPattern({box.id});
+        QVERIFY(linear.success);
+        const auto linearFeature = controller.body().findFeature(linear.id);
+        QVERIFY(linearFeature);
+        QVERIFY(std::abs(volume(linearFeature->shape())
+                         - 2.0 * volume(controller.body().findFeature(box.id)->shape())) < 1.0e-6);
+
+        QVERIFY(controller.setFeatureProperty(linear.id, "count", 3).success);
+        const auto updatedLinear = controller.body().findFeature(linear.id);
+        QVERIFY(std::abs(volume(updatedLinear->shape())
+                         - 3.0 * volume(controller.body().findFeature(box.id)->shape())) < 1.0e-6);
+
+        const auto path = controller.createSketch();
+        QVERIFY(path.success);
+        const auto pathPattern = controller.createPathPattern({box.id, path.id});
+        QVERIFY(pathPattern.success);
+        const auto pathFeature = controller.body().findFeature(pathPattern.id);
+        QVERIFY(pathFeature);
+        QVERIFY(std::abs(volume(pathFeature->shape())
+                         - 2.0 * volume(controller.body().findFeature(box.id)->shape())) < 1.0e-6);
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(pathPattern.id));
+        controller.redo();
+        QVERIFY(controller.body().findFeature(pathPattern.id));
+        QVERIFY(controller.setFeatureProperty(
+            pathPattern.id, "orientation", std::string("Tangent")).success);
+        QVERIFY(controller.setFeatureProperty(
+            pathPattern.id, "distribution", std::string("FixedSpacing")).success);
+        QVERIFY(volume(controller.body().findFeature(pathPattern.id)->shape()) > 0.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        QVERIFY(ProjectFile::save(
+            directory.filePath("patterns.pcad"),
+            controller.document(), controller.body(), error));
+        Document loadedDocument;
+        cad::parametric::Body loadedBody;
+        QVERIFY(ProjectFile::load(
+            directory.filePath("patterns.pcad"),
+            loadedDocument, loadedBody, error));
+        QVERIFY(loadedBody.findFeature(linear.id));
+        QVERIFY(loadedBody.findFeature(pathPattern.id));
+    }
 };
 
 QTEST_APPLESS_MAIN(ControllerTests)

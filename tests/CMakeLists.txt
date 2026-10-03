@@ -61,6 +61,7 @@ add_library(model_test_support STATIC
     ../src/operations/CylinderFeature.cpp
     ../src/operations/BasicFeatures.cpp
     ../src/operations/ParametricFeatures.cpp
+    ../src/operations/PatternFeatures.cpp
     ../src/viewer/PushPullDrag.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)

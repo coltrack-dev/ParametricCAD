@@ -5,6 +5,7 @@
 #include "model/Document.h"
 #include "model/Feature.h"
 #include "operations/ParametricFeatures.h"
+#include "operations/PatternFeatures.h"
 
 #include <QUndoStack>
 #include <QStringList>
@@ -31,6 +32,8 @@ public:
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;
+    ModelingResult createLinearPattern(const std::vector<std::string>& selection);
+    ModelingResult createPathPattern(const std::vector<std::string>& selection);
     ModelingResult pushPull(
         const std::string& targetId,
         int faceIndex,

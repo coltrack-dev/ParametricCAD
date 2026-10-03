@@ -48,6 +48,8 @@ set(PARAMETRIC_CAD_SOURCES
     operations/BasicFeatures.h
     operations/ParametricFeatures.cpp
     operations/ParametricFeatures.h
+    operations/PatternFeatures.cpp
+    operations/PatternFeatures.h
     geometry/Point3D.h
     geometry/Vector3D.h
 )

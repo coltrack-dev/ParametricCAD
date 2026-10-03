@@ -2,6 +2,7 @@
 
 #include "commands/FeatureCommands.h"
 #include "operations/ParametricFeatures.h"
+#include "operations/PatternFeatures.h"
 
 #include <QUuid>
 
@@ -124,6 +125,44 @@ ModelingResult ModelingController::createExtrude(
     try {
         return addFeature(std::make_shared<cad::parametric::ExtrudeFeature>(
             id("extrude"), profile, gp_Vec(0, 0, 20)));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::createLinearPattern(
+    const std::vector<std::string>& selection
+)
+{
+    if (selection.size() != 1) return {false, {}, "Select exactly one source feature"};
+    const auto source = body_.findFeature(selection.front());
+    if (!source) return {false, {}, "Pattern source does not exist"};
+    try {
+        return addFeature(std::make_shared<cad::parametric::LinearPatternFeature>(
+            id("linear-pattern"),
+            std::vector<cad::parametric::ParametricFeature::Ptr>{source},
+            gp_Vec(1.0, 0.0, 0.0), 100.0, 2, true));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::createPathPattern(
+    const std::vector<std::string>& selection
+)
+{
+    if (selection.size() != 2) return {false, {}, "Select source and path features"};
+    const auto source = body_.findFeature(selection[0]);
+    const auto path = body_.findFeature(selection[1]);
+    if (!source || !path) return {false, {}, "Pattern source or path does not exist"};
+    try {
+        return addFeature(std::make_shared<cad::parametric::PathPatternFeature>(
+            id("path-pattern"),
+            std::vector<cad::parametric::ParametricFeature::Ptr>{source},
+            path, 100.0, 2,
+            cad::parametric::PathPatternDistribution::FitCount,
+            cad::parametric::PathPatternOrientation::Fixed,
+            0.0, 0.0, true));
     } catch (const std::exception& error) {
         return failure(error);
     }
