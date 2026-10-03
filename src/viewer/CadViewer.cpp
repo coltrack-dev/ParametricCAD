@@ -405,22 +405,30 @@ void CadViewer::beginTransform(
         transformTargetReferences_.insert(
             transformTargetReferences_.end(), references.begin(), references.end());
     }
-    transformSnapCandidates_ = snapManager_.buildCandidates(
-        transformSourceReferences_, transformTargetReferences_);
+    auto cachedCandidates = snapCandidateCache_.find(transformFeatureId_);
+    if (cachedCandidates != snapCandidateCache_.end()) {
+        transformSnapCandidates_ = cachedCandidates->second;
+    } else {
+        transformSnapCandidates_ = std::make_shared<std::vector<SnapCandidate>>(
+            snapManager_.buildCandidates(
+                transformSourceReferences_, transformTargetReferences_));
+        snapCandidateCache_.emplace(transformFeatureId_, transformSnapCandidates_);
+    }
     Standard_Integer windowWidth = 0;
     Standard_Integer windowHeight = 0;
     view_->Window()->Size(windowWidth, windowHeight);
-    std::map<QString, QPointF> projectedTargets;
-    for (auto& candidate : transformSnapCandidates_) {
+    for (auto& candidate : *transformSnapCandidates_) {
         const QString key = candidate.target.ownerId + ':' + candidate.target.subshapeId;
-        const auto [it, inserted] = projectedTargets.emplace(
-            key, QPointF());
-        if (inserted) {
-            it->second = projectWorldPoint(
-                view_, candidate.target.point, windowWidth, windowHeight);
+        auto projection = snapScreenProjectionCache_.find(key);
+        if (projection == snapScreenProjectionCache_.end()) {
+            projection = snapScreenProjectionCache_.emplace(
+                key, projectWorldPoint(view_, candidate.target.point,
+                                       windowWidth, windowHeight)).first;
         }
-        candidate.target.screenPoint = it->second;
+        candidate.target.screenPoint = projection->second;
     }
+    snapScreenIndex_ = std::make_shared<cad::viewer::SnapScreenIndex>();
+    snapScreenIndex_->rebuild(*transformSnapCandidates_);
     if (!makeViewRay(position, transformStartRay_)) return;
 
     const gp_Dir axis = transformGizmo_->axis(handle);
@@ -461,7 +469,16 @@ void CadViewer::invalidateSnapReferenceCache(const char* reason)
 {
     qDebug() << "Snap cache invalidated:" << reason;
     snapReferenceCache_.clear();
-    transformSnapCandidates_.clear();
+    snapCandidateCache_.clear();
+    transformSnapCandidates_.reset();
+    snapScreenIndex_.reset();
+    invalidateSnapProjectionCache(reason);
+}
+
+void CadViewer::invalidateSnapProjectionCache(const char* reason)
+{
+    qDebug() << "Snap screen projection cache invalidated:" << reason;
+    snapScreenProjectionCache_.clear();
 }
 
 void CadViewer::updateTransformSnap(
@@ -478,10 +495,11 @@ void CadViewer::updateTransformSnap(
     QElapsedTimer snapTimer;
     snapTimer.start();
     activeSnap_ = snapManager_.findCandidate(
-        transformSnapCandidates_,
+        *transformSnapCandidates_,
         delta,
         project,
-        activeSnap_
+        activeSnap_,
+        snapScreenIndex_.get()
     );
     if (snapTimer.elapsed() > 2) {
         qWarning() << "SnapManager::findCandidate took" << snapTimer.elapsed() << "ms";
@@ -663,7 +681,7 @@ void CadViewer::commitTransform()
     transformCopyMode_ = false;
     transformSourceReferences_.clear();
     transformTargetReferences_.clear();
-    transformSnapCandidates_.clear();
+    transformSnapCandidates_.reset();
     updateTransformGizmo();
 }
 
@@ -684,7 +702,7 @@ void CadViewer::cancelTransform()
     transformFeatureId_.clear();
     transformSourceReferences_.clear();
     transformTargetReferences_.clear();
-    transformSnapCandidates_.clear();
+    transformSnapCandidates_.reset();
     activeSnap_.reset();
     if (transformGizmo_) {
         transformGizmo_->setSnapActive(false);
@@ -798,6 +816,7 @@ void CadViewer::resizeEvent(QResizeEvent* event)
 
     if (initialized_) {
         view_->MustBeResized();
+        invalidateSnapProjectionCache("CAMERA_CHANGED: viewport resized");
     }
 
     if (toolBar_ != nullptr) {
@@ -1527,6 +1546,7 @@ void CadViewer::setStandardView(const StandardView view)
     eye.Translate(-gp_Vec(direction) * distance);
     camera->SetEyeAndCenter(eye, center);
     camera->SetUp(up);
+    invalidateSnapProjectionCache("CAMERA_CHANGED: standard view");
     view_->Redraw();
     if (transformMode_) {
         updateTransformGizmo();
@@ -1615,6 +1635,7 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
             lastMousePosition_.x(),
             lastMousePosition_.y()
         );
+        invalidateSnapProjectionCache("CAMERA_CHANGED: rotation started");
     }
 
     if (initialized_ &&
@@ -1668,6 +1689,7 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
         const int deltaX = currentPosition.x() - lastMousePosition_.x();
         const int deltaY = lastMousePosition_.y() - currentPosition.y();
+        invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         view_->Pan(deltaX, deltaY);
         lastMousePosition_ = currentPosition;
         return;
@@ -1702,11 +1724,13 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
                 deltaX,
                 deltaY
             );
+            invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         } else {
             view_->Rotation(
                 currentPosition.x(),
                 currentPosition.y()
             );
+            invalidateSnapProjectionCache("CAMERA_CHANGED: orbit");
         }
 
     } else if (event->buttons() == Qt::NoButton) {
@@ -1792,6 +1816,7 @@ void CadViewer::wheelEvent(QWheelEvent* event)
             : 1.25;
 
     zoomAtCursor(event->position().toPoint(), factor);
+    invalidateSnapProjectionCache("CAMERA_CHANGED: zoom");
 }
 
 void CadViewer::keyPressEvent(QKeyEvent* event)

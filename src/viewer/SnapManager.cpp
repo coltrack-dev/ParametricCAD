@@ -18,12 +18,43 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <numeric>
+#include <set>
 
 namespace cad::viewer {
 
 namespace
 {
 constexpr double TieTolerance = 1.0e-6;
+constexpr double ReferenceDedupTolerance = 1.0e-6;
+
+QString referenceKey(const SnapReference& reference)
+{
+    const auto quantize = [](const double value) {
+        return static_cast<qlonglong>(std::llround(value / ReferenceDedupTolerance));
+    };
+    QString key = QString::number(static_cast<int>(reference.type));
+    key += ':' + QString::number(quantize(reference.point.X()));
+    key += ':' + QString::number(quantize(reference.point.Y()));
+    key += ':' + QString::number(quantize(reference.point.Z()));
+    if (reference.frame) {
+        key += ":n:" + QString::number(quantize(reference.frame->Direction().X()));
+        key += ':' + QString::number(quantize(reference.frame->Direction().Y()));
+        key += ':' + QString::number(quantize(reference.frame->Direction().Z()));
+    }
+    if (reference.axis) {
+        key += ":a:" + QString::number(quantize(reference.axis->Direction().X()));
+        key += ':' + QString::number(quantize(reference.axis->Direction().Y()));
+        key += ':' + QString::number(quantize(reference.axis->Direction().Z()));
+    }
+    // Synthetic references used by callers/tests may not carry geometry. Keep
+    // those distinct; only references backed by actual model geometry are
+    // eligible for world-space deduplication.
+    if (!reference.geometry && reference.shape.IsNull()) {
+        key += ":synthetic:" + reference.ownerId + ':' + reference.subshapeId;
+    }
+    return key;
+}
 
 gp_Dir perpendicular(const gp_Dir& normal)
 {
@@ -31,6 +62,50 @@ gp_Dir perpendicular(const gp_Dir& normal)
     if (std::abs(normal.Dot(reference)) > 0.9) reference = gp_Dir(0.0, 1.0, 0.0);
     return gp_Dir(gp_Vec(normal) ^ gp_Vec(reference));
 }
+
+} // namespace
+
+std::int64_t SnapScreenIndex::key(const int x, const int y) noexcept
+{
+    return (static_cast<std::int64_t>(x) << 32)
+        ^ static_cast<std::uint32_t>(y);
+}
+
+void SnapScreenIndex::rebuild(const std::vector<SnapCandidate>& candidates)
+{
+    buckets.clear();
+    buckets.reserve(candidates.size());
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        const auto& point = candidates[index].target.screenPoint;
+        const int x = static_cast<int>(std::floor(point.x() / CellSize));
+        const int y = static_cast<int>(std::floor(point.y() / CellSize));
+        buckets[key(x, y)].push_back(index);
+    }
+}
+
+std::vector<std::size_t> SnapScreenIndex::nearby(
+    const QPointF& point,
+    const double radius
+) const
+{
+    const int minX = static_cast<int>(std::floor((point.x() - radius) / CellSize));
+    const int maxX = static_cast<int>(std::floor((point.x() + radius) / CellSize));
+    const int minY = static_cast<int>(std::floor((point.y() - radius) / CellSize));
+    const int maxY = static_cast<int>(std::floor((point.y() + radius) / CellSize));
+    std::vector<std::size_t> result;
+    for (int y = minY; y <= maxY; ++y) {
+        for (int x = minX; x <= maxX; ++x) {
+            const auto found = buckets.find(key(x, y));
+            if (found != buckets.end()) {
+                result.insert(result.end(), found->second.begin(), found->second.end());
+            }
+        }
+    }
+    return result;
+}
+
+namespace
+{
 
 std::optional<gp_Ax3> faceFrame(const TopoDS_Face& face, const gp_Pnt& point)
 {
@@ -254,9 +329,23 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     std::vector<SnapCandidate> result;
     std::map<QString, std::size_t> candidatesBySource;
     std::map<QString, std::size_t> candidatesByTarget;
-    std::size_t sourceIndex = 0;
+    std::vector<SnapReference> uniqueSources;
+    std::vector<SnapReference> uniqueTargets;
+    std::set<QString> sourceKeys;
+    std::set<QString> targetKeys;
     for (const auto& source : sources) {
-        for (const auto& target : targets) {
+        if (sourceKeys.insert(referenceKey(source)).second) {
+            uniqueSources.push_back(source);
+        }
+    }
+    for (const auto& target : targets) {
+        if (targetKeys.insert(referenceKey(target)).second) {
+            uniqueTargets.push_back(target);
+        }
+    }
+    std::size_t sourceIndex = 0;
+    for (const auto& source : uniqueSources) {
+        for (const auto& target : uniqueTargets) {
             const auto kind = compatible(source, target);
             if (!kind) continue;
             // Exact edge/face projection is deliberately deferred until a candidate
@@ -283,7 +372,9 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     }
     if (timer.elapsed() > 2) {
         qWarning() << "SnapManager candidate collection/OCCT projection took"
-                   << timer.elapsed() << "ms for" << result.size() << "candidates";
+                   << timer.elapsed() << "ms for" << result.size() << "candidates"
+                   << "(sources" << sources.size() << "->" << uniqueSources.size()
+                   << ", targets" << targets.size() << "->" << uniqueTargets.size() << ')';
         std::vector<std::pair<QString, std::size_t>> contributors(
             candidatesByTarget.begin(), candidatesByTarget.end());
         std::sort(contributors.begin(), contributors.end(),
@@ -323,7 +414,8 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
     const std::vector<SnapCandidate>& candidates,
     const gp_Trsf& previewTransform,
     const std::function<QPointF(const gp_Pnt&)>& project,
-    const std::optional<SnapCandidate>& active
+    const std::optional<SnapCandidate>& active,
+    const SnapScreenIndex* screenIndex
 ) const
 {
     QElapsedTimer totalTimer;
@@ -358,7 +450,23 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
     QElapsedTimer distanceTimer;
     distanceTimer.start();
     std::optional<SnapCandidate> result;
-    for (const auto& cached : candidates) {
+    std::vector<std::size_t> candidateIndices;
+    if (screenIndex) {
+        std::vector<bool> visited(candidates.size(), false);
+        for (const auto& sourceScreen : sourceScreens) {
+            for (const auto index : screenIndex->nearby(sourceScreen, limit)) {
+                if (index < visited.size() && !visited[index]) {
+                    visited[index] = true;
+                    candidateIndices.push_back(index);
+                }
+            }
+        }
+    } else {
+        candidateIndices.resize(candidates.size());
+        std::iota(candidateIndices.begin(), candidateIndices.end(), 0);
+    }
+    for (const auto candidateIndex : candidateIndices) {
+            const auto& cached = candidates[candidateIndex];
             const QPointF sourceScreen = sourceScreens[cached.sourceIndex];
             const QPointF targetScreen = cached.target.screenPoint;
             const double distance = std::hypot(

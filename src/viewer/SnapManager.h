@@ -11,6 +11,8 @@
 #include <optional>
 #include <functional>
 #include <memory>
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace cad::viewer {
@@ -67,6 +69,18 @@ struct SnapCandidate
     }
 };
 
+struct SnapScreenIndex
+{
+    static constexpr double CellSize = 16.0;
+
+    void rebuild(const std::vector<SnapCandidate>& candidates);
+    std::vector<std::size_t> nearby(const QPointF& point, double radius) const;
+
+private:
+    static std::int64_t key(int x, int y) noexcept;
+    std::unordered_map<std::int64_t, std::vector<std::size_t>> buckets;
+};
+
 class SnapManager final
 {
 public:
@@ -89,7 +103,8 @@ public:
         const std::vector<SnapCandidate>& candidates,
         const gp_Trsf& previewTransform,
         const std::function<QPointF(const gp_Pnt&)>& project,
-        const std::optional<SnapCandidate>& active
+        const std::optional<SnapCandidate>& active,
+        const SnapScreenIndex* screenIndex = nullptr
     ) const;
 
     std::optional<SnapCandidate> findCandidate(

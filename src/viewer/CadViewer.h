@@ -122,6 +122,7 @@ private:
     std::optional<gp_Pnt> worldAnchorAtScreenPoint(const QPoint& position) const;
     void zoomAtCursor(const QPoint& position, double factor);
     void invalidateSnapReferenceCache(const char* reason);
+    void invalidateSnapProjectionCache(const char* reason);
     bool makeViewRay(const QPoint& position, cad::viewer::ViewRay& ray) const;
     void bindWindow();
     void updateHover(const QPoint& position);
@@ -205,8 +206,11 @@ private:
     std::optional<cad::viewer::SnapCandidate> activeSnap_;
     std::vector<cad::viewer::SnapReference> transformSourceReferences_;
     std::vector<cad::viewer::SnapReference> transformTargetReferences_;
-    std::vector<cad::viewer::SnapCandidate> transformSnapCandidates_;
+    std::shared_ptr<std::vector<cad::viewer::SnapCandidate>> transformSnapCandidates_;
     std::map<QString, std::vector<cad::viewer::SnapReference>> snapReferenceCache_;
+    std::map<QString, std::shared_ptr<std::vector<cad::viewer::SnapCandidate>>> snapCandidateCache_;
+    std::map<QString, QPointF> snapScreenProjectionCache_;
+    std::shared_ptr<cad::viewer::SnapScreenIndex> snapScreenIndex_;
 
     std::unique_ptr<cad::viewer::OcctSelectionAdapter> selectionAdapter_;
     cad::viewer::SelectionState selectionState_;
