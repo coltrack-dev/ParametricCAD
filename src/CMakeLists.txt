@@ -53,6 +53,8 @@ set(PARAMETRIC_CAD_SOURCES
     operations/BasicFeatures.h
     operations/ParametricFeatures.cpp
     operations/ParametricFeatures.h
+    operations/SketchProfileBuilder.cpp
+    operations/SketchProfileBuilder.h
     operations/PatternFeatures.cpp
     operations/PatternFeatures.h
     geometry/Point3D.h

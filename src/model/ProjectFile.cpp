@@ -157,10 +157,25 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             return std::make_shared<FaceFeature>(string(o, "id"), source);
         }},
         {"Extrude", [](const QJsonObject& o, const Body& body) {
+            if (o.contains("sourceSketchId")) {
+                const auto source = body.findFeature(string(o, "sourceSketchId"));
+                const auto sketch = std::dynamic_pointer_cast<SketchFeature>(source);
+                require(static_cast<bool>(sketch), "Extrude references missing Sketch source");
+                return std::make_shared<ExtrudeFeature>(string(o, "id"), sketch,
+                    number(o, "distance"), boolean(o, "reversed"));
+            }
             const auto source = body.findFeature(string(o, "sourceFeatureId"));
             require(static_cast<bool>(source), "Extrude references missing source");
             return std::make_shared<ExtrudeFeature>(string(o, "id"), source,
                 gp_Vec(number(o, "vectorX"), number(o, "vectorY"), number(o, "vectorZ")));
+        }},
+        {"Pocket", [](const QJsonObject& o, const Body& body) {
+            const auto target = body.findFeature(string(o, "targetFeatureId"));
+            const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+                body.findFeature(string(o, "sourceSketchId")));
+            require(target && sketch, "Pocket references missing target or Sketch");
+            return std::make_shared<PocketFeature>(string(o, "id"), target, sketch,
+                number(o, "depth"));
         }},
         {"PushPull", [](const QJsonObject& o, const Body& body) {
             const auto source = body.findFeature(string(o, "sourceFeatureId"));

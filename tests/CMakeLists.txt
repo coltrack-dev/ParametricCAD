@@ -63,6 +63,7 @@ add_library(model_test_support STATIC
     ../src/operations/CylinderFeature.cpp
     ../src/operations/BasicFeatures.cpp
     ../src/operations/ParametricFeatures.cpp
+    ../src/operations/SketchProfileBuilder.cpp
     ../src/operations/PatternFeatures.cpp
     ../src/viewer/PushPullDrag.cpp
 )

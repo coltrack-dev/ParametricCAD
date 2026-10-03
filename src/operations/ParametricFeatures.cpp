@@ -1,6 +1,7 @@
 #include "operations/ParametricFeatures.h"
 
 #include "operations/BasicFeatures.h"
+#include "operations/SketchProfileBuilder.h"
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -12,6 +13,7 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
@@ -24,6 +26,7 @@
 #include <QJsonArray>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 
 #include <stdexcept>
@@ -947,20 +950,71 @@ ExtrudeFeature::ExtrudeFeature(
     addDependency(profile_);
 }
 
+ExtrudeFeature::ExtrudeFeature(
+    std::string id,
+    const std::shared_ptr<SketchFeature>& sketch,
+    const double distance,
+    const bool reversed
+)
+    : ParametricFeature(std::move(id), "Extrude"),
+      sketch_(sketch),
+      distance_(distance),
+      reversed_(reversed)
+{
+    requireFeature(sketch_, "sketch");
+    if (!std::isfinite(distance_) || distance_ <= 0.001) {
+        throw std::invalid_argument("Extrude distance must be greater than zero");
+    }
+    addDependency(sketch_);
+}
+
 std::vector<FeatureProperty> ExtrudeFeature::properties() const
 {
+    if (sketch_) {
+        return {textProperty("sourceSketchId", "Sketch", sketch_->name()),
+                numericProperty("distance", "Distance", distance_),
+                {"reversed", "Reverse", reversed_, std::nullopt, std::nullopt, true}};
+    }
     return {numericProperty("length", "Length", vector_.Magnitude())};
 }
 
 bool ExtrudeFeature::setNumericProperty(const std::string& key, const double value)
 {
+    if (sketch_) {
+        if (key != "distance" || !std::isfinite(value) || value <= 0.001) return false;
+        distance_ = value;
+        markDirty();
+        return true;
+    }
     if (key != "length" || vector_.Magnitude() == 0.0) return false;
     setVector(vector_.Normalized() * value);
     return true;
 }
 
+bool ExtrudeFeature::setProperty(const std::string& key, const PropertyValue& value)
+{
+    if (sketch_ && key == "reversed" && std::holds_alternative<bool>(value)) {
+        reversed_ = std::get<bool>(value);
+        markDirty();
+        return true;
+    }
+    return ParametricFeature::setProperty(key, value);
+}
+
+std::vector<std::string> ExtrudeFeature::hiddenDependencyIds() const
+{
+    if (sketch_) return {sketch_->id()};
+    return profile_ ? std::vector<std::string>{profile_->id()} : std::vector<std::string>{};
+}
+
 void ExtrudeFeature::writeParameters(QJsonObject& object) const
 {
+    if (sketch_) {
+        object.insert("sourceSketchId", QString::fromStdString(sketch_->id()));
+        object.insert("distance", distance_);
+        object.insert("reversed", reversed_);
+        return;
+    }
     object.insert("sourceFeatureId", QString::fromStdString(profile_->id()));
     object.insert("vectorX", vector_.X());
     object.insert("vectorY", vector_.Y());
@@ -987,10 +1041,118 @@ ExtrudeFeature::vector() const noexcept
 
 TopoDS_Shape ExtrudeFeature::build() const
 {
+    if (sketch_) {
+        const auto profile = cad::operations::SketchProfileBuilder::build(*sketch_);
+        gp_Vec vector(sketch_->currentFrame().normal);
+        if (reversed_) vector.Reverse();
+        vector *= distance_;
+        return cad::modeling::BasicFeatures::extrude(profile.face, vector);
+    }
     return cad::modeling::BasicFeatures::extrude(
         profile_->shape(),
         vector_
     );
+}
+
+PocketFeature::PocketFeature(
+    std::string id,
+    const Ptr& target,
+    const std::shared_ptr<SketchFeature>& sketch,
+    const double depth
+)
+    : ParametricFeature(std::move(id), "Pocket"),
+      target_(target),
+      sketch_(sketch),
+      depth_(depth)
+{
+    requireFeature(target_, "pocket target");
+    requireFeature(sketch_, "pocket sketch");
+    if (sketch_->supportType() != SketchSupportType::Face) {
+        throw std::invalid_argument("Pocket requires a Face-attached Sketch");
+    }
+    if (!std::isfinite(depth_) || depth_ <= 0.001) {
+        throw std::invalid_argument("Pocket depth must be greater than zero");
+    }
+    addDependency(target_);
+    addDependency(sketch_);
+}
+
+std::vector<FeatureProperty> PocketFeature::properties() const
+{
+    return {textProperty("targetFeatureId", "Target", target_->name()),
+            textProperty("sourceSketchId", "Sketch", sketch_->name()),
+            numericProperty("depth", "Depth", depth_),
+            textProperty("mode", "Mode", "Blind")};
+}
+
+bool PocketFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key != "depth" || !std::isfinite(value) || value <= 0.001) return false;
+    depth_ = value;
+    markDirty();
+    return true;
+}
+
+std::vector<std::string> PocketFeature::hiddenDependencyIds() const
+{
+    return {target_->id(), sketch_->id()};
+}
+
+const ParametricFeature::Ptr& PocketFeature::target() const noexcept { return target_; }
+const std::shared_ptr<SketchFeature>& PocketFeature::sketch() const noexcept { return sketch_; }
+double PocketFeature::depth() const noexcept { return depth_; }
+
+TopoDS_Shape PocketFeature::build() const
+{
+    if (target_->shape().ShapeType() != TopAbs_SOLID) {
+        throw std::runtime_error("Pocket target is not a solid");
+    }
+    const auto profile = cad::operations::SketchProfileBuilder::build(*sketch_);
+    const auto frame = sketch_->currentFrame();
+    const auto support = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+        *sketch_->faceReference(), target_->shape());
+    if (support.status != cad::topology::ResolveStatus::Resolved || !support.shape
+        || support.shape->ShapeType() != TopAbs_FACE) {
+        throw std::runtime_error("Sketch support face could not be resolved for Pocket");
+    }
+
+    const double epsilon = 1.0e-3;
+    const double classifierTolerance = 1.0e-7;
+    const gp_Pnt plus = frame.origin.Translated(gp_Vec(frame.normal) * epsilon);
+    const gp_Pnt minus = frame.origin.Translated(gp_Vec(frame.normal) * -epsilon);
+    BRepClass3d_SolidClassifier classifier(target_->shape());
+    classifier.Perform(plus, classifierTolerance);
+    const bool plusInside = classifier.State() == TopAbs_IN;
+    classifier.Perform(minus, classifierTolerance);
+    const bool minusInside = classifier.State() == TopAbs_IN;
+    if (plusInside == minusInside) {
+        throw std::runtime_error("Unable to determine inward pocket direction");
+    }
+    gp_Vec direction(frame.normal);
+    if (minusInside) direction.Reverse();
+    const TopoDS_Shape tool = cad::modeling::BasicFeatures::extrude(
+        profile.face, direction * depth_);
+    const TopoDS_Shape result = cad::modeling::BasicFeatures::cut(target_->shape(), tool);
+    if (result.IsNull()) throw std::runtime_error("Pocket returned a null shape");
+
+    GProp_GProps beforeProperties;
+    GProp_GProps afterProperties;
+    BRepGProp::VolumeProperties(target_->shape(), beforeProperties);
+    BRepGProp::VolumeProperties(result, afterProperties);
+    const double before = beforeProperties.Mass();
+    const double after = afterProperties.Mass();
+    const double tolerance = std::max(1.0e-7, before * 1.0e-7);
+    if (before - after <= tolerance) throw std::runtime_error("Pocket does not intersect target solid");
+    if (after <= tolerance) throw std::runtime_error("Pocket removes entire target solid");
+    return result;
+}
+
+void PocketFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("targetFeatureId", QString::fromStdString(target_->id()));
+    object.insert("sourceSketchId", QString::fromStdString(sketch_->id()));
+    object.insert("depth", depth_);
+    object.insert("mode", "Blind");
 }
 
 PushPullFeature::PushPullFeature(
@@ -1787,8 +1949,22 @@ ParametricFeature::Ptr HexagonFeature::clone(std::string newId) const
 
 ParametricFeature::Ptr ExtrudeFeature::clone(std::string newId) const
 {
+    if (sketch_) {
+        auto copy = std::make_shared<ExtrudeFeature>(
+            std::move(newId), sketch_, distance_, reversed_);
+        copyPlacementTo(copy);
+        return copy;
+    }
     auto copy = std::make_shared<ExtrudeFeature>(
         std::move(newId), profile(), vector_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ParametricFeature::Ptr PocketFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<PocketFeature>(
+        std::move(newId), target_, sketch_, depth_);
     copyPlacementTo(copy);
     return copy;
 }

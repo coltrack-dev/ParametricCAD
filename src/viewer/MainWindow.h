@@ -52,6 +52,7 @@ private:
     void handleSketchPoint(const gp_Pnt2d& point);
     void createFace();
     void createExtrude();
+    void createPocket();
     void createLinearPattern();
     void createPathPattern();
     void createFillet();
@@ -66,6 +67,7 @@ private:
     QAction* duplicateAction_{nullptr};
     QAction* faceAction_{nullptr};
     QAction* extrudeAction_{nullptr};
+    QAction* pocketAction_{nullptr};
     QAction* linearPatternAction_{nullptr};
     QAction* pathPatternAction_{nullptr};
     QAction* filletAction_{nullptr};

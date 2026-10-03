@@ -118,6 +118,58 @@ private slots:
         QVERIFY(controller.actionState({box.id, cylinder.id}).canBoolean);
     }
 
+    void sketchExtrudeAndPocketAreParametric()
+    {
+        ModelingController extrudeController;
+        const auto sketch = extrudeController.createSketch();
+        QVERIFY(sketch.success);
+        const SelectionSnapshot sketchSelection{{
+            {sketch.id, SelectionKind::Object, std::nullopt}}};
+        const auto extrude = extrudeController.createExtrudeFromSketch(sketchSelection, 25.0);
+        QVERIFY2(extrude.success, qPrintable(QString::fromStdString(extrude.error)));
+        const auto extruded = extrudeController.body().findFeature(extrude.id);
+        QVERIFY(extruded && !extruded->shape().IsNull());
+        QVERIFY(volume(extruded->shape()) > 100.0);
+        extrudeController.undo();
+        QVERIFY(!extrudeController.body().findFeature(extrude.id));
+        extrudeController.redo();
+        QVERIFY(extrudeController.body().findFeature(extrude.id));
+
+        ModelingController pocketController;
+        const auto box = pocketController.createBox();
+        QVERIFY(box.success);
+        const SelectionSnapshot faceSelection{{
+            {box.id, SelectionKind::Face, 1}}};
+        const auto sketchOnFace = pocketController.createSketchOnFace(faceSelection);
+        QVERIFY2(sketchOnFace.success, qPrintable(QString::fromStdString(sketchOnFace.error)));
+        QVERIFY(pocketController.addSketchCircle(sketchOnFace.id, {0.0, 0.0}, 5.0).success);
+        const double before = volume(pocketController.body().findFeature(box.id)->shape());
+        const auto pocket = pocketController.createPocketFromSketch({{
+            {sketchOnFace.id, SelectionKind::Object, std::nullopt}}}, 10.0);
+        QVERIFY2(pocket.success, qPrintable(QString::fromStdString(pocket.error)));
+        const auto pocketFeature = pocketController.body().findFeature(pocket.id);
+        QVERIFY(pocketFeature && !pocketFeature->shape().IsNull());
+        QVERIFY(volume(pocketFeature->shape()) < before);
+        pocketController.undo();
+        QVERIFY(!pocketController.body().findFeature(pocket.id));
+        pocketController.redo();
+        QVERIFY(pocketController.body().findFeature(pocket.id));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("sketch-extrude-pocket.pcad");
+        Document document;
+        QVERIFY2(ProjectFile::save(path, document, pocketController.body(), error),
+                 qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error),
+                 qPrintable(error));
+        QVERIFY(loadedBody.findFeature(pocket.id));
+        QVERIFY(!loadedBody.findFeature(pocket.id)->shape().IsNull());
+    }
+
     void projectControllerReplacesOnlyAfterValidLoad()
     {
         ModelingController controller;

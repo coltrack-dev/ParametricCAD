@@ -4,6 +4,7 @@
 #include "commands/FeatureCommands.h"
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
+#include "operations/SketchProfileBuilder.h"
 
 #include <QLoggingCategory>
 #include <TopoDS.hxx>
@@ -189,6 +190,53 @@ ModelingResult ModelingController::createExtrude(
     try {
         return addFeature(std::make_shared<cad::parametric::ExtrudeFeature>(
             id("extrude"), profile, gp_Vec(0, 0, 20)));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::createExtrudeFromSketch(
+    const SelectionSnapshot& selection,
+    const double distance,
+    const bool reversed)
+{
+    if (selection.selectedObjectIds().size() != 1 || selection.items.size() != 1
+        || selection.items.front().kind != SelectionKind::Object) {
+        return {false, {}, "Extrude requires exactly one Sketch object"};
+    }
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(selection.selectedObjectIds().front()));
+    if (!sketch) return {false, {}, "Selected feature is not a Sketch"};
+    try {
+        (void)cad::operations::SketchProfileBuilder::build(*sketch);
+        return addFeature(std::make_shared<cad::parametric::ExtrudeFeature>(
+            id("extrude"), sketch, distance, reversed));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::createPocketFromSketch(
+    const SelectionSnapshot& selection,
+    const double depth)
+{
+    if (selection.selectedObjectIds().size() != 1 || selection.items.size() != 1
+        || selection.items.front().kind != SelectionKind::Object) {
+        return {false, {}, "Pocket requires exactly one Sketch object"};
+    }
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(selection.selectedObjectIds().front()));
+    if (!sketch) return {false, {}, "Selected feature is not a Sketch"};
+    if (sketch->supportType() != cad::parametric::SketchSupportType::Face
+        || !sketch->faceReference()) {
+        return {false, {}, "Pocket requires a Face-attached Sketch"};
+    }
+    const auto target = body_.findFeature(sketch->faceReference()->featureId);
+    if (!target) return {false, {}, "Pocket target feature does not exist"};
+    try {
+        (void)cad::operations::SketchProfileBuilder::build(*sketch);
+        return addFeature(std::make_shared<cad::parametric::PocketFeature>(
+            id("pocket"), target, sketch, depth));
     } catch (const std::exception& error) {
         return failure(error);
     }
@@ -502,6 +550,17 @@ ModelingActionState ModelingController::actionState(
         const auto feature = body_.findFeature(selection.front());
         state.canCreateFace = feature && feature->role() == cad::parametric::FeatureRole::Sketch;
         state.canExtrude = feature && feature->role() == cad::parametric::FeatureRole::Face;
+        if (feature && feature->role() == cad::parametric::FeatureRole::Sketch) {
+            const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+            state.canExtrude = false;
+            state.canPocket = sketch && sketch->supportType() == cad::parametric::SketchSupportType::Face
+                && sketch->faceReference()
+                && body_.findFeature(sketch->faceReference()->featureId);
+            if (state.canPocket) {
+                try { (void)cad::operations::SketchProfileBuilder::build(*sketch); }
+                catch (const std::exception&) { state.canPocket = false; }
+            }
+        }
     }
     return state;
 }
@@ -511,6 +570,17 @@ ModelingActionState ModelingController::actionState(
 ) const
 {
     auto state = actionState(selection.selectedObjectIds());
+    if (selection.items.size() == 1
+        && selection.items.front().kind == SelectionKind::Object) {
+        const auto feature = body_.findFeature(selection.items.front().featureId);
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+        if (sketch) {
+            try {
+                (void)cad::operations::SketchProfileBuilder::build(*sketch);
+                state.canExtrude = true;
+            } catch (const std::exception&) {}
+        }
+    }
     if (!selection.items.empty()) {
         const auto& first = selection.items.front();
         const bool edgeSelection = first.kind == SelectionKind::Edge

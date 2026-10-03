@@ -183,6 +183,7 @@ void MainWindow::updateActionState()
     if (duplicateAction_) duplicateAction_->setEnabled(selectedIds().size() == 1);
     faceAction_->setEnabled(state.canCreateFace);
     extrudeAction_->setEnabled(state.canExtrude);
+    if (pocketAction_) pocketAction_->setEnabled(state.canPocket);
     if (sketchOnFaceAction_) sketchOnFaceAction_->setEnabled(state.canSketchOnFace);
     if (linearPatternAction_) linearPatternAction_->setEnabled(selectedIds().size() == 1);
     if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
@@ -281,9 +282,12 @@ void MainWindow::createActions()
     faceAction_ = modelingMenu->addAction("Create Face");
     faceAction_->setEnabled(false);
     connect(faceAction_, &QAction::triggered, this, &MainWindow::createFace);
-    extrudeAction_ = modelingMenu->addAction("Extrude Face");
+    extrudeAction_ = modelingMenu->addAction("Extrude");
     extrudeAction_->setEnabled(false);
     connect(extrudeAction_, &QAction::triggered, this, &MainWindow::createExtrude);
+    pocketAction_ = modelingMenu->addAction("Pocket");
+    pocketAction_->setEnabled(false);
+    connect(pocketAction_, &QAction::triggered, this, &MainWindow::createPocket);
     linearPatternAction_ = modelingMenu->addAction("Linear Pattern");
     linearPatternAction_->setEnabled(false);
     linearPatternAction_->setToolTip("Create a linear pattern from the selected object");
@@ -431,7 +435,20 @@ void MainWindow::createFace()
 
 void MainWindow::createExtrude()
 {
-    reportResult(modeling_.createExtrude(selectedIds()));
+    const auto ids = selectedIds();
+    if (ids.size() == 1) {
+        const auto feature = modeling_.body().findFeature(ids.front());
+        if (feature && feature->role() == cad::parametric::FeatureRole::Sketch) {
+            reportResult(modeling_.createExtrudeFromSketch(currentSelection_));
+            return;
+        }
+    }
+    reportResult(modeling_.createExtrude(ids));
+}
+
+void MainWindow::createPocket()
+{
+    reportResult(modeling_.createPocketFromSketch(currentSelection_));
 }
 
 void MainWindow::createLinearPattern()

@@ -38,6 +38,15 @@ public:
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;
+    ModelingResult createExtrudeFromSketch(
+        const SelectionSnapshot& selection,
+        double distance = 20.0,
+        bool reversed = false
+    );
+    ModelingResult createPocketFromSketch(
+        const SelectionSnapshot& selection,
+        double depth = 10.0
+    );
     ModelingResult createLinearPattern(const std::vector<std::string>& selection);
     ModelingResult createPathPattern(const std::vector<std::string>& selection);
     ModelingResult createFillet(

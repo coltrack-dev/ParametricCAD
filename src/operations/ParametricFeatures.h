@@ -281,10 +281,18 @@ public:
         const Ptr& profile,
         gp_Vec vector
     );
+    ExtrudeFeature(
+        std::string id,
+        const std::shared_ptr<SketchFeature>& sketch,
+        double distance,
+        bool reversed = false
+    );
     const char* typeId() const noexcept override { return "Extrude"; }
     Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
     bool setNumericProperty(const std::string& key, double value) override;
+    bool setProperty(const std::string& key, const PropertyValue& value) override;
+    std::vector<std::string> hiddenDependencyIds() const override;
 
     void setVector(gp_Vec vector);
 
@@ -297,7 +305,39 @@ protected:
 
 private:
     Ptr profile_;
+    std::shared_ptr<SketchFeature> sketch_;
     gp_Vec vector_;
+    double distance_{0.0};
+    bool reversed_{false};
+};
+
+class PocketFeature final : public ParametricFeature
+{
+public:
+    PocketFeature(
+        std::string id,
+        const Ptr& target,
+        const std::shared_ptr<SketchFeature>& sketch,
+        double depth
+    );
+    const char* typeId() const noexcept override { return "Pocket"; }
+    Ptr clone(std::string newId) const override;
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    std::vector<std::string> hiddenDependencyIds() const override;
+
+    const Ptr& target() const noexcept;
+    const std::shared_ptr<SketchFeature>& sketch() const noexcept;
+    double depth() const noexcept;
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    Ptr target_;
+    std::shared_ptr<SketchFeature> sketch_;
+    double depth_;
 };
 
 class PushPullFeature final : public ParametricFeature

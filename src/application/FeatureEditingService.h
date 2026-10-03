@@ -32,6 +32,7 @@ struct ModelingActionState
     bool canDelete{false};
     bool canCreateFace{false};
     bool canExtrude{false};
+    bool canPocket{false};
     bool canBoolean{false};
     bool canFillet{false};
     bool canChamfer{false};

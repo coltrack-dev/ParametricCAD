@@ -33,6 +33,7 @@ package "Parametric model" {
     component "SketchFeature\nlocal 2D entities / frame" as SketchFeature
     component "Primitive / profile features" as PrimitiveFeatures
     component "Operation features\nExtrude, Boolean, PushPull, ..." as OperationFeatures
+    component SketchProfileBuilder
 }
 
 package "Geometry / OCCT" {
@@ -66,6 +67,7 @@ TransformFeatureCommand --> Body : placement before / after
 Body *-- ParametricFeature
 PrimitiveFeatures --|> ParametricFeature
 OperationFeatures --|> ParametricFeature
+OperationFeatures --> SketchProfileBuilder : Sketch profiles
 SketchFeature --|> ParametricFeature
 SketchFeature --> TopologicalReference : Face support
 
