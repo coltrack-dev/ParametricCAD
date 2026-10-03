@@ -2,6 +2,9 @@ set(PARAMETRIC_CAD_SOURCES
     app/main.cpp
     application/ModelingController.cpp
     application/ModelingController.h
+    application/Selection.h
+    application/SelectionResolver.cpp
+    application/SelectionResolver.h
     application/FeatureEditingService.h
     application/ProjectController.cpp
     application/ProjectController.h

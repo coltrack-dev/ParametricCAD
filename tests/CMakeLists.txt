@@ -49,6 +49,7 @@ find_package(Qt6 REQUIRED COMPONENTS Test)
 
 add_library(model_test_support STATIC
     ../src/application/ModelingController.cpp
+    ../src/application/SelectionResolver.cpp
     ../src/application/ProjectController.cpp
     ../src/model/ProjectFile.cpp
     ../src/commands/FeatureCommands.cpp

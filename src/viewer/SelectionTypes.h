@@ -1,5 +1,7 @@
 #pragma once
 
+#include "application/Selection.h"
+
 #include <AIS_InteractiveObject.hxx>
 #include <QString>
 #include <TopoDS_Shape.hxx>
@@ -18,14 +20,7 @@ enum class SelectionMode
     Vertex
 };
 
-enum class SelectionKind
-{
-    Unknown,
-    Object,
-    Vertex,
-    Edge,
-    Face
-};
+using SelectionKind = cad::application::SelectionKind;
 
 struct SelectionItem
 {
@@ -98,6 +93,27 @@ struct SelectionState
         primary = selected.empty()
             ? std::nullopt
             : std::optional<SelectionItem>(selected.front());
+    }
+
+    cad::application::SelectionSnapshot snapshot() const
+    {
+        cad::application::SelectionSnapshot result;
+        result.items.reserve(selected.size());
+        for (const auto& item : selected) {
+            if (!item.isValid()) continue;
+            result.items.push_back({
+                item.featureId.toStdString(),
+                item.kind == SelectionKind::Object
+                    ? cad::application::SelectionKind::Object
+                    : item.kind == SelectionKind::Face
+                        ? cad::application::SelectionKind::Face
+                        : item.kind == SelectionKind::Edge
+                            ? cad::application::SelectionKind::Edge
+                            : cad::application::SelectionKind::Vertex,
+                item.currentSubshapeIndex
+            });
+        }
+        return result;
     }
 };
 

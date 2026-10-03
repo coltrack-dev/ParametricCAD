@@ -105,6 +105,20 @@ int main()
     assert(!state.primary);
     assert(!state.hovered);
 
+    state.rebuildSelected({
+        faceHit,
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Edge, 2}, edge, presentation},
+        SelectionHit{SelectionItem{"box-1", SelectionKind::Vertex, 1},
+                     faces(1), presentation}
+    });
+    const auto snapshot = state.snapshot();
+    assert(snapshot.items.size() == 3);
+    assert(snapshot.featureIds().size() == 1);
+    assert(snapshot.selectedObjectIds().empty());
+    assert(snapshot.items[0].kind == cad::application::SelectionKind::Face);
+    assert(snapshot.items[1].kind == cad::application::SelectionKind::Edge);
+    assert(snapshot.items[2].kind == cad::application::SelectionKind::Vertex);
+
     SelectionItem invalid;
     assert(!invalid.isValid());
 

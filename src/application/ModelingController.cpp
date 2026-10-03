@@ -366,6 +366,13 @@ ModelingActionState ModelingController::actionState(
     return state;
 }
 
+ModelingActionState ModelingController::actionState(
+    const SelectionSnapshot& selection
+) const
+{
+    return actionState(selection.selectedObjectIds());
+}
+
 void ModelingController::replaceProject(Document document, cad::parametric::Body body)
 {
     document_ = std::move(document);

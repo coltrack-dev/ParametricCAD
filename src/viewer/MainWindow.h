@@ -31,6 +31,10 @@ private:
     void createParametricPanel();
     void refreshModelView(bool fitView = false);
     void applySelection(const QStringList& featureIds, bool updateViewer = true);
+    void applySelectionSnapshot(
+        const cad::application::SelectionSnapshot& selection,
+        bool updateViewer = false
+    );
     void updateActionState();
     void reportResult(const cad::application::ModelingResult& result);
     std::vector<std::string> selectedIds() const;
@@ -58,6 +62,7 @@ private:
     // mirror supplies MainWindow actions and model operation inputs without
     // coupling MainWindow to viewer internals.
     QStringList selectedObjectIds_;
+    cad::application::SelectionSnapshot currentSelection_;
     CadViewer* viewer_{nullptr};
     FeatureEditorPanel* featureEditorPanel_{nullptr};
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;

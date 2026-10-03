@@ -102,8 +102,9 @@ void MainWindow::createParametricPanel()
         }
     );
 
-    connect(viewer_, &CadViewer::featureSelectionChanged, this, [this](const QStringList& ids) {
-        applySelection(ids, false);
+    connect(viewer_, &CadViewer::selectionChanged, this,
+        [this](const cad::application::SelectionSnapshot& selection) {
+            applySelectionSnapshot(selection);
     });
 
     dockWidget->setWidget(featureEditorPanel_);
@@ -140,28 +141,46 @@ void MainWindow::applySelection(
     // preserve feedback-loop suppression for featureSelectionChanged.
     if (updateViewer) {
         viewer_->selectFeatures(featureIds);
+        currentSelection_ = viewer_->selectionSnapshot();
     }
     selectedObjectIds_ = featureIds;
     featureEditorPanel_->selectFeatures(featureIds);
     updateActionState();
 }
 
+void MainWindow::applySelectionSnapshot(
+    const cad::application::SelectionSnapshot& selection,
+    const bool updateViewer
+)
+{
+    currentSelection_ = selection;
+    const auto featureIds = selection.featureIds();
+    QStringList ids;
+    for (const auto& id : featureIds) ids.append(QString::fromStdString(id));
+
+    if (updateViewer) {
+        viewer_->selectFeatures(ids);
+        currentSelection_ = viewer_->selectionSnapshot();
+    }
+    selectedObjectIds_ = ids;
+    featureEditorPanel_->selectFeatures(ids);
+    updateActionState();
+}
+
 std::vector<std::string> MainWindow::selectedIds() const
 {
-    std::vector<std::string> ids;
-    for (const auto& id : selectedObjectIds_) ids.push_back(id.toStdString());
-    return ids;
+    return currentSelection_.selectedObjectIds();
 }
 
 void MainWindow::updateActionState()
 {
-    const auto state = modeling_.actionState(selectedIds());
+    const auto state = modeling_.actionState(currentSelection_);
     deleteAction_->setEnabled(state.canDelete);
-    if (duplicateAction_) duplicateAction_->setEnabled(selectedObjectIds_.size() == 1);
+    if (duplicateAction_) duplicateAction_->setEnabled(selectedIds().size() == 1);
     faceAction_->setEnabled(state.canCreateFace);
     extrudeAction_->setEnabled(state.canExtrude);
-    if (linearPatternAction_) linearPatternAction_->setEnabled(selectedObjectIds_.size() == 1);
-    if (pathPatternAction_) pathPatternAction_->setEnabled(selectedObjectIds_.size() == 2);
+    if (linearPatternAction_) linearPatternAction_->setEnabled(selectedIds().size() == 1);
+    if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
 }
 
 void MainWindow::reportResult(const cad::application::ModelingResult& result)
@@ -212,9 +231,10 @@ void MainWindow::createActions()
     duplicateAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
     duplicateAction_->setEnabled(false);
     connect(duplicateAction_, &QAction::triggered, this, [this]() {
-        if (selectedObjectIds_.size() != 1) return;
+        const auto ids = selectedIds();
+        if (ids.size() != 1) return;
         reportResult(modeling_.duplicateFeature(
-            selectedObjectIds_.front().toStdString()));
+            ids.front()));
     });
 
     auto* modelingMenu = menuBar()->addMenu("&Modeling");
@@ -302,8 +322,9 @@ void MainWindow::createPathPattern()
 void MainWindow::deleteFeature()
 {
     featureEditorPanel_->commitPendingEdits();
-    if (selectedObjectIds_.size() != 1) return;
-    const auto id = selectedObjectIds_.front().toStdString();
+    const auto ids = selectedIds();
+    if (ids.size() != 1) return;
+    const auto id = ids.front();
     const auto names = modeling_.dependentNames(id);
     if (!names.isEmpty() && QMessageBox::question(this, "Delete Feature",
         QString("Delete %1?\nDependent features will also be deleted:\n%2")

@@ -71,6 +71,7 @@ public:
 
     void setSelectionMode(SelectionMode mode);
     SelectionMode selectionMode() const;
+    cad::application::SelectionSnapshot selectionSnapshot() const;
     void clearSelection();
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler
@@ -83,6 +84,7 @@ public:
     );
 
 signals:
+    void selectionChanged(const cad::application::SelectionSnapshot& selection);
     void featureSelectionChanged(const QStringList& featureIds);
 
 protected:

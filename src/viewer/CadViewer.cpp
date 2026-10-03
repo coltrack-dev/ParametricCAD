@@ -1011,6 +1011,11 @@ CadViewer::SelectionMode CadViewer::selectionMode() const
     return selectionMode_;
 }
 
+cad::application::SelectionSnapshot CadViewer::selectionSnapshot() const
+{
+    return selectionState_.snapshot();
+}
+
 void CadViewer::setPushPullCommittedHandler(
     std::function<void(const QString&, int, const gp_Vec&, double)> handler
 )
@@ -1933,6 +1938,8 @@ void CadViewer::selectFeatures(const QStringList& featureIds)
 void CadViewer::notifyFeatureSelection()
 {
     syncSelectionStateFromOcct();
+    const auto snapshot = selectionState_.snapshot();
+    emit selectionChanged(snapshot);
     QStringList ids;
     for (const auto& item : selectionState_.selected) {
         if (!ids.contains(item.featureId)) {

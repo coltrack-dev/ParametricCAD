@@ -1,5 +1,6 @@
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
+#include "application/SelectionResolver.h"
 #include "model/ProjectFile.h"
 
 #include <QtTest/QtTest>
@@ -57,6 +58,31 @@ class ControllerTests final : public QObject
     Q_OBJECT
 
 private slots:
+    void typedSelectionResolvesCurrentSubshapes()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto feature = controller.body().findFeature(box.id);
+        QVERIFY(feature);
+
+        SelectionResolver resolver(controller.body());
+        const auto object = resolver.resolve({box.id, SelectionKind::Object, std::nullopt});
+        QVERIFY(object && !object->IsNull());
+
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(feature->shape(), TopAbs_FACE, faces);
+        const auto face = resolver.resolve({
+            box.id, SelectionKind::Face, 1});
+        QVERIFY(face && face->ShapeType() == TopAbs_FACE);
+
+        const auto wrongType = resolver.resolve({box.id, SelectionKind::Edge, 1});
+        QVERIFY(wrongType && wrongType->ShapeType() == TopAbs_EDGE);
+        QVERIFY(!resolver.resolve({box.id, SelectionKind::Face, faces.Extent() + 1}));
+        QVERIFY(!resolver.resolve({box.id, SelectionKind::Face, std::nullopt}));
+        QVERIFY(!resolver.resolve({box.id, SelectionKind::Object, 1}));
+    }
+
     void modelingOperationsUseStableSelectionIds()
     {
         ModelingController controller;

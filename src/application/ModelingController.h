@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/FeatureEditingService.h"
+#include "application/Selection.h"
 #include "model/Body.h"
 #include "model/Document.h"
 #include "model/Feature.h"
@@ -73,6 +74,9 @@ public:
     ModelingActionState actionState(
         const std::vector<std::string>& selection
     ) const override;
+    ModelingActionState actionState(
+        const SelectionSnapshot& selection
+    ) const;
 
     void replaceProject(Document document, cad::parametric::Body body);
 
