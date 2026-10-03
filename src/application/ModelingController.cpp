@@ -203,7 +203,7 @@ ModelingResult ModelingController::createExtrudeFromSketch(
         return {false, {}, "Extrude requires exactly one Sketch object"};
     }
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
-        body_.findFeature(selection.selectedObjectIds().front()));
+        body_.findFeature(selection.items.front().featureId));
     if (!sketch) return {false, {}, "Selected feature is not a Sketch"};
     try {
         (void)cad::operations::SketchProfileBuilder::build(*sketch);
@@ -223,7 +223,7 @@ ModelingResult ModelingController::createPocketFromSketch(
         return {false, {}, "Pocket requires exactly one Sketch object"};
     }
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
-        body_.findFeature(selection.selectedObjectIds().front()));
+        body_.findFeature(selection.items.front().featureId));
     if (!sketch) return {false, {}, "Selected feature is not a Sketch"};
     if (sketch->supportType() != cad::parametric::SketchSupportType::Face
         || !sketch->faceReference()) {

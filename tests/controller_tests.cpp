@@ -131,10 +131,22 @@ private slots:
         const auto extruded = extrudeController.body().findFeature(extrude.id);
         QVERIFY(extruded && !extruded->shape().IsNull());
         QVERIFY(volume(extruded->shape()) > 100.0);
+        QVERIFY(extruded->dependencies().size() == 1);
+        QVERIFY(std::abs(volume(extruded->shape()) - 150000.0) < 1e-7);
         extrudeController.undo();
         QVERIFY(!extrudeController.body().findFeature(extrude.id));
         extrudeController.redo();
         QVERIFY(extrudeController.body().findFeature(extrude.id));
+        QVERIFY(!extruded->shape().IsNull());
+        QVERIFY(extrudeController.setFeatureProperty(
+            extrude.id, "distance", 30.0).success);
+        QVERIFY(std::abs(volume(extruded->shape()) - 180000.0) < 1e-7);
+        QVERIFY(extrudeController.setFeatureProperty(
+            extrude.id, "reversed", true).success);
+        extrudeController.undo();
+        QVERIFY(extruded->state() == cad::parametric::FeatureState::UpToDate);
+        extrudeController.redo();
+        QVERIFY(extruded->state() == cad::parametric::FeatureState::UpToDate);
 
         ModelingController pocketController;
         const auto box = pocketController.createBox();
@@ -150,11 +162,23 @@ private slots:
         QVERIFY2(pocket.success, qPrintable(QString::fromStdString(pocket.error)));
         const auto pocketFeature = pocketController.body().findFeature(pocket.id);
         QVERIFY(pocketFeature && !pocketFeature->shape().IsNull());
-        QVERIFY(volume(pocketFeature->shape()) < before);
+        const double pocketVolumeAtTen = volume(pocketFeature->shape());
+        QVERIFY(pocketVolumeAtTen < before);
+        QVERIFY(pocketFeature->dependencies().size() == 2);
         pocketController.undo();
         QVERIFY(!pocketController.body().findFeature(pocket.id));
         pocketController.redo();
         QVERIFY(pocketController.body().findFeature(pocket.id));
+        QVERIFY(!pocketFeature->shape().IsNull());
+        QVERIFY(pocketController.setFeatureProperty(
+            pocket.id, "depth", 5.0).success);
+        const double pocketVolumeAtFive = volume(pocketFeature->shape());
+        QVERIFY(pocketVolumeAtFive < before);
+        QVERIFY(pocketVolumeAtFive > pocketVolumeAtTen);
+        pocketController.undo();
+        QVERIFY(pocketFeature->state() == cad::parametric::FeatureState::UpToDate);
+        pocketController.redo();
+        QVERIFY(pocketFeature->state() == cad::parametric::FeatureState::UpToDate);
 
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -169,6 +193,51 @@ private slots:
                  qPrintable(error));
         QVERIFY(loadedBody.findFeature(pocket.id));
         QVERIFY(!loadedBody.findFeature(pocket.id)->shape().IsNull());
+    }
+
+    void sketchProfilesCreateIndependentExtrudes()
+    {
+        ModelingController circleController;
+        const auto circleSketch = circleController.createSketch();
+        QVERIFY(circleSketch.success);
+        QVERIFY(circleController.addSketchCircle(
+            circleSketch.id, {0.0, 0.0}, 10.0).success);
+        const auto circleSketchFeature = circleController.body().findFeature(circleSketch.id);
+        QVERIFY(circleSketchFeature->shape().ShapeType() == TopAbs_FACE);
+        const auto circleExtrude = circleController.createExtrudeFromSketch({{
+            {circleSketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
+        QVERIFY2(circleExtrude.success,
+            qPrintable(QString::fromStdString(circleExtrude.error)));
+        QVERIFY(volume(circleController.body().findFeature(circleExtrude.id)->shape()) > 0.0);
+
+        ModelingController rectangleController;
+        const auto rectangleSketch = rectangleController.createSketch();
+        QVERIFY(rectangleSketch.success);
+        QVERIFY(rectangleController.addSketchLine(
+            rectangleSketch.id, {-10.0, -5.0}, {10.0, -5.0}).success);
+        QVERIFY(rectangleController.addSketchLine(
+            rectangleSketch.id, {10.0, -5.0}, {10.0, 5.0}).success);
+        QVERIFY(rectangleController.addSketchLine(
+            rectangleSketch.id, {10.0, 5.0}, {-10.0, 5.0}).success);
+        QVERIFY(rectangleController.addSketchLine(
+            rectangleSketch.id, {-10.0, 5.0}, {-10.0, -5.0}).success);
+        const auto rectangleSketchFeature = rectangleController.body().findFeature(rectangleSketch.id);
+        QVERIFY(rectangleSketchFeature->shape().ShapeType() == TopAbs_FACE);
+        const auto rectangleExtrude = rectangleController.createExtrudeFromSketch({{
+            {rectangleSketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
+        QVERIFY2(rectangleExtrude.success,
+            qPrintable(QString::fromStdString(rectangleExtrude.error)));
+        QVERIFY(volume(rectangleController.body().findFeature(rectangleExtrude.id)->shape()) > 0.0);
+
+        ModelingController openController;
+        const auto openSketch = openController.createSketch();
+        QVERIFY(openSketch.success);
+        QVERIFY(openController.addSketchLine(
+            openSketch.id, {0.0, 0.0}, {10.0, 0.0}).success);
+        const auto openExtrude = openController.createExtrudeFromSketch({{
+            {openSketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
+        QVERIFY(!openExtrude.success);
+        QVERIFY(openController.body().features().size() == 1);
     }
 
     void projectControllerReplacesOnlyAfterValidLoad()

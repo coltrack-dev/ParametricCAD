@@ -9,6 +9,7 @@
 #include <QFileDialog>
 #include <QKeySequence>
 #include <QMessageBox>
+#include <QInputDialog>
 #include <QStandardPaths>
 #include <QDockWidget>
 #include <QMenu>
@@ -445,7 +446,17 @@ void MainWindow::createExtrude()
     if (ids.size() == 1) {
         const auto feature = modeling_.body().findFeature(ids.front());
         if (feature && feature->role() == cad::parametric::FeatureRole::Sketch) {
-            reportResult(modeling_.createExtrudeFromSketch(currentSelection_));
+            bool accepted = false;
+            const double distance = QInputDialog::getDouble(
+                this, "Extrude", "Distance:", 20.0, 0.001, 1'000'000.0,
+                3, &accepted);
+            if (!accepted) return;
+            const auto reverse = QMessageBox::question(
+                this, "Extrude", "Reverse direction?",
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                == QMessageBox::Yes;
+            reportResult(modeling_.createExtrudeFromSketch(
+                currentSelection_, distance, reverse));
             return;
         }
     }
@@ -454,7 +465,12 @@ void MainWindow::createExtrude()
 
 void MainWindow::createPocket()
 {
-    reportResult(modeling_.createPocketFromSketch(currentSelection_));
+    bool accepted = false;
+    const double depth = QInputDialog::getDouble(
+        this, "Pocket", "Depth:", 10.0, 0.001, 1'000'000.0,
+        3, &accepted);
+    if (!accepted) return;
+    reportResult(modeling_.createPocketFromSketch(currentSelection_, depth));
 }
 
 void MainWindow::createLinearPattern()

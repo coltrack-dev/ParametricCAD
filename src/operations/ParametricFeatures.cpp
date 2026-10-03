@@ -16,6 +16,7 @@
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopAbs_ShapeEnum.hxx>
@@ -1061,6 +1062,9 @@ TopoDS_Shape ExtrudeFeature::build() const
 {
     if (sketch_) {
         const auto profile = cad::operations::SketchProfileBuilder::build(*sketch_);
+        if (profile.face.IsNull() || profile.face.ShapeType() != TopAbs_FACE) {
+            throw std::runtime_error("Extrude requires a closed planar Sketch profile");
+        }
         gp_Vec vector(sketch_->currentFrame().normal);
         if (reversed_) vector.Reverse();
         vector *= distance_;
@@ -1122,10 +1126,14 @@ double PocketFeature::depth() const noexcept { return depth_; }
 
 TopoDS_Shape PocketFeature::build() const
 {
-    if (target_->shape().ShapeType() != TopAbs_SOLID) {
+    if (target_->shape().IsNull()
+        || !TopExp_Explorer(target_->shape(), TopAbs_SOLID).More()) {
         throw std::runtime_error("Pocket target is not a solid");
     }
     const auto profile = cad::operations::SketchProfileBuilder::build(*sketch_);
+    if (profile.face.IsNull() || profile.face.ShapeType() != TopAbs_FACE) {
+        throw std::runtime_error("Pocket requires a closed planar Sketch profile");
+    }
     const auto frame = sketch_->currentFrame();
     const auto support = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
         *sketch_->faceReference(), target_->shape());
