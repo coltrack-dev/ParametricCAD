@@ -10,11 +10,14 @@
 #include <TopoDS_Wire.hxx>
 
 #include <QJsonArray>
+#include <QLoggingCategory>
 
 #include <cmath>
 #include <stdexcept>
 
 namespace cad::parametric {
+
+Q_LOGGING_CATEGORY(pcadPatternLog, "parametric.pattern")
 
 namespace {
 
@@ -141,6 +144,8 @@ std::vector<std::string> LinearPatternFeature::hiddenDependencyIds() const
 
 bool LinearPatternFeature::setNumericProperty(const std::string& key, const double value)
 {
+    qCDebug(pcadPatternLog) << "setNumericProperty" << QString::fromStdString(id())
+                            << QString::fromStdString(key) << value;
     if (key == "directionX") direction_.SetX(value);
     else if (key == "directionY") direction_.SetY(value);
     else if (key == "directionZ") direction_.SetZ(value);
@@ -165,6 +170,11 @@ bool LinearPatternFeature::setProperty(const std::string& key, const PropertyVal
 
 TopoDS_Shape LinearPatternFeature::build() const
 {
+    qCDebug(pcadPatternLog) << "build begin" << QString::fromStdString(id())
+                            << "count" << count_ << "spacing" << spacing_
+                            << "direction" << direction_.X() << direction_.Y() << direction_.Z()
+                            << "includeSource" << includeSource_
+                            << "sources" << static_cast<qulonglong>(sources_.size());
     if (count_ < 1) throw std::invalid_argument("Linear pattern count must be at least one");
     if (spacing_ <= 0.0) throw std::invalid_argument("Linear pattern spacing must be positive");
     if (direction_.Magnitude() <= 1.0e-9) throw std::invalid_argument("Linear pattern direction is invalid");
@@ -174,15 +184,24 @@ TopoDS_Shape LinearPatternFeature::build() const
     builder.MakeCompound(result);
     const gp_Vec step = direction_.Normalized() * spacing_;
     const int first = includeSource_ ? 0 : 1;
+    int instanceCount = 0;
     for (const auto& weak : sources_) {
         const auto source = weak.lock();
-        if (!source || source->shape().IsNull()) throw std::runtime_error("Linear pattern source is unavailable");
+        if (!source || source->shape().IsNull()) {
+            qCWarning(pcadPatternLog) << "build source unavailable"
+                                       << QString::fromStdString(id());
+            throw std::runtime_error("Linear pattern source is unavailable");
+        }
         for (int index = first; index < first + count_; ++index) {
             gp_Trsf transform;
             transform.SetTranslation(step * index);
             addShape(builder, result, transformed(source->shape(), transform));
+            ++instanceCount;
         }
     }
+    qCDebug(pcadPatternLog) << "build complete" << QString::fromStdString(id())
+                            << "instances" << instanceCount
+                            << "null" << result.IsNull();
     return result;
 }
 

@@ -4,6 +4,7 @@
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
 
+#include <QLoggingCategory>
 #include <QUuid>
 
 #include <algorithm>
@@ -11,6 +12,8 @@
 #include <stdexcept>
 
 namespace cad::application {
+
+Q_LOGGING_CATEGORY(pcadControllerLog, "parametric.controller")
 
 namespace {
 std::string id(const char* prefix)
@@ -280,6 +283,9 @@ ModelingResult ModelingController::setFeatureProperty(
     const cad::parametric::PropertyValue& value
 )
 {
+    qCDebug(pcadControllerLog) << "setFeatureProperty request"
+                               << QString::fromStdString(featureId)
+                               << QString::fromStdString(propertyKey);
     const auto feature = body_.findFeature(featureId);
     if (!feature) return {false, {}, "Feature does not exist"};
     const auto properties = feature->properties();
@@ -304,6 +310,9 @@ ModelingResult ModelingController::setFeatureProperty(
             body_, feature, propertyKey, property->value, value,
             QString("Change ") + QString::fromStdString(feature->name())
                 + " " + QString::fromStdString(property->label)));
+        qCDebug(pcadControllerLog) << "setFeatureProperty pushed"
+                                   << QString::fromStdString(featureId)
+                                   << QString::fromStdString(propertyKey);
         return {true, featureId, {}};
     } catch (const std::exception& error) {
         return failure(error);

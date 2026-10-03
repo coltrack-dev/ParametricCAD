@@ -30,6 +30,7 @@ private slots:
         QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
                  cad::parametric::PropertyValue{25.0});
         QVERIFY(QMetaObject::invokeMethod(radius, "editingFinished", Qt::DirectConnection));
+        QCoreApplication::processEvents();
         QCOMPARE(controller.undoStack().count(), 2);
         QCOMPARE(controller.undoStack().undoText(), QString("Change Cylinder Radius"));
         QCoreApplication::processEvents();
@@ -124,6 +125,7 @@ private slots:
         QTRY_VERIFY(radius->hasFocus());
         radius->setValue(9);
         QTest::keyClick(radius, Qt::Key_Z, Qt::ControlModifier);
+        QCoreApplication::processEvents();
         QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
                  cad::parametric::PropertyValue{25.0});
         QCOMPARE(controller.undoStack().count(), 1);
@@ -134,6 +136,7 @@ private slots:
         radius = panel.findChildren<QDoubleSpinBox*>().front();
         radius->setFocus();
         QTest::keyClick(radius, Qt::Key_Y, Qt::ControlModifier);
+        QCoreApplication::processEvents();
         QCOMPARE(controller.body().findFeature(cylinder.id)->properties().front().value,
                  cad::parametric::PropertyValue{9.0});
         QCOMPARE(controller.undoStack().count(), 1);

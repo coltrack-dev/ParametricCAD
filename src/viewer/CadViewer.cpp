@@ -12,6 +12,7 @@
 #include <QActionGroup>
 #include <QLabel>
 #include <QKeyEvent>
+#include <QLoggingCategory>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QResizeEvent>
@@ -56,6 +57,8 @@ using cad::viewer::SnapCandidate;
 using cad::viewer::SnapKind;
 using cad::viewer::TransformHandle;
 using cad::viewer::ViewRay;
+
+Q_LOGGING_CATEGORY(pcadViewerLog, "parametric.viewer")
 
 namespace
 {
@@ -497,7 +500,7 @@ void CadViewer::updateTransformSnap(
     activeSnap_ = snapManager_.findCandidate(
         *transformSnapCandidates_,
         delta,
-        project,
+        std::function<QPointF(const gp_Pnt&)>(project),
         activeSnap_,
         snapScreenIndex_.get()
     );
@@ -871,6 +874,8 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
 
 void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureId)
 {
+    qCDebug(pcadViewerLog) << "updateFeature begin" << featureId
+                           << "shapeNull" << shape.IsNull();
     if (shape.IsNull()) return;
     const auto found = featureObjects_.find(featureId);
     if (found == featureObjects_.end()) {
@@ -878,13 +883,19 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
         return;
     }
     const auto& object = found->second;
-    if (object->Shape().IsEqual(shape)) return;
+    if (object->Shape().IsEqual(shape)) {
+        qCDebug(pcadViewerLog) << "updateFeature unchanged" << featureId
+                               << "ais" << static_cast<const void*>(object.get());
+        return;
+    }
 
     cancelPushPull();
     resetDetectedCycle();
     invalidateSnapReferenceCache("MODEL_CHANGED: feature shape updated");
     selectionState_.hovered.reset();
     object->SetShape(shape);
+    qCDebug(pcadViewerLog) << "updateFeature SetShape" << featureId
+                           << "ais" << static_cast<const void*>(object.get());
     context_->Redisplay(object, Standard_True);
     syncSelectionStateFromOcct();
 }

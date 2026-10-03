@@ -1,8 +1,11 @@
 #include "commands/FeatureCommands.h"
+#include <QLoggingCategory>
 #include <algorithm>
 #include <unordered_set>
 
 namespace cad::commands {
+
+Q_LOGGING_CATEGORY(pcadCommandLog, "parametric.command")
 
 AddFeatureCommand::AddFeatureCommand(parametric::Body& body,
     parametric::ParametricFeature::Ptr feature, const QString& text)
@@ -60,11 +63,21 @@ ChangeParametricPropertyCommand::ChangeParametricPropertyCommand(
 
 void ChangeParametricPropertyCommand::apply(const parametric::PropertyValue& value)
 {
+    qCDebug(pcadCommandLog) << "property apply"
+                            << QString::fromStdString(feature_->id())
+                            << QString::fromStdString(key_)
+                            << "ptr" << static_cast<const void*>(feature_.get())
+                            << "valueIndex" << static_cast<int>(value.index());
     if (!feature_->setProperty(key_, value)) {
         throw std::invalid_argument("Feature does not expose property '" + key_ + "'");
     }
     body_.markDirtyFrom(feature_->id());
-    body_.recompute();
+    const bool recomputed = body_.recompute();
+    qCDebug(pcadCommandLog) << "property recompute complete"
+                            << QString::fromStdString(feature_->id())
+                            << "ok" << recomputed
+                            << "state" << static_cast<int>(feature_->state())
+                            << "error" << QString::fromStdString(feature_->error());
 }
 
 void ChangeParametricPropertyCommand::undo() { apply(before_); }

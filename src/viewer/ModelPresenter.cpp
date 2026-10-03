@@ -3,6 +3,10 @@
 #include "model/FeatureVisibility.h"
 #include "viewer/CadViewer.h"
 
+#include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(pcadPresenterLog, "parametric.presenter")
+
 cad::viewer::ModelPresenter::ModelPresenter(cad::parametric::Body& body, CadViewer& viewer)
     : body_(body), viewer_(viewer)
 {
@@ -10,10 +14,17 @@ cad::viewer::ModelPresenter::ModelPresenter(cad::parametric::Body& body, CadView
 
 cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
 {
+    qCDebug(pcadPresenterLog) << "refresh begin features"
+                              << static_cast<qulonglong>(body_.features().size());
     PresentationResult result;
     result.rebuilt = body_.recompute();
     if (!result.rebuilt) result.error = body_.lastError();
     for (const auto& feature : body_.features()) {
+        qCDebug(pcadPresenterLog) << "present feature"
+                                  << QString::fromStdString(feature->id())
+                                  << "ptr" << static_cast<const void*>(feature.get())
+                                  << "state" << static_cast<int>(feature->state())
+                                  << "shapeNull" << feature->shape().IsNull();
         if (feature->state() != cad::parametric::FeatureState::UpToDate
             || feature->shape().IsNull()) continue;
         result.presentedIds.push_back(feature->id());
@@ -29,6 +40,8 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
         hidden.append(QString::fromStdString(id));
     }
     viewer_.setHiddenFeatures(hidden);
+    qCDebug(pcadPresenterLog) << "refresh complete rebuilt" << result.rebuilt
+                              << "presented" << static_cast<qulonglong>(result.presentedIds.size());
     return result;
 }
 

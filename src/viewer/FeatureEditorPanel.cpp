@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QLoggingCategory>
 #include <QScopedValueRollback>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
@@ -28,6 +29,8 @@
 #include <vector>
 
 namespace {
+
+Q_LOGGING_CATEGORY(pcadEditorLog, "parametric.editor")
 
 constexpr int FeatureIdRole = Qt::UserRole + 1;
 
@@ -88,7 +91,9 @@ void FeatureEditorPanel::commitPendingEdits()
     if (!editor) editor = qobject_cast<QDoubleSpinBox*>(focus->parentWidget());
     if (!editor) return;
     editor->interpretText();
+    committingPendingEdit_ = true;
     QMetaObject::invokeMethod(editor, "editingFinished", Qt::DirectConnection);
+    committingPendingEdit_ = false;
 }
 
 bool FeatureEditorPanel::eventFilter(QObject* watched, QEvent* event)
@@ -115,6 +120,9 @@ bool FeatureEditorPanel::eventFilter(QObject* watched, QEvent* event)
 
 void FeatureEditorPanel::reportResult(const cad::application::ModelingResult& result)
 {
+    qCDebug(pcadEditorLog) << "reportResult" << "success" << result.success
+                           << "id" << QString::fromStdString(result.id)
+                           << "error" << QString::fromStdString(result.error);
     if (!result.success) {
         setPanelMessage(QString::fromStdString(result.error), true);
         return;
@@ -126,13 +134,31 @@ void FeatureEditorPanel::reportResult(const cad::application::ModelingResult& re
     // and panel refresh until the current event has returned.
     const QString resultId = QString::fromStdString(result.id);
     QTimer::singleShot(0, this, [this, resultId]() {
+        qCDebug(pcadEditorLog) << "deferred refresh begin" << resultId
+                               << "panel" << static_cast<const void*>(this);
         if (modelChangedHandler_) {
             modelChangedHandler_();
         } else {
             refresh();
         }
         if (!resultId.isEmpty()) selectFeatures({resultId});
+        qCDebug(pcadEditorLog) << "deferred refresh complete" << resultId;
     });
+}
+
+bool FeatureEditorPanel::propertyMatchesCurrentValue(
+    const std::string& featureId,
+    const std::string& propertyKey,
+    const cad::parametric::PropertyValue& value
+) const
+{
+    const auto feature = std::find_if(features_.begin(), features_.end(),
+        [&featureId](const auto& candidate) { return candidate.id == featureId; });
+    if (feature == features_.end()) return false;
+
+    const auto property = std::find_if(feature->properties.begin(), feature->properties.end(),
+        [&propertyKey](const auto& candidate) { return candidate.key == propertyKey; });
+    return property != feature->properties.end() && property->value == value;
 }
 
 void FeatureEditorPanel::setModelChangedHandler(
@@ -514,8 +540,18 @@ void FeatureEditorPanel::rebuildProperties(
             [this, featureId, property, editor]() {
                 if (updatingProperties_ || refreshPending_ || !service_) return;
                 const double after = editor->value();
-                reportResult(service_->setFeatureProperty(
-                    featureId, property.key, after));
+                qCDebug(pcadEditorLog) << "queue property edit"
+                                       << QString::fromStdString(featureId)
+                                       << QString::fromStdString(property.key)
+                                       << after;
+                const auto apply = [this, featureId, property, after]() {
+                    if (!service_) return;
+                    if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
+                    reportResult(service_->setFeatureProperty(
+                        featureId, property.key, after));
+                };
+                if (committingPendingEdit_) apply();
+                else QTimer::singleShot(0, this, apply);
             });
     };
 
@@ -538,8 +574,19 @@ void FeatureEditorPanel::rebuildProperties(
             connect(editor, &QSpinBox::editingFinished, this,
                 [this, featureId, property, editor]() {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
-                    reportResult(service_->setFeatureProperty(
-                        featureId, property.key, editor->value()));
+                    const int after = editor->value();
+                    qCDebug(pcadEditorLog) << "queue property edit"
+                                           << QString::fromStdString(featureId)
+                                           << QString::fromStdString(property.key)
+                                           << after;
+                    const auto apply = [this, featureId, property, after]() {
+                        if (!service_) return;
+                        if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
+                        reportResult(service_->setFeatureProperty(
+                            featureId, property.key, after));
+                    };
+                    if (committingPendingEdit_) apply();
+                    else QTimer::singleShot(0, this, apply);
                 });
         } else if (property.editable && std::holds_alternative<bool>(property.value)) {
             auto* editor = new QCheckBox(propertiesWidget_);
@@ -550,8 +597,12 @@ void FeatureEditorPanel::rebuildProperties(
             connect(editor, &QCheckBox::toggled, this,
                 [this, featureId, property](const bool checked) {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
-                    reportResult(service_->setFeatureProperty(
-                        featureId, property.key, checked));
+                    QTimer::singleShot(0, this, [this, featureId, property, checked]() {
+                        if (!service_) return;
+                        if (propertyMatchesCurrentValue(featureId, property.key, checked)) return;
+                        reportResult(service_->setFeatureProperty(
+                            featureId, property.key, checked));
+                    });
                 });
         } else if (property.editable && std::holds_alternative<std::string>(property.value)
                    && (property.key == "distribution" || property.key == "orientation")) {
@@ -568,8 +619,13 @@ void FeatureEditorPanel::rebuildProperties(
             connect(editor, &QComboBox::currentTextChanged, this,
                 [this, featureId, property](const QString& value) {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
-                    reportResult(service_->setFeatureProperty(
-                        featureId, property.key, value.toStdString()));
+                    const std::string after = value.toStdString();
+                    QTimer::singleShot(0, this, [this, featureId, property, after]() {
+                        if (!service_) return;
+                        if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
+                        reportResult(service_->setFeatureProperty(
+                            featureId, property.key, after));
+                    });
                 });
         } else {
             const auto value = std::visit([](const auto& item) {

@@ -53,6 +53,12 @@ private:
 
     void reportResult(const cad::application::ModelingResult& result);
 
+    bool propertyMatchesCurrentValue(
+        const std::string& featureId,
+        const std::string& propertyKey,
+        const cad::parametric::PropertyValue& value
+    ) const;
+
     void setPanelMessage(
         const QString& message,
         bool error = false
@@ -66,6 +72,7 @@ private:
     bool canBoolean_{false};
     bool refreshPending_{false};
     bool updatingProperties_{false};
+    bool committingPendingEdit_{false};
 
     QTreeWidget* tree_{nullptr};
     QWidget* propertiesWidget_{nullptr};
