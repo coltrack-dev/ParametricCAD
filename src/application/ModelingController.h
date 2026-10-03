@@ -35,6 +35,14 @@ public:
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;
     ModelingResult createLinearPattern(const std::vector<std::string>& selection);
     ModelingResult createPathPattern(const std::vector<std::string>& selection);
+    ModelingResult createFillet(
+        const SelectionSnapshot& selection,
+        double radius = 3.0
+    );
+    ModelingResult createChamfer(
+        const SelectionSnapshot& selection,
+        double distance = 3.0
+    );
     ModelingResult pushPull(
         const std::string& targetId,
         int faceIndex,

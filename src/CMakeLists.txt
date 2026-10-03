@@ -41,6 +41,8 @@ set(PARAMETRIC_CAD_SOURCES
     model/Feature.h
     model/ParametricFeature.cpp
     model/ParametricFeature.h
+    model/TopologicalReference.cpp
+    model/TopologicalReference.h
     model/Body.cpp
     model/Body.h
     operations/BoxFeature.cpp

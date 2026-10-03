@@ -2,11 +2,14 @@
 #include "application/ProjectController.h"
 #include "application/SelectionResolver.h"
 #include "model/ProjectFile.h"
+#include "model/TopologicalReference.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRep_Builder.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp.hxx>
@@ -269,6 +272,163 @@ private slots:
         QCOMPARE(controller.body().findFeature(box.id)->placement().Form(), gp_Identity);
         controller.redo();
         QCOMPARE(controller.body().findFeature(box.id)->placement().TranslationPart().X(), 10.0);
+    }
+
+    void filletAndChamferUseTypedEdgeSelection()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto source = controller.body().findFeature(box.id);
+        QVERIFY(source);
+
+        TopTools_IndexedMapOfShape edges;
+        TopExp::MapShapes(source->shape(), TopAbs_EDGE, edges);
+        QVERIFY(edges.Extent() >= 2);
+
+        SelectionSnapshot edgeSelection{
+            {{box.id, SelectionKind::Edge, 1},
+             {box.id, SelectionKind::Edge, 2}}};
+        const auto actionState = controller.actionState(edgeSelection);
+        QVERIFY(actionState.canFillet);
+        QVERIFY(actionState.canChamfer);
+
+        const auto fillet = controller.createFillet(edgeSelection, 2.0);
+        QVERIFY(fillet.success);
+        const auto filletFeature = controller.body().findFeature(fillet.id);
+        QVERIFY(filletFeature);
+        QVERIFY(!filletFeature->shape().IsNull());
+        QCOMPARE(filletFeature->dependencies().size(), std::size_t{1});
+        QCOMPARE(filletFeature->properties().front().key, std::string("sourceFeatureId"));
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(fillet.id));
+        controller.redo();
+        QVERIFY(controller.body().findFeature(fillet.id));
+
+        ModelingController chamferController;
+        const auto chamferBox = chamferController.createBox();
+        QVERIFY(chamferBox.success);
+        const auto chamfer = chamferController.createChamfer(
+            SelectionSnapshot{{{chamferBox.id, SelectionKind::Edge, 1}}}, 2.0);
+        QVERIFY(chamfer.success);
+        QVERIFY(!chamferController.body().findFeature(chamfer.id)->shape().IsNull());
+
+        const auto invalidMixed = chamferController.createFillet(
+            SelectionSnapshot{{{chamferBox.id, SelectionKind::Edge, 1},
+                               {chamferBox.id, SelectionKind::Face, 1}}}, 2.0);
+        QVERIFY(!invalidMixed.success);
+    }
+
+    void filletAndChamferPersistEdgeIndices()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto fillet = controller.createFillet(
+            SelectionSnapshot{{{box.id, SelectionKind::Edge, 1}}}, 2.0);
+        QVERIFY(fillet.success);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("details.pcad");
+        QString error;
+        QVERIFY(ProjectFile::save(path, controller.document(), controller.body(), error));
+
+        Document document;
+        cad::parametric::Body body;
+        QVERIFY2(ProjectFile::load(path, document, body, error), qPrintable(error));
+        const auto loaded = body.findFeature(fillet.id);
+        QVERIFY(loaded);
+        QCOMPARE(std::string(loaded->typeId()), std::string("Fillet"));
+        QVERIFY(!loaded->shape().IsNull());
+    }
+
+    void topologicalReferencesValidateAndRecover()
+    {
+        using namespace cad::topology;
+        const auto first = BRepBuilderAPI_MakeEdge(gp_Pnt(0, 0, 0), gp_Pnt(10, 0, 0)).Edge();
+        const auto second = BRepBuilderAPI_MakeEdge(gp_Pnt(0, 10, 0), gp_Pnt(10, 10, 0)).Edge();
+        TopoDS_Compound original;
+        BRep_Builder builder;
+        builder.MakeCompound(original);
+        builder.Add(original, first);
+        builder.Add(original, second);
+
+        const auto reference = TopologicalSignatureBuilder::createReference(
+            "edges", original, first);
+        const auto recoveredShape = [&]() {
+            TopoDS_Compound reordered;
+            builder.MakeCompound(reordered);
+            builder.Add(reordered, second);
+            builder.Add(reordered, first);
+            return reordered;
+        }();
+        const auto recovered = TopologicalReferenceResolver::resolveAgainstShape(
+            reference, recoveredShape);
+        QCOMPARE(recovered.status, ResolveStatus::Resolved);
+        QCOMPARE(recovered.resolvedIndex, std::optional<int>{2});
+
+        const auto missingShape = BRepBuilderAPI_MakeEdge(
+            gp_Pnt(0, 20, 0), gp_Pnt(10, 20, 0)).Edge();
+        const auto missing = TopologicalReferenceResolver::resolveAgainstShape(
+            reference, missingShape);
+        QCOMPARE(missing.status, ResolveStatus::Missing);
+
+        TopoDS_Compound ambiguousShape;
+        builder.MakeCompound(ambiguousShape);
+        builder.Add(ambiguousShape, BRepBuilderAPI_MakeEdge(
+            gp_Pnt(0, 0, 0), gp_Pnt(10, 0, 0)).Edge());
+        builder.Add(ambiguousShape, BRepBuilderAPI_MakeEdge(
+            gp_Pnt(0, 0, 0), gp_Pnt(10, 0, 0)).Edge());
+        auto ambiguousReference = reference;
+        ambiguousReference.transientIndex.reset();
+        const auto ambiguous = TopologicalReferenceResolver::resolveAgainstShape(
+            ambiguousReference, ambiguousShape);
+        QCOMPARE(ambiguous.status, ResolveStatus::Ambiguous);
+    }
+
+    void topologicalReferencesCoverFaceVertexAndPersistence()
+    {
+        using namespace cad::topology;
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto shape = controller.body().findFeature(box.id)->shape();
+
+        TopTools_IndexedMapOfShape faces;
+        TopTools_IndexedMapOfShape vertices;
+        TopExp::MapShapes(shape, TopAbs_FACE, faces);
+        TopExp::MapShapes(shape, TopAbs_VERTEX, vertices);
+        const auto face = TopologicalSignatureBuilder::createReference(
+            box.id, shape, faces(1));
+        const auto vertex = TopologicalSignatureBuilder::createReference(
+            box.id, shape, vertices(1));
+        QVERIFY(std::holds_alternative<FaceSignature>(*face.signature));
+        QVERIFY(std::holds_alternative<VertexSignature>(*vertex.signature));
+        ModelingController cylinderController;
+        const auto cylinder = cylinderController.createCylinder();
+        QVERIFY(cylinder.success);
+        TopTools_IndexedMapOfShape cylinderFaces;
+        TopExp::MapShapes(cylinderController.body().findFeature(cylinder.id)->shape(),
+                          TopAbs_FACE, cylinderFaces);
+        bool foundCylinder = false;
+        for (int index = 1; index <= cylinderFaces.Extent(); ++index) {
+            const auto cylinderFace = TopologicalSignatureBuilder::createReference(
+                cylinder.id, cylinderController.body().findFeature(cylinder.id)->shape(),
+                cylinderFaces(index));
+            const auto* signature = std::get_if<FaceSignature>(&*cylinderFace.signature);
+            if (signature && signature->surfaceKind == SurfaceKind::Cylinder) {
+                foundCylinder = true;
+                break;
+            }
+        }
+        QVERIFY(foundCylinder);
+        const auto faceJson = toJson(face);
+        const auto restored = topologicalReferenceFromJson(faceJson);
+        QVERIFY(restored.signature.has_value());
+        const auto resolved = TopologicalReferenceResolver(controller.body()).resolve(restored);
+        QCOMPARE(resolved.status, ResolveStatus::Resolved);
     }
 
     void duplicateCreatesIndependentFeatureAndRepeatsDelta()

@@ -58,6 +58,37 @@ std::vector<std::string> strings(const QJsonObject& o, const char* key)
     }
     return result;
 }
+std::vector<int> positiveIntegers(const QJsonObject& o, const char* key)
+{
+    const auto array = o.value(QLatin1String(key)).toArray();
+    require(!array.isEmpty(), "Invalid integer array");
+    std::vector<int> result;
+    for (const auto& value : array) {
+        require(value.isDouble() && std::isfinite(value.toDouble())
+                    && value.toDouble() >= 1.0
+                    && std::floor(value.toDouble()) == value.toDouble(),
+                "Invalid positive integer array item");
+        result.push_back(value.toInt());
+    }
+    return result;
+}
+
+std::vector<cad::topology::TopologicalReference> topologicalReferences(
+    const QJsonObject& o, const char* key, const std::string& sourceId)
+{
+    const auto array = o.value(QLatin1String(key)).toArray();
+    require(!array.isEmpty(), "Invalid topological reference array");
+    std::vector<cad::topology::TopologicalReference> result;
+    for (const auto& value : array) {
+        require(value.isObject(), "Invalid topological reference item");
+        auto reference = cad::topology::topologicalReferenceFromJson(value.toObject());
+        require(reference.featureId == sourceId
+                    && reference.kind == cad::topology::TopologicalKind::Edge,
+                "Invalid Fillet/Chamfer edge reference");
+        result.push_back(std::move(reference));
+    }
+    return result;
+}
 QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
 {
     for (const auto& weak : feature->dependencies()) {
@@ -131,6 +162,28 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             const auto kind = operation == "Fuse" ? BooleanOperation::Fuse
                 : operation == "Cut" ? BooleanOperation::Cut : BooleanOperation::Common;
             return std::make_shared<BooleanFeature>(string(o,"id"), left, right, kind);
+        }},
+        {"Fillet", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "Fillet references missing source");
+            const auto sourceId = string(o, "sourceFeatureId");
+            if (o.contains("topologicalReferences")) {
+                return std::make_shared<FilletFeature>(string(o, "id"), source,
+                    topologicalReferences(o, "topologicalReferences", sourceId), number(o, "radius"));
+            }
+            return std::make_shared<FilletFeature>(string(o, "id"), source,
+                positiveIntegers(o, "edgeIndices"), number(o, "radius"));
+        }},
+        {"Chamfer", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "Chamfer references missing source");
+            const auto sourceId = string(o, "sourceFeatureId");
+            if (o.contains("topologicalReferences")) {
+                return std::make_shared<ChamferFeature>(string(o, "id"), source,
+                    topologicalReferences(o, "topologicalReferences", sourceId), number(o, "distance"));
+            }
+            return std::make_shared<ChamferFeature>(string(o, "id"), source,
+                positiveIntegers(o, "edgeIndices"), number(o, "distance"));
         }},
         {"LinearPattern", [](const QJsonObject& o, const Body& body) {
             std::vector<ParametricFeature::Ptr> sources;

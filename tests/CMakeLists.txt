@@ -58,6 +58,7 @@ add_library(model_test_support STATIC
     ../src/model/Feature.cpp
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
+    ../src/model/TopologicalReference.cpp
     ../src/operations/BoxFeature.cpp
     ../src/operations/CylinderFeature.cpp
     ../src/operations/BasicFeatures.cpp

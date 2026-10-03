@@ -1,10 +1,13 @@
 #include "application/ModelingController.h"
+#include "application/SelectionResolver.h"
 
 #include "commands/FeatureCommands.h"
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
 
 #include <QLoggingCategory>
+#include <TopoDS.hxx>
+#include <TopAbs_ShapeEnum.hxx>
 #include <QUuid>
 
 #include <algorithm>
@@ -168,6 +171,85 @@ ModelingResult ModelingController::createPathPattern(
             0.0, 0.0, true));
     } catch (const std::exception& error) {
         return failure(error);
+    }
+}
+
+namespace {
+
+struct EdgeSelectionInput
+{
+    std::string sourceId;
+    std::vector<cad::topology::TopologicalReference> references;
+};
+
+std::optional<EdgeSelectionInput> resolveEdgeSelection(
+    const SelectionSnapshot& selection,
+    const cad::parametric::Body& body,
+    std::string& error
+)
+{
+    if (selection.items.empty()) {
+        error = "Select at least one edge";
+        return std::nullopt;
+    }
+
+    std::string sourceId;
+    cad::application::SelectionResolver resolver(body);
+    std::vector<cad::topology::TopologicalReference> references;
+    for (const auto& item : selection.items) {
+        if (item.kind != SelectionKind::Edge || !item.subshapeIndex) {
+            error = "Fillet and Chamfer require edge-only selection";
+            return std::nullopt;
+        }
+        if (sourceId.empty()) sourceId = item.featureId;
+        if (item.featureId != sourceId) {
+            error = "Selected edges must belong to the same feature";
+            return std::nullopt;
+        }
+        const auto shape = resolver.resolve(item);
+        if (!shape || shape->ShapeType() != TopAbs_EDGE) {
+            error = "Selected edge reference is invalid for the current topology";
+            return std::nullopt;
+        }
+        references.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+            sourceId, body.findFeature(sourceId)->shape(), *shape));
+    }
+    return EdgeSelectionInput{sourceId, std::move(references)};
+}
+
+} // namespace
+
+ModelingResult ModelingController::createFillet(
+    const SelectionSnapshot& selection,
+    const double radius
+)
+{
+    std::string error;
+    const auto input = resolveEdgeSelection(selection, body_, error);
+    if (!input) return {false, {}, error};
+    const auto source = body_.findFeature(input->sourceId);
+    try {
+        return addFeature(std::make_shared<cad::parametric::FilletFeature>(
+            id("fillet"), source, input->references, radius));
+    } catch (const std::exception& exception) {
+        return failure(exception);
+    }
+}
+
+ModelingResult ModelingController::createChamfer(
+    const SelectionSnapshot& selection,
+    const double distance
+)
+{
+    std::string error;
+    const auto input = resolveEdgeSelection(selection, body_, error);
+    if (!input) return {false, {}, error};
+    const auto source = body_.findFeature(input->sourceId);
+    try {
+        return addFeature(std::make_shared<cad::parametric::ChamferFeature>(
+            id("chamfer"), source, input->references, distance));
+    } catch (const std::exception& exception) {
+        return failure(exception);
     }
 }
 
@@ -370,7 +452,22 @@ ModelingActionState ModelingController::actionState(
     const SelectionSnapshot& selection
 ) const
 {
-    return actionState(selection.selectedObjectIds());
+    auto state = actionState(selection.selectedObjectIds());
+    if (!selection.items.empty()) {
+        const auto& first = selection.items.front();
+        const bool edgeSelection = first.kind == SelectionKind::Edge
+            && first.subshapeIndex && !first.featureId.empty();
+        const bool sameSource = edgeSelection && std::all_of(
+            selection.items.begin(), selection.items.end(),
+            [&first](const auto& item) {
+                return item.kind == SelectionKind::Edge
+                    && item.subshapeIndex
+                    && item.featureId == first.featureId;
+            });
+        state.canFillet = sameSource;
+        state.canChamfer = sameSource;
+    }
+    return state;
 }
 
 void ModelingController::replaceProject(Document document, cad::parametric::Body body)

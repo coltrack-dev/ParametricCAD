@@ -181,6 +181,8 @@ void MainWindow::updateActionState()
     extrudeAction_->setEnabled(state.canExtrude);
     if (linearPatternAction_) linearPatternAction_->setEnabled(selectedIds().size() == 1);
     if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
+    if (filletAction_) filletAction_->setEnabled(state.canFillet);
+    if (chamferAction_) chamferAction_->setEnabled(state.canChamfer);
 }
 
 void MainWindow::reportResult(const cad::application::ModelingResult& result)
@@ -272,6 +274,16 @@ void MainWindow::createActions()
     pathPatternAction_->setToolTip("Create a pattern along the selected path");
     connect(pathPatternAction_, &QAction::triggered, this, &MainWindow::createPathPattern);
     toolBar->addAction(pathPatternAction_);
+    filletAction_ = modelingMenu->addAction("Fillet");
+    filletAction_->setEnabled(false);
+    filletAction_->setToolTip("Fillet selected edges");
+    connect(filletAction_, &QAction::triggered, this, &MainWindow::createFillet);
+    toolBar->addAction(filletAction_);
+    chamferAction_ = modelingMenu->addAction("Chamfer");
+    chamferAction_->setEnabled(false);
+    chamferAction_->setToolTip("Chamfer selected edges");
+    connect(chamferAction_, &QAction::triggered, this, &MainWindow::createChamfer);
+    toolBar->addAction(chamferAction_);
     modelingMenu->addSeparator();
 
     auto* clearAction = new QAction("Clear", this);
@@ -317,6 +329,16 @@ void MainWindow::createLinearPattern()
 void MainWindow::createPathPattern()
 {
     reportResult(modeling_.createPathPattern(selectedIds()));
+}
+
+void MainWindow::createFillet()
+{
+    reportResult(modeling_.createFillet(currentSelection_));
+}
+
+void MainWindow::createChamfer()
+{
+    reportResult(modeling_.createChamfer(currentSelection_));
 }
 
 void MainWindow::deleteFeature()

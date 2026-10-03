@@ -16,6 +16,7 @@
 
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
+#include <QJsonArray>
 
 #include <array>
 #include <cmath>
@@ -57,6 +58,86 @@ FeatureProperty textProperty(
 )
 {
     return {key, label, std::move(value), std::nullopt, std::nullopt, false};
+}
+
+std::vector<cad::topology::TopologicalReference> referencesFor(
+    const ParametricFeature::Ptr& base,
+    const std::vector<TopoDS_Edge>& edges
+)
+{
+    requireFeature(base, "edge operation base");
+    TopTools_IndexedMapOfShape map;
+    TopExp::MapShapes(base->shape(), TopAbs_EDGE, map);
+    std::vector<cad::topology::TopologicalReference> result;
+    result.reserve(edges.size());
+    for (const auto& edge : edges) {
+        if (edge.IsNull()) throw std::invalid_argument("Edge must not be null");
+        if (map.FindIndex(edge) <= 0)
+            throw std::invalid_argument("Selected edge does not belong to the source feature");
+        result.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+            base->id(), base->shape(), edge));
+    }
+    if (result.empty()) throw std::invalid_argument(
+        "Edge operation requires at least one edge");
+    return result;
+}
+
+std::vector<TopoDS_Edge> resolveEdges(
+    const ParametricFeature::Ptr& base,
+    const std::vector<cad::topology::TopologicalReference>& references
+)
+{
+    requireFeature(base, "edge operation base");
+    std::vector<TopoDS_Edge> result;
+    result.reserve(references.size());
+    for (const auto& reference : references) {
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            reference, base->shape());
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape)
+            throw std::runtime_error(resolved.error.empty()
+                ? "Stored edge reference could not be resolved" : resolved.error);
+        if (resolved.shape->ShapeType() != TopAbs_EDGE)
+            throw std::runtime_error("Stored edge reference resolved to a non-edge");
+        result.push_back(TopoDS::Edge(*resolved.shape));
+    }
+    if (result.empty()) throw std::runtime_error(
+        "Edge operation has no stored edge references");
+    return result;
+}
+
+void validateReferences(const std::vector<cad::topology::TopologicalReference>& references,
+                        const std::string& featureId)
+{
+    if (references.empty()) {
+        throw std::invalid_argument(
+            "Edge operation requires at least one edge reference");
+    }
+    for (const auto& reference : references) {
+        if (reference.featureId != featureId || reference.kind != cad::topology::TopologicalKind::Edge
+            || !reference.transientIndex || *reference.transientIndex <= 0) {
+            throw std::invalid_argument(
+                "Invalid edge topological reference");
+        }
+    }
+}
+
+void writeReferences(QJsonObject& object,
+                     const std::vector<cad::topology::TopologicalReference>& references)
+{
+    QJsonArray values;
+    for (const auto& reference : references) values.append(cad::topology::toJson(reference));
+    object.insert("topologicalReferences", values);
+}
+
+std::vector<cad::topology::TopologicalReference> legacyReferences(
+    const std::string& featureId, const std::vector<int>& indices)
+{
+    std::vector<cad::topology::TopologicalReference> result;
+    result.reserve(indices.size());
+    for (const int index : indices) {
+        result.push_back({featureId, cad::topology::TopologicalKind::Edge, index, std::nullopt});
+    }
+    return result;
 }
 
 } // namespace
@@ -952,19 +1033,84 @@ FilletFeature::FilletFeature(
     std::vector<TopoDS_Edge> edges,
     const double radius
 )
+    : FilletFeature(
+          std::move(id), base, referencesFor(base, edges), radius)
+{
+}
+
+FilletFeature::FilletFeature(
+    std::string id,
+    const Ptr& base,
+    std::vector<int> edgeIndices,
+    const double radius
+)
+    : FilletFeature(std::move(id), base, legacyReferences(base ? base->id() : "", edgeIndices), radius)
+{
+}
+
+FilletFeature::FilletFeature(
+    std::string id,
+    const Ptr& base,
+    std::vector<cad::topology::TopologicalReference> references,
+    const double radius
+)
     : ParametricFeature(std::move(id), "Fillet"),
       base_(base),
-      edges_(std::move(edges)),
+      references_(std::move(references)),
       radius_(radius)
 {
     requireFeature(base_, "base");
+    if (!std::isfinite(radius_) || radius_ <= 0.001) {
+        throw std::invalid_argument("Fillet radius must be positive");
+    }
+    validateReferences(references_, base_->id());
     addDependency(base_);
+}
+
+std::vector<FeatureProperty> FilletFeature::properties() const
+{
+    return {textProperty("sourceFeatureId", "Source", base_->id()),
+            numericProperty("radius", "Radius", radius_)};
+}
+
+bool FilletFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key != "radius" || !std::isfinite(value) || value <= 0.001) return false;
+    radius_ = value;
+    markDirty();
+    return true;
+}
+
+std::vector<std::string> FilletFeature::hiddenDependencyIds() const
+{
+    return {base_->id()};
+}
+
+std::string FilletFeature::creationLabel() const
+{
+    return "Fillet";
+}
+
+std::vector<int> FilletFeature::edgeIndices() const
+{
+    std::vector<int> result;
+    for (const auto& reference : references_) {
+        if (reference.transientIndex) result.push_back(*reference.transientIndex);
+    }
+    return result;
+}
+
+const std::vector<cad::topology::TopologicalReference>&
+FilletFeature::references() const noexcept
+{
+    return references_;
 }
 
 void FilletFeature::setEdges(
     std::vector<TopoDS_Edge> edges
 )
 {
+    references_ = referencesFor(base_, edges);
     edges_ = std::move(edges);
     markDirty();
 }
@@ -996,9 +1142,16 @@ TopoDS_Shape FilletFeature::build() const
 {
     return cad::modeling::BasicFeatures::fillet(
         base_->shape(),
-        edges_,
+        resolveEdges(base_, references_),
         radius_
     );
+}
+
+void FilletFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(base_->id()));
+    writeReferences(object, references_);
+    object.insert("radius", radius_);
 }
 
 ChamferFeature::ChamferFeature(
@@ -1007,19 +1160,84 @@ ChamferFeature::ChamferFeature(
     std::vector<TopoDS_Edge> edges,
     const double distance
 )
+    : ChamferFeature(
+          std::move(id), base, referencesFor(base, edges), distance)
+{
+}
+
+ChamferFeature::ChamferFeature(
+    std::string id,
+    const Ptr& base,
+    std::vector<int> edgeIndices,
+    const double distance
+)
+    : ChamferFeature(std::move(id), base, legacyReferences(base ? base->id() : "", edgeIndices), distance)
+{
+}
+
+ChamferFeature::ChamferFeature(
+    std::string id,
+    const Ptr& base,
+    std::vector<cad::topology::TopologicalReference> references,
+    const double distance
+)
     : ParametricFeature(std::move(id), "Chamfer"),
       base_(base),
-      edges_(std::move(edges)),
+      references_(std::move(references)),
       distance_(distance)
 {
     requireFeature(base_, "base");
+    if (!std::isfinite(distance_) || distance_ <= 0.001) {
+        throw std::invalid_argument("Chamfer distance must be positive");
+    }
+    validateReferences(references_, base_->id());
     addDependency(base_);
+}
+
+std::vector<FeatureProperty> ChamferFeature::properties() const
+{
+    return {textProperty("sourceFeatureId", "Source", base_->id()),
+            numericProperty("distance", "Distance", distance_)};
+}
+
+bool ChamferFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key != "distance" || !std::isfinite(value) || value <= 0.001) return false;
+    distance_ = value;
+    markDirty();
+    return true;
+}
+
+std::vector<std::string> ChamferFeature::hiddenDependencyIds() const
+{
+    return {base_->id()};
+}
+
+std::string ChamferFeature::creationLabel() const
+{
+    return "Chamfer";
+}
+
+std::vector<int> ChamferFeature::edgeIndices() const
+{
+    std::vector<int> result;
+    for (const auto& reference : references_) {
+        if (reference.transientIndex) result.push_back(*reference.transientIndex);
+    }
+    return result;
+}
+
+const std::vector<cad::topology::TopologicalReference>&
+ChamferFeature::references() const noexcept
+{
+    return references_;
 }
 
 void ChamferFeature::setEdges(
     std::vector<TopoDS_Edge> edges
 )
 {
+    references_ = referencesFor(base_, edges);
     edges_ = std::move(edges);
     markDirty();
 }
@@ -1053,9 +1271,16 @@ TopoDS_Shape ChamferFeature::build() const
 {
     return cad::modeling::BasicFeatures::chamfer(
         base_->shape(),
-        edges_,
+        resolveEdges(base_, references_),
         distance_
     );
+}
+
+void ChamferFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(base_->id()));
+    writeReferences(object, references_);
+    object.insert("distance", distance_);
 }
 
 ShellFeature::ShellFeature(
@@ -1354,7 +1579,7 @@ ParametricFeature::Ptr BooleanFeature::clone(std::string newId) const
 ParametricFeature::Ptr FilletFeature::clone(std::string newId) const
 {
     auto copy = std::make_shared<FilletFeature>(
-        std::move(newId), base_, edges_, radius_);
+        std::move(newId), base_, references_, radius_);
     copyPlacementTo(copy);
     return copy;
 }
@@ -1362,7 +1587,7 @@ ParametricFeature::Ptr FilletFeature::clone(std::string newId) const
 ParametricFeature::Ptr ChamferFeature::clone(std::string newId) const
 {
     auto copy = std::make_shared<ChamferFeature>(
-        std::move(newId), base_, edges_, distance_);
+        std::move(newId), base_, references_, distance_);
     copyPlacementTo(copy);
     return copy;
 }

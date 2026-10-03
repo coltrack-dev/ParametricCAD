@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ParametricFeature.h"
+#include "model/TopologicalReference.h"
 
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
@@ -351,6 +352,10 @@ private:
     BooleanOperation operation_;
 };
 
+// Fillet and Chamfer edge references are currently transient topology indices.
+// They are resolved against the current source shape during recompute; upstream
+// topology changes may invalidate or silently remap them until persistent
+// topological naming is implemented.
 class FilletFeature final : public ParametricFeature
 {
 public:
@@ -360,8 +365,26 @@ public:
         std::vector<TopoDS_Edge> edges,
         double radius
     );
+    FilletFeature(
+        std::string id,
+        const Ptr& base,
+        std::vector<int> edgeIndices,
+        double radius
+    );
+    FilletFeature(
+        std::string id,
+        const Ptr& base,
+        std::vector<cad::topology::TopologicalReference> references,
+        double radius
+    );
     const char* typeId() const noexcept override { return "Fillet"; }
     Ptr clone(std::string newId) const override;
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    std::vector<std::string> hiddenDependencyIds() const override;
+    std::string creationLabel() const override;
+    std::vector<int> edgeIndices() const;
+    const std::vector<cad::topology::TopologicalReference>& references() const noexcept;
 
     void setEdges(std::vector<TopoDS_Edge> edges);
     void setRadius(double radius);
@@ -372,10 +395,12 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     Ptr base_;
     std::vector<TopoDS_Edge> edges_;
+    std::vector<cad::topology::TopologicalReference> references_;
     double radius_;
 };
 
@@ -388,8 +413,26 @@ public:
         std::vector<TopoDS_Edge> edges,
         double distance
     );
+    ChamferFeature(
+        std::string id,
+        const Ptr& base,
+        std::vector<int> edgeIndices,
+        double distance
+    );
+    ChamferFeature(
+        std::string id,
+        const Ptr& base,
+        std::vector<cad::topology::TopologicalReference> references,
+        double distance
+    );
     const char* typeId() const noexcept override { return "Chamfer"; }
     Ptr clone(std::string newId) const override;
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    std::vector<std::string> hiddenDependencyIds() const override;
+    std::string creationLabel() const override;
+    std::vector<int> edgeIndices() const;
+    const std::vector<cad::topology::TopologicalReference>& references() const noexcept;
 
     void setEdges(std::vector<TopoDS_Edge> edges);
     void setDistance(double distance);
@@ -400,10 +443,12 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     Ptr base_;
     std::vector<TopoDS_Edge> edges_;
+    std::vector<cad::topology::TopologicalReference> references_;
     double distance_;
 };
 

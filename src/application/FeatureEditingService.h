@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ParametricFeature.h"
+#include "application/Selection.h"
 
 #include <string>
 #include <vector>
@@ -32,6 +33,8 @@ struct ModelingActionState
     bool canCreateFace{false};
     bool canExtrude{false};
     bool canBoolean{false};
+    bool canFillet{false};
+    bool canChamfer{false};
 };
 
 class FeatureEditingService

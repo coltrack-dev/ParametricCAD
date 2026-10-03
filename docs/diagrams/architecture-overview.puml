@@ -29,6 +29,7 @@ package "Commands" {
 package "Parametric model" {
     component Body
     component ParametricFeature <<abstract>>
+    component TopologicalReference
     component "Primitive / profile features" as PrimitiveFeatures
     component "Operation features\nExtrude, Boolean, PushPull, ..." as OperationFeatures
 }
@@ -66,6 +67,8 @@ PrimitiveFeatures --|> ParametricFeature
 OperationFeatures --|> ParametricFeature
 
 ParametricFeature --> BasicFeatures : build geometry
+ParametricFeature --> TopologicalReference : stable subshape dependencies
+TopologicalReference --> BRep : signature / resolution
 BasicFeatures --> BRep
 
 ProjectController --> ProjectFile

@@ -79,6 +79,8 @@ void FeatureEditorPanel::setActionState(
     canCreateFace_ = state.canCreateFace;
     canExtrude_ = state.canExtrude;
     canBoolean_ = state.canBoolean;
+    canFillet_ = state.canFillet;
+    canChamfer_ = state.canChamfer;
     refresh();
 }
 
