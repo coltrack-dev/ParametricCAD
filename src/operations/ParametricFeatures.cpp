@@ -24,6 +24,7 @@
 #include <gp_Circ.hxx>
 #include <gp_Vec.hxx>
 #include <QJsonArray>
+#include <Standard_Failure.hxx>
 
 #include <array>
 #include <algorithm>
@@ -398,6 +399,17 @@ TopoDS_Shape SketchFeature::build() const
         return compound;
     }
 
+    // A closed sketch profile is a modeling Face, while incomplete sketch
+    // geometry remains an edge/wire presentation. Keep profile assembly in
+    // the shared builder so modeling operations do not know entity types.
+    try {
+        return cad::operations::SketchProfileBuilder::build(*this).face;
+    } catch (const Standard_Failure&) {
+        // Open or otherwise incomplete geometry is still useful while editing.
+    } catch (const std::exception&) {
+        // Open or otherwise incomplete geometry is still useful while editing.
+    }
+
     std::vector<TopoDS_Edge> edges;
     for (const auto& entity : entities_) {
         if (const auto* line = std::get_if<SketchLine>(&entity)) {
@@ -460,12 +472,18 @@ TopoDS_Shape FaceFeature::build() const
     if (!sketch) {
         throw std::runtime_error("Missing Sketch source '" + sourceFeatureId_ + "'");
     }
-    if (sketch->state() != FeatureState::UpToDate || sketch->shape().IsNull()
-        || sketch->shape().ShapeType() != TopAbs_WIRE) {
-        throw std::runtime_error("Sketch '" + sourceFeatureId_ + "' must be rebuilt into a valid closed wire");
+    if (sketch->state() != FeatureState::UpToDate || sketch->shape().IsNull()) {
+        throw std::runtime_error("Sketch '" + sourceFeatureId_ + "' must be rebuilt into a valid profile");
     }
-    // BasicFeatures validates the wire and constructs the face with BRepBuilderAPI_MakeFace.
-    const auto face = cad::modeling::BasicFeatures::face(TopoDS::Wire(sketch->shape()));
+    TopoDS_Face face;
+    if (sketch->shape().ShapeType() == TopAbs_FACE) {
+        face = TopoDS::Face(sketch->shape());
+    } else if (sketch->shape().ShapeType() == TopAbs_WIRE) {
+        face = cad::modeling::BasicFeatures::face(TopoDS::Wire(sketch->shape()));
+    } else {
+        throw std::runtime_error("Sketch '" + sourceFeatureId_
+            + "' does not contain a planar Face or closed wire");
+    }
     if (!BRepCheck_Analyzer(face).IsValid()) {
         throw std::runtime_error("Sketch '" + sourceFeatureId_ + "' produced an invalid face");
     }
@@ -1240,24 +1258,44 @@ TopoDS_Shape PushPullFeature::build() const
 
     TopTools_IndexedMapOfShape faces;
     TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
-    if (faceIndex_ > faces.Extent()) {
+    if (source->shape().IsNull() || faces.Extent() == 0 || faceIndex_ <= 0
+        || faceIndex_ > faces.Extent()) {
         throw std::runtime_error("Push/Pull face reference is no longer valid");
     }
 
-    const TopoDS_Face face = TopoDS::Face(faces.FindKey(faceIndex_));
-    const TopoDS_Shape prism =
-        BRepPrimAPI_MakePrism(face, normal_ * distance_).Shape();
+    const TopoDS_Shape selectedShape = faces.FindKey(faceIndex_);
+    if (selectedShape.IsNull() || selectedShape.ShapeType() != TopAbs_FACE) {
+        throw std::runtime_error("Push/Pull source subshape is not a Face");
+    }
+    const TopoDS_Face face = TopoDS::Face(selectedShape);
+    BRepPrimAPI_MakePrism prismBuilder(face, normal_ * distance_);
+    prismBuilder.Build();
+    if (!prismBuilder.IsDone() || prismBuilder.Shape().IsNull()) {
+        throw std::runtime_error("Push/Pull prism construction failed");
+    }
+    const TopoDS_Shape prism = prismBuilder.Shape();
+
+    // A Sketch-derived Face has no solid base to fuse or cut. In that case
+    // Push/Pull is the face-to-prism operation itself. Solid Face sources
+    // retain the existing additive/subtractive behavior below.
+    if (source->shape().ShapeType() == TopAbs_FACE) {
+        return prism;
+    }
 
     if (distance_ > 0.0) {
         BRepAlgoAPI_Fuse fuse(source->shape(), prism);
         fuse.Build();
-        if (!fuse.IsDone()) throw std::runtime_error("Push/Pull fuse failed");
+        if (!fuse.IsDone() || fuse.Shape().IsNull()) {
+            throw std::runtime_error("Push/Pull fuse failed");
+        }
         return fuse.Shape();
     }
 
     BRepAlgoAPI_Cut cut(source->shape(), prism);
     cut.Build();
-    if (!cut.IsDone()) throw std::runtime_error("Push/Pull cut failed");
+    if (!cut.IsDone() || cut.Shape().IsNull()) {
+        throw std::runtime_error("Push/Pull cut failed");
+    }
     return cut.Shape();
 }
 

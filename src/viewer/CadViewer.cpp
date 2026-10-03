@@ -49,6 +49,7 @@
 #include <gp_Circ.hxx>
 #include <gp_Ax2.hxx>
 #include <Quantity_Color.hxx>
+#include <Standard_Failure.hxx>
 
 #if defined(Q_OS_MACOS) || defined(__APPLE__)
 #include <Cocoa_Window.hxx>
@@ -1347,7 +1348,11 @@ bool CadViewer::beginPushPull()
 
     const auto selectedObject = Handle(AIS_Shape)::DownCast(
         faceHit->presentation);
-    if (selectedObject.IsNull()) {
+    if (selectedObject.IsNull() || faceHit->shape.IsNull()
+        || faceHit->shape.ShapeType() != TopAbs_FACE
+        || !faceHit->item.currentSubshapeIndex
+        || *faceHit->item.currentSubshapeIndex <= 0
+        || selectedObject->Shape().IsNull()) {
         return false;
     }
 
@@ -1420,19 +1425,35 @@ TopoDS_Shape CadViewer::buildPushPullResult(double distance) const
         return pushPullBaseShape_;
     }
 
-    const gp_Vec extrusionVector = pushPullNormal_ * distance;
-    const TopoDS_Shape prism =
-        BRepPrimAPI_MakePrism(pushPullFace_, extrusionVector).Shape();
-
-    if (distance > 0.0) {
-        BRepAlgoAPI_Fuse fuse(pushPullBaseShape_, prism);
-        fuse.Build();
-        return fuse.IsDone() ? fuse.Shape() : TopoDS_Shape();
+    if (pushPullFace_.IsNull()
+        || pushPullFace_.ShapeType() != TopAbs_FACE
+        || pushPullBaseShape_.IsNull()) {
+        return {};
     }
 
-    BRepAlgoAPI_Cut cut(pushPullBaseShape_, prism);
-    cut.Build();
-    return cut.IsDone() ? cut.Shape() : TopoDS_Shape();
+    try {
+        const gp_Vec extrusionVector = pushPullNormal_ * distance;
+        BRepPrimAPI_MakePrism prismBuilder(pushPullFace_, extrusionVector);
+        prismBuilder.Build();
+        if (!prismBuilder.IsDone() || prismBuilder.Shape().IsNull()) return {};
+        const TopoDS_Shape prism = prismBuilder.Shape();
+
+        if (distance > 0.0) {
+            BRepAlgoAPI_Fuse fuse(pushPullBaseShape_, prism);
+            fuse.Build();
+            return fuse.IsDone() && !fuse.Shape().IsNull()
+                ? fuse.Shape() : TopoDS_Shape();
+        }
+
+        BRepAlgoAPI_Cut cut(pushPullBaseShape_, prism);
+        cut.Build();
+        return cut.IsDone() && !cut.Shape().IsNull()
+            ? cut.Shape() : TopoDS_Shape();
+    } catch (const Standard_Failure&) {
+        return {};
+    } catch (const std::exception&) {
+        return {};
+    }
 }
 
 void CadViewer::updatePushPullPreview(const QPoint& position)
@@ -1475,6 +1496,7 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
         buildPushPullResult(pushPullDistance_);
 
     if (previewShape.IsNull()) {
+        cancelPushPull();
         return;
     }
 
@@ -1506,6 +1528,11 @@ void CadViewer::commitPushPull()
     const int faceIndex = pushPullFaceIndex_;
     const gp_Vec normal = pushPullNormal_;
     const double distance = pushPullDistance_;
+
+    if (hasChange && pushPullPreview_.IsNull()) {
+        cancelPushPull();
+        return;
+    }
 
     if (!pushPullPreview_.IsNull()) {
         context_->Remove(pushPullPreview_, Standard_False);

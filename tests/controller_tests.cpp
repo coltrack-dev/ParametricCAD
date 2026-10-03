@@ -21,6 +21,7 @@
 #include <gp_Trsf.hxx>
 
 #include <algorithm>
+#include <array>
 #include <variant>
 
 namespace {
@@ -229,6 +230,57 @@ private slots:
         QVERIFY(!controller.setFeatureProperty(box.id, "missing", 1.0).success);
         QVERIFY(!controller.setFeatureProperty(box.id, "width", 0.0).success);
         QVERIFY(!controller.setFeatureProperty(box.id, "width", std::string("42")).success);
+    }
+
+    void sketchFacesCanBePushPulled()
+    {
+        ModelingController circleController;
+        const auto circleSketch = circleController.createSketch();
+        QVERIFY(circleSketch.success);
+        QVERIFY(circleController.addSketchCircle(
+            circleSketch.id, {20.0, 20.0}, 8.0).success);
+        const auto circle = circleController.body().findFeature(circleSketch.id);
+        QVERIFY(circle && circle->shape().ShapeType() == TopAbs_FACE);
+        const auto circlePushPull = circleController.pushPull(
+            circleSketch.id, 1, {0.0, 0.0, 1.0}, 10.0);
+        QVERIFY2(circlePushPull.success, qPrintable(QString::fromStdString(circlePushPull.error)));
+        QVERIFY(circleController.body().findFeature(circlePushPull.id));
+        circleController.undo();
+        QVERIFY(!circleController.body().findFeature(circlePushPull.id));
+        circleController.redo();
+        QVERIFY(circleController.body().findFeature(circlePushPull.id));
+
+        ModelingController rectangleController;
+        const auto rectangleSketch = rectangleController.createSketch();
+        QVERIFY(rectangleSketch.success);
+        const std::array<gp_Pnt2d, 4> corners{
+            gp_Pnt2d(0.0, 0.0), gp_Pnt2d(20.0, 0.0),
+            gp_Pnt2d(20.0, 12.0), gp_Pnt2d(0.0, 12.0)};
+        for (int index = 0; index < 4; ++index) {
+            QVERIFY(rectangleController.addSketchLine(
+                rectangleSketch.id, corners[index], corners[(index + 1) % 4]).success);
+        }
+        const auto rectangle = rectangleController.body().findFeature(rectangleSketch.id);
+        QVERIFY(rectangle && rectangle->shape().ShapeType() == TopAbs_FACE);
+        const auto rectanglePushPull = rectangleController.pushPull(
+            rectangleSketch.id, 1, {0.0, 0.0, 1.0}, 10.0);
+        QVERIFY2(rectanglePushPull.success,
+                 qPrintable(QString::fromStdString(rectanglePushPull.error)));
+
+        ModelingController openController;
+        const auto openSketch = openController.createSketch();
+        QVERIFY(openSketch.success);
+        QVERIFY(openController.addSketchLine(
+            openSketch.id, {0.0, 0.0}, {20.0, 0.0}).success);
+        const auto open = openController.body().findFeature(openSketch.id);
+        QVERIFY(open && open->shape().ShapeType() == TopAbs_WIRE);
+        const auto rejected = openController.pushPull(
+            openSketch.id, 1, {0.0, 0.0, 1.0}, 10.0);
+        QVERIFY(!rejected.success);
+        QVERIFY(!openController.body().findFeature(rejected.id));
+        const auto missing = openController.pushPull(
+            "missing-sketch", 1, {0.0, 0.0, 1.0}, 10.0);
+        QVERIFY(!missing.success);
     }
 
     void pushPullIsUndoableAndRedoable()
