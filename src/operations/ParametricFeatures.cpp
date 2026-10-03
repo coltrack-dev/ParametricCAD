@@ -93,6 +93,20 @@ gp_Pnt worldPoint(const SketchFrame& frame, const gp_Pnt2d& point)
     return result;
 }
 
+TopoDS_Shape compoundOf(const std::vector<TopoDS_Shape>& shapes)
+{
+    if (shapes.empty()) throw std::runtime_error("Operation produced no shapes");
+    if (shapes.size() == 1) return shapes.front();
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const auto& shape : shapes) {
+        if (shape.IsNull()) throw std::runtime_error("Operation produced a null shape");
+        builder.Add(compound, shape);
+    }
+    return compound;
+}
+
 void writePoint2d(QJsonArray& array, const gp_Pnt2d& point)
 {
     array.append(point.X());
@@ -404,7 +418,11 @@ TopoDS_Shape SketchFeature::build() const
     // geometry remains an edge/wire presentation. Keep profile assembly in
     // the shared builder so modeling operations do not know entity types.
     try {
-        return cad::operations::SketchProfileBuilder::build(*this).face;
+        const auto profile = cad::operations::SketchProfileBuilder::build(*this);
+        std::vector<TopoDS_Shape> faces;
+        faces.reserve(profile.faces.size());
+        for (const auto& face : profile.faces) faces.push_back(face);
+        return compoundOf(faces);
     } catch (const Standard_Failure&) {
         // Open or otherwise incomplete geometry is still useful while editing.
     } catch (const std::exception&) {
@@ -1062,13 +1080,18 @@ TopoDS_Shape ExtrudeFeature::build() const
 {
     if (sketch_) {
         const auto profile = cad::operations::SketchProfileBuilder::build(*sketch_);
-        if (profile.face.IsNull() || profile.face.ShapeType() != TopAbs_FACE) {
-            throw std::runtime_error("Extrude requires a closed planar Sketch profile");
-        }
         gp_Vec vector(sketch_->currentFrame().normal);
         if (reversed_) vector.Reverse();
         vector *= distance_;
-        return cad::modeling::BasicFeatures::extrude(profile.face, vector);
+        std::vector<TopoDS_Shape> solids;
+        solids.reserve(profile.faces.size());
+        for (const auto& face : profile.faces) {
+            if (face.IsNull() || face.ShapeType() != TopAbs_FACE) {
+                throw std::runtime_error("Extrude requires closed planar Sketch profiles");
+            }
+            solids.push_back(cad::modeling::BasicFeatures::extrude(face, vector));
+        }
+        return compoundOf(solids);
     }
     return cad::modeling::BasicFeatures::extrude(
         profile_->shape(),
@@ -1131,9 +1154,6 @@ TopoDS_Shape PocketFeature::build() const
         throw std::runtime_error("Pocket target is not a solid");
     }
     const auto profile = cad::operations::SketchProfileBuilder::build(*sketch_);
-    if (profile.face.IsNull() || profile.face.ShapeType() != TopAbs_FACE) {
-        throw std::runtime_error("Pocket requires a closed planar Sketch profile");
-    }
     const auto frame = sketch_->currentFrame();
     const auto support = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
         *sketch_->faceReference(), target_->shape());
@@ -1156,8 +1176,16 @@ TopoDS_Shape PocketFeature::build() const
     }
     gp_Vec direction(frame.normal);
     if (minusInside) direction.Reverse();
-    const TopoDS_Shape tool = cad::modeling::BasicFeatures::extrude(
-        profile.face, direction * depth_);
+    std::vector<TopoDS_Shape> tools;
+    tools.reserve(profile.faces.size());
+    for (const auto& face : profile.faces) {
+        if (face.IsNull() || face.ShapeType() != TopAbs_FACE) {
+            throw std::runtime_error("Pocket requires closed planar Sketch profiles");
+        }
+        tools.push_back(cad::modeling::BasicFeatures::extrude(
+            face, direction * depth_));
+    }
+    const TopoDS_Shape tool = compoundOf(tools);
     const TopoDS_Shape result = cad::modeling::BasicFeatures::cut(target_->shape(), tool);
     if (result.IsNull()) throw std::runtime_error("Pocket returned a null shape");
 

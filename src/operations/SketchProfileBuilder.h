@@ -6,6 +6,7 @@
 #include <TopoDS_Wire.hxx>
 
 #include <string>
+#include <vector>
 
 namespace cad::operations {
 
@@ -13,6 +14,7 @@ struct SketchProfile
 {
     TopoDS_Wire wire;
     TopoDS_Face face;
+    std::vector<TopoDS_Face> faces;
 };
 
 class SketchProfileBuilder final

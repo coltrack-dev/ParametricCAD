@@ -41,6 +41,13 @@ bool closeEnough(const gp_Pnt& left, const gp_Pnt& right)
     return left.Distance(right) <= endpointTolerance;
 }
 
+bool closeEnough(const gp_Pnt2d& left, const gp_Pnt2d& right)
+{
+    const double dx = left.X() - right.X();
+    const double dy = left.Y() - right.Y();
+    return dx * dx + dy * dy <= endpointTolerance * endpointTolerance;
+}
+
 SketchProfile makeProfile(const TopoDS_Wire& wire)
 {
     if (wire.IsNull() || !BRepCheck_Analyzer(wire).IsValid()) {
@@ -51,10 +58,10 @@ SketchProfile makeProfile(const TopoDS_Wire& wire)
         || !BRepCheck_Analyzer(faceBuilder.Face()).IsValid()) {
         throw std::runtime_error("Sketch profile face construction failed");
     }
-    return {wire, faceBuilder.Face()};
+    return {wire, faceBuilder.Face(), {faceBuilder.Face()}};
 }
 
-SketchProfile lineProfile(
+[[maybe_unused]] SketchProfile lineProfile(
     const cad::parametric::SketchFrame& frame,
     const std::vector<cad::parametric::SketchLine>& lines)
 {
@@ -108,6 +115,224 @@ SketchProfile lineProfile(
     return makeProfile(wireBuilder.Wire());
 }
 
+constexpr double geometryTolerance = 1.0e-7;
+
+double cross2d(const gp_Pnt2d& a, const gp_Pnt2d& b, const gp_Pnt2d& c)
+{
+    return (b.X() - a.X()) * (c.Y() - a.Y())
+        - (b.Y() - a.Y()) * (c.X() - a.X());
+}
+
+double distanceSquared2d(const gp_Pnt2d& a, const gp_Pnt2d& b)
+{
+    const double dx = a.X() - b.X();
+    const double dy = a.Y() - b.Y();
+    return dx * dx + dy * dy;
+}
+
+bool pointOnSegment(const gp_Pnt2d& a, const gp_Pnt2d& b, const gp_Pnt2d& point)
+{
+    return std::abs(cross2d(a, b, point)) <= geometryTolerance
+        && point.X() >= std::min(a.X(), b.X()) - endpointTolerance
+        && point.X() <= std::max(a.X(), b.X()) + endpointTolerance
+        && point.Y() >= std::min(a.Y(), b.Y()) - endpointTolerance
+        && point.Y() <= std::max(a.Y(), b.Y()) + endpointTolerance;
+}
+
+bool segmentsIntersect(const gp_Pnt2d& a, const gp_Pnt2d& b,
+                       const gp_Pnt2d& c, const gp_Pnt2d& d)
+{
+    const double abC = cross2d(a, b, c);
+    const double abD = cross2d(a, b, d);
+    const double cdA = cross2d(c, d, a);
+    const double cdB = cross2d(c, d, b);
+    const bool proper = ((abC > geometryTolerance && abD < -geometryTolerance)
+        || (abC < -geometryTolerance && abD > geometryTolerance))
+        && ((cdA > geometryTolerance && cdB < -geometryTolerance)
+            || (cdA < -geometryTolerance && cdB > geometryTolerance));
+    return proper || pointOnSegment(a, b, c) || pointOnSegment(a, b, d)
+        || pointOnSegment(c, d, a) || pointOnSegment(c, d, b);
+}
+
+double signedArea(const std::vector<gp_Pnt2d>& points)
+{
+    double area = 0.0;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const auto& current = points[i];
+        const auto& next = points[(i + 1) % points.size()];
+        area += current.X() * next.Y() - next.X() * current.Y();
+    }
+    return area * 0.5;
+}
+
+bool pointInPolygon(const std::vector<gp_Pnt2d>& polygon, const gp_Pnt2d& point)
+{
+    bool inside = false;
+    for (std::size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+        if (pointOnSegment(polygon[j], polygon[i], point)) return false;
+        if (((polygon[i].Y() > point.Y()) != (polygon[j].Y() > point.Y()))
+            && point.X() < (polygon[j].X() - polygon[i].X())
+                * (point.Y() - polygon[i].Y())
+                / (polygon[j].Y() - polygon[i].Y()) + polygon[i].X()) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+struct ProfileLoop
+{
+    TopoDS_Wire wire;
+    std::vector<gp_Pnt2d> polygon;
+    gp_Pnt2d center;
+    double radius{0.0};
+    bool circle{false};
+    gp_Pnt2d representative;
+};
+
+struct SketchEdgeItem
+{
+    TopoDS_Edge edge;
+    gp_Pnt2d start;
+    gp_Pnt2d end;
+};
+
+TopoDS_Wire checkedWire(const std::vector<TopoDS_Edge>& edges)
+{
+    BRepBuilderAPI_MakeWire builder;
+    for (const auto& edge : edges) builder.Add(edge);
+    if (!builder.IsDone() || builder.Wire().IsNull()) {
+        throw std::runtime_error("Sketch profile wire assembly failed");
+    }
+    return builder.Wire();
+}
+
+gp_Pnt2d representativeForPolygon(const std::vector<gp_Pnt2d>& polygon)
+{
+    const auto& a = polygon[0];
+    const auto& b = polygon[1];
+    const double length = std::sqrt(distanceSquared2d(a, b));
+    const double sign = signedArea(polygon) >= 0.0 ? 1.0 : -1.0;
+    const double offset = std::max(geometryTolerance * 10.0,
+        std::min(length * 0.05, endpointTolerance * 2.0));
+    gp_Pnt2d result(
+        (a.X() + b.X()) * 0.5 - sign * (b.Y() - a.Y()) / length * offset,
+        (a.Y() + b.Y()) * 0.5 + sign * (b.X() - a.X()) / length * offset);
+    if (!pointInPolygon(polygon, result)) {
+        throw std::runtime_error("Unable to find an interior point for Sketch loop");
+    }
+    return result;
+}
+
+void validateSelfIntersection(const std::vector<gp_Pnt2d>& polygon)
+{
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+        const std::size_t next = (i + 1) % polygon.size();
+        for (std::size_t j = i + 1; j < polygon.size(); ++j) {
+            const std::size_t otherNext = (j + 1) % polygon.size();
+            if (i == j || next == j || otherNext == i) continue;
+            if (segmentsIntersect(polygon[i], polygon[next],
+                    polygon[j], polygon[otherNext])) {
+                throw std::runtime_error("Sketch loop is self-intersecting");
+            }
+        }
+    }
+}
+
+bool contains(const ProfileLoop& loop, const gp_Pnt2d& point)
+{
+    if (loop.circle) {
+        return distanceSquared2d(loop.center, point)
+            < (loop.radius - geometryTolerance) * (loop.radius - geometryTolerance);
+    }
+    return pointInPolygon(loop.polygon, point);
+}
+
+double pointSegmentDistanceSquared(const gp_Pnt2d& point,
+                                   const gp_Pnt2d& start,
+                                   const gp_Pnt2d& end)
+{
+    const double dx = end.X() - start.X();
+    const double dy = end.Y() - start.Y();
+    const double lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= geometryTolerance * geometryTolerance) {
+        return distanceSquared2d(point, start);
+    }
+    const double t = std::clamp(
+        ((point.X() - start.X()) * dx + (point.Y() - start.Y()) * dy)
+            / lengthSquared, 0.0, 1.0);
+    const gp_Pnt2d projection(start.X() + t * dx, start.Y() + t * dy);
+    return distanceSquared2d(point, projection);
+}
+
+bool intersects(const ProfileLoop& left, const ProfileLoop& right)
+{
+    if (left.circle && right.circle) {
+        const double distance = std::sqrt(distanceSquared2d(left.center, right.center));
+        return distance <= left.radius + right.radius + endpointTolerance
+            && distance + std::min(left.radius, right.radius)
+                >= std::max(left.radius, right.radius) - endpointTolerance;
+    }
+    if (left.circle || right.circle) {
+        const auto& circle = left.circle ? left : right;
+        const auto& polygon = left.circle ? right : left;
+        for (std::size_t i = 0; i < polygon.polygon.size(); ++i) {
+            if (pointSegmentDistanceSquared(circle.center, polygon.polygon[i],
+                    polygon.polygon[(i + 1) % polygon.polygon.size()])
+                <= (circle.radius + endpointTolerance)
+                    * (circle.radius + endpointTolerance)) return true;
+        }
+        return false;
+    }
+    for (std::size_t i = 0; i < left.polygon.size(); ++i) {
+        for (std::size_t j = 0; j < right.polygon.size(); ++j) {
+            if (segmentsIntersect(left.polygon[i], left.polygon[(i + 1) % left.polygon.size()],
+                    right.polygon[j], right.polygon[(j + 1) % right.polygon.size()])) return true;
+        }
+    }
+    return false;
+}
+
+SketchProfile buildProfiles(std::vector<ProfileLoop> loops)
+{
+    if (loops.empty()) throw std::runtime_error("Sketch profile contains no closed loops");
+    for (std::size_t i = 0; i < loops.size(); ++i) {
+        for (std::size_t j = i + 1; j < loops.size(); ++j) {
+            if (intersects(loops[i], loops[j])) {
+                throw std::runtime_error("Sketch profile loops intersect or touch");
+            }
+        }
+    }
+
+    std::vector<int> depth(loops.size(), 0);
+    for (std::size_t i = 0; i < loops.size(); ++i) {
+        for (std::size_t j = 0; j < loops.size(); ++j) {
+            if (i != j && contains(loops[j], loops[i].representative)) ++depth[i];
+        }
+    }
+
+    SketchProfile result;
+    for (std::size_t i = 0; i < loops.size(); ++i) {
+        if (depth[i] % 2 != 0) continue;
+        BRepBuilderAPI_MakeFace faceBuilder(loops[i].wire);
+        for (std::size_t hole = 0; hole < loops.size(); ++hole) {
+            if (depth[hole] == depth[i] + 1
+                && contains(loops[i], loops[hole].representative)) {
+                faceBuilder.Add(TopoDS::Wire(loops[hole].wire.Reversed()));
+            }
+        }
+        if (!faceBuilder.IsDone() || faceBuilder.Face().IsNull()
+            || !BRepCheck_Analyzer(faceBuilder.Face()).IsValid()) {
+            throw std::runtime_error("Sketch profile face construction failed");
+        }
+        if (result.faces.empty()) result.wire = loops[i].wire;
+        result.faces.push_back(faceBuilder.Face());
+    }
+    if (result.faces.empty()) throw std::runtime_error("Sketch profile nesting is invalid");
+    result.face = result.faces.front();
+    return result;
+}
+
 } // namespace
 
 SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& sketch)
@@ -117,32 +342,111 @@ SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& 
             && sketch.shape().ShapeType() == TopAbs_WIRE) {
             return makeProfile(TopoDS::Wire(sketch.shape()));
         }
-        throw std::runtime_error("Sketch profile contains no closed entities");
+        throw std::runtime_error("Sketch profile contains no closed loops");
     }
 
     const auto frame = sketch.currentFrame();
-    std::vector<cad::parametric::SketchLine> lines;
+    std::vector<SketchEdgeItem> lineItems;
     std::vector<cad::parametric::SketchCircle> circles;
     for (const auto& entity : sketch.entities()) {
-        if (const auto* line = std::get_if<cad::parametric::SketchLine>(&entity)) lines.push_back(*line);
-        else circles.push_back(std::get<cad::parametric::SketchCircle>(entity));
+        if (const auto* line = std::get_if<cad::parametric::SketchLine>(&entity)) {
+            if (distanceSquared2d(line->start, line->end)
+                <= endpointTolerance * endpointTolerance) {
+                throw std::runtime_error("Sketch profile contains a zero-length edge");
+            }
+            BRepBuilderAPI_MakeEdge edgeBuilder(
+                worldPoint(frame, line->start), worldPoint(frame, line->end));
+            if (!edgeBuilder.IsDone()) throw std::runtime_error("Sketch edge construction failed");
+            lineItems.push_back({edgeBuilder.Edge(), line->start, line->end});
+        } else {
+            const auto circle = std::get<cad::parametric::SketchCircle>(entity);
+            if (!std::isfinite(circle.radius) || circle.radius <= endpointTolerance) {
+                throw std::runtime_error("Sketch circle radius must be greater than zero");
+            }
+            circles.push_back(circle);
+        }
     }
 
-    if (!circles.empty()) {
-        if (!lines.empty() || circles.size() != 1 || circles.front().radius <= endpointTolerance) {
-            throw std::runtime_error("Sketch contains multiple disconnected profiles");
+    std::vector<ProfileLoop> loops;
+    std::vector<bool> consumed(lineItems.size(), false);
+    for (std::size_t start = 0; start < lineItems.size(); ++start) {
+        if (consumed[start]) continue;
+        std::vector<std::size_t> component{start};
+        consumed[start] = true;
+        bool expanded = true;
+        while (expanded) {
+            expanded = false;
+            for (std::size_t candidate = 0; candidate < lineItems.size(); ++candidate) {
+                if (consumed[candidate]) continue;
+                for (const auto index : component) {
+                    if (closeEnough(lineItems[candidate].start, lineItems[index].start)
+                        || closeEnough(lineItems[candidate].start, lineItems[index].end)
+                        || closeEnough(lineItems[candidate].end, lineItems[index].start)
+                        || closeEnough(lineItems[candidate].end, lineItems[index].end)) {
+                        consumed[candidate] = true;
+                        component.push_back(candidate);
+                        expanded = true;
+                        break;
+                    }
+                }
+            }
         }
-        const auto& circle = circles.front();
+
+        if (component.size() < 3) throw std::runtime_error("Sketch profile is open");
+        std::vector<bool> used(lineItems.size(), false);
+        std::vector<TopoDS_Edge> edges;
+        std::vector<gp_Pnt2d> polygon;
+        const auto firstIndex = component.front();
+        used[firstIndex] = true;
+        edges.push_back(lineItems[firstIndex].edge);
+        polygon.push_back(lineItems[firstIndex].start);
+        const gp_Pnt2d first = lineItems[firstIndex].start;
+        gp_Pnt2d tail = lineItems[firstIndex].end;
+        for (std::size_t count = 1; count < component.size(); ++count) {
+            std::vector<std::pair<std::size_t, bool>> candidates;
+            for (const auto index : component) {
+                if (used[index]) continue;
+                if (closeEnough(lineItems[index].start, tail)) candidates.emplace_back(index, false);
+                if (closeEnough(lineItems[index].end, tail)) candidates.emplace_back(index, true);
+            }
+            if (candidates.size() != 1) {
+                throw std::runtime_error(candidates.empty()
+                    ? "Sketch profile is open or disconnected"
+                    : "Sketch profile has branching or ambiguous connectivity");
+            }
+            const auto [index, reverse] = candidates.front();
+            used[index] = true;
+            edges.push_back(reverse
+                ? TopoDS::Edge(lineItems[index].edge.Reversed()) : lineItems[index].edge);
+            polygon.push_back(reverse ? lineItems[index].end : lineItems[index].start);
+            tail = reverse ? lineItems[index].start : lineItems[index].end;
+        }
+        if (!closeEnough(tail, first)) throw std::runtime_error("Sketch profile is open");
+        validateSelfIntersection(polygon);
+        ProfileLoop loop;
+        loop.wire = checkedWire(edges);
+        loop.polygon = std::move(polygon);
+        loop.representative = representativeForPolygon(loop.polygon);
+        loops.push_back(std::move(loop));
+    }
+
+    for (const auto& circle : circles) {
         const gp_Pnt center = worldPoint(frame, circle.center);
         BRepBuilderAPI_MakeEdge edgeBuilder(
             gp_Circ(gp_Ax2(center, frame.normal), circle.radius));
         if (!edgeBuilder.IsDone()) throw std::runtime_error("Sketch circle construction failed");
         BRepBuilderAPI_MakeWire wireBuilder(edgeBuilder.Edge());
         if (!wireBuilder.IsDone()) throw std::runtime_error("Sketch circle wire construction failed");
-        return makeProfile(wireBuilder.Wire());
+        ProfileLoop loop;
+        loop.wire = wireBuilder.Wire();
+        loop.center = circle.center;
+        loop.radius = circle.radius;
+        loop.circle = true;
+        loop.representative = {circle.center.X() - circle.radius + endpointTolerance * 2.0,
+            circle.center.Y()};
+        loops.push_back(std::move(loop));
     }
-
-    return lineProfile(frame, lines);
+    return buildProfiles(std::move(loops));
 }
 
 } // namespace cad::operations

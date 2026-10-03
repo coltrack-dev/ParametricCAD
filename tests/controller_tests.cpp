@@ -3,6 +3,7 @@
 #include "application/SelectionResolver.h"
 #include "model/ProjectFile.h"
 #include "model/TopologicalReference.h"
+#include "operations/SketchProfileBuilder.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
@@ -13,6 +14,7 @@
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <GeomAbs_SurfaceType.hxx>
@@ -238,6 +240,95 @@ private slots:
             {openSketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
         QVERIFY(!openExtrude.success);
         QVERIFY(openController.body().features().size() == 1);
+    }
+
+    void sketchProfileBuilderSupportsHolesAndDisconnectedRegions()
+    {
+        ModelingController controller;
+        const auto sketch = controller.createSketch();
+        QVERIFY(sketch.success);
+        const auto addLine = [&controller, &sketch](gp_Pnt2d start, gp_Pnt2d end) {
+            return controller.addSketchLine(sketch.id, start, end).success;
+        };
+        QVERIFY(addLine({-40.0, -30.0}, {40.0, -30.0}));
+        QVERIFY(addLine({40.0, -30.0}, {40.0, 30.0}));
+        QVERIFY(addLine({40.0, 30.0}, {-40.0, 30.0}));
+        QVERIFY(addLine({-40.0, 30.0}, {-40.0, -30.0}));
+        QVERIFY(controller.addSketchCircle(sketch.id, {0.0, 0.0}, 10.0).success);
+        QVERIFY(controller.addSketchCircle(sketch.id, {20.0, 0.0}, 5.0).success);
+
+        const auto sketchFeature = controller.body().findFeature(sketch.id);
+        const auto profile = cad::operations::SketchProfileBuilder::build(
+            *std::dynamic_pointer_cast<SketchFeature>(sketchFeature));
+        QCOMPARE(profile.faces.size(), std::size_t{1});
+        int wireCount = 0;
+        for (TopExp_Explorer explorer(profile.faces.front(), TopAbs_WIRE);
+             explorer.More(); explorer.Next()) ++wireCount;
+        QCOMPARE(wireCount, 3);
+
+        const auto extrude = controller.createExtrudeFromSketch({{
+            {sketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
+        QVERIFY2(extrude.success,
+            qPrintable(QString::fromStdString(extrude.error)));
+        const double expectedVolume = (80.0 * 60.0
+            - std::acos(-1.0) * (10.0 * 10.0 + 5.0 * 5.0)) * 8.0;
+        QVERIFY(std::abs(volume(controller.body().findFeature(extrude.id)->shape())
+            - expectedVolume) < 1.0e-5);
+
+        ModelingController invalidLoops;
+        const auto invalidSketch = invalidLoops.createSketch();
+        QVERIFY(invalidSketch.success);
+        QVERIFY(invalidLoops.addSketchCircle(invalidSketch.id, {0.0, 0.0}, 10.0).success);
+        QVERIFY(invalidLoops.addSketchCircle(invalidSketch.id, {15.0, 0.0}, 10.0).success);
+        const auto invalidFeature = std::dynamic_pointer_cast<SketchFeature>(
+            invalidLoops.body().findFeature(invalidSketch.id));
+        QVERIFY_EXCEPTION_THROWN(
+            cad::operations::SketchProfileBuilder::build(*invalidFeature),
+            std::runtime_error);
+
+        ModelingController disconnected;
+        const auto separate = disconnected.createSketch();
+        QVERIFY(separate.success);
+        const auto addSeparateRectangle = [&disconnected, &separate](double x) {
+            return disconnected.addSketchLine(separate.id, {x, -5.0}, {x + 10.0, -5.0}).success
+                && disconnected.addSketchLine(separate.id, {x + 10.0, -5.0}, {x + 10.0, 5.0}).success
+                && disconnected.addSketchLine(separate.id, {x + 10.0, 5.0}, {x, 5.0}).success
+                && disconnected.addSketchLine(separate.id, {x, 5.0}, {x, -5.0}).success;
+        };
+        QVERIFY(addSeparateRectangle(-30.0));
+        QVERIFY(addSeparateRectangle(10.0));
+        const auto separateFeature = std::dynamic_pointer_cast<SketchFeature>(
+            disconnected.body().findFeature(separate.id));
+        const auto separateProfile = cad::operations::SketchProfileBuilder::build(*separateFeature);
+        QCOMPARE(separateProfile.faces.size(), std::size_t{2});
+        const auto separateExtrude = disconnected.createExtrudeFromSketch({{
+            {separate.id, SelectionKind::Object, std::nullopt}}}, 8.0);
+        QVERIFY(separateExtrude.success);
+        int solidCount = 0;
+        for (TopExp_Explorer explorer(
+                 disconnected.body().findFeature(separateExtrude.id)->shape(), TopAbs_SOLID);
+             explorer.More(); explorer.Next()) ++solidCount;
+        QCOMPARE(solidCount, 2);
+
+        ModelingController pocketController;
+        const auto box = pocketController.createBox();
+        QVERIFY(box.success);
+        const auto attached = pocketController.createSketchOnFace({{
+            {box.id, SelectionKind::Face, 1}}});
+        QVERIFY(attached.success);
+        const auto addPocketLine = [&pocketController, &attached](gp_Pnt2d start, gp_Pnt2d end) {
+            return pocketController.addSketchLine(attached.id, start, end).success;
+        };
+        QVERIFY(addPocketLine({-30.0, -20.0}, {30.0, -20.0}));
+        QVERIFY(addPocketLine({30.0, -20.0}, {30.0, 20.0}));
+        QVERIFY(addPocketLine({30.0, 20.0}, {-30.0, 20.0}));
+        QVERIFY(addPocketLine({-30.0, 20.0}, {-30.0, -20.0}));
+        QVERIFY(pocketController.addSketchCircle(attached.id, {0.0, 0.0}, 8.0).success);
+        const double boxVolume = volume(pocketController.body().findFeature(box.id)->shape());
+        const auto pocket = pocketController.createPocketFromSketch({{
+            {attached.id, SelectionKind::Object, std::nullopt}}}, 10.0);
+        QVERIFY2(pocket.success, qPrintable(QString::fromStdString(pocket.error)));
+        QVERIFY(volume(pocketController.body().findFeature(pocket.id)->shape()) < boxVolume);
     }
 
     void projectControllerReplacesOnlyAfterValidLoad()
