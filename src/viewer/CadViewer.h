@@ -80,7 +80,7 @@ public:
                          const gp_Dir& yDirection, const gp_Dir& normal);
     void exitSketchMode();
     bool sketchMode() const noexcept;
-    enum class SketchPreviewTool { None, Line, Circle, Rectangle, Trim };
+    enum class SketchPreviewTool { None, Line, Circle, Rectangle, Trim, Extend };
     void setSketchPreviewTool(SketchPreviewTool tool);
     void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
     void setSketchMouseMovedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
@@ -88,6 +88,7 @@ public:
     std::optional<gp_Pnt2d> sketchPointAtScreen(const QPoint& position) const;
     double sketchLocalToleranceFromPixels(const QPoint& position, double pixels) const;
     void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities);
+    void setSketchExtendPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void clearSketchTrimPreview();
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler

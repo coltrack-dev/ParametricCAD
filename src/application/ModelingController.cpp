@@ -6,6 +6,7 @@
 #include "operations/PatternFeatures.h"
 #include "operations/SketchProfileBuilder.h"
 #include "operations/SketchTrimService.h"
+#include "operations/SketchExtendService.h"
 
 #include <QLoggingCategory>
 #include <TopoDS.hxx>
@@ -177,6 +178,25 @@ ModelingResult ModelingController::trimSketchEntity(const std::string& sketchId,
     try {
         undoStack_.push(new cad::commands::TrimSketchEntityCommand(
             body_, sketch, trim.entityIndex, sketch->entities()[trim.entityIndex], trim.replacements));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::extendSketchEntity(const std::string& sketchId,
+                                                      const gp_Pnt2d& click,
+                                                      const double endpointTolerance)
+{
+    const auto feature = body_.findFeature(sketchId);
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    const auto plan = cad::operations::SketchExtendService::extend(
+        *sketch, click, endpointTolerance);
+    if (!plan.changed) return {false, {}, plan.error};
+    try {
+        undoStack_.push(new cad::commands::ExtendSketchEntityCommand(
+            body_, sketch, plan.entityIndex, plan.originalEntity, plan.extendedEntity));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);

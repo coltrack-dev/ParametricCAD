@@ -587,6 +587,12 @@ void CadViewer::setSketchTrimPreview(
     }
 }
 
+void CadViewer::setSketchExtendPreview(
+    const std::vector<cad::parametric::SketchEntity>& entities)
+{
+    setSketchTrimPreview(entities);
+}
+
 void CadViewer::clearSketchTrimPreview()
 {
     if (!sketchTrimPreviewObject_.IsNull() && !context_.IsNull())
@@ -1990,7 +1996,8 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     const QPoint currentPosition =
         event->position().toPoint();
 
-    if (sketchMode_ && sketchPreviewTool_ == SketchPreviewTool::Trim) {
+    if (sketchMode_ && (sketchPreviewTool_ == SketchPreviewTool::Trim
+        || sketchPreviewTool_ == SketchPreviewTool::Extend)) {
         const auto point = sketchPointAtScreen(currentPosition);
         if (point && sketchMouseMovedHandler_) {
             sketchMouseMovedHandler_(*point, sketchLocalToleranceFromPixels(currentPosition,
@@ -2001,7 +2008,8 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     }
 
     if (sketchMode_ && sketchPreviewFirstPoint_
-        && sketchPreviewTool_ != SketchPreviewTool::Trim) {
+        && sketchPreviewTool_ != SketchPreviewTool::Trim
+        && sketchPreviewTool_ != SketchPreviewTool::Extend) {
         const auto point = sketchPointAtScreen(currentPosition);
         if (point && sketchPreviewTool_ != SketchPreviewTool::None) {
             gp_Pnt current = sketchOrigin_;

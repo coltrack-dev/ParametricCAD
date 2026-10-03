@@ -63,6 +63,25 @@ private:
     std::vector<parametric::SketchEntity> replacements_;
 };
 
+class ExtendSketchEntityCommand final : public QUndoCommand
+{
+public:
+    ExtendSketchEntityCommand(parametric::Body& body,
+                              std::shared_ptr<parametric::SketchFeature> sketch,
+                              std::size_t index,
+                              parametric::SketchEntity original,
+                              parametric::SketchEntity extended);
+    void undo() override;
+    void redo() override;
+
+private:
+    parametric::Body& body_;
+    std::shared_ptr<parametric::SketchFeature> sketch_;
+    std::size_t index_;
+    parametric::SketchEntity original_;
+    parametric::SketchEntity extended_;
+};
+
 class DuplicateFeatureCommand final : public QUndoCommand
 {
 public:

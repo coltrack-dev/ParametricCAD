@@ -1,4 +1,5 @@
 #include "operations/SketchTrimService.h"
+#include "operations/SketchExtendService.h"
 #include "application/ModelingController.h"
 #include "model/ProjectFile.h"
 
@@ -76,6 +77,94 @@ void faceAttachedSketchCanReopenAfterUpstreamEdit()
     assert(controller.canEditSketch(sketchSelection));
     assert(controller.addSketchCircle(sketch.id, {0, 0}, 5.0).success);
     assert(sketchFeature->entityCount() == 1);
+}
+
+void extendLineAndArc()
+{
+    using cad::operations::ExtendEndpoint;
+    using cad::operations::SketchExtendService;
+    SketchFeature lineSketch("line", SketchSupportType::XY, 100.0, 100.0, {
+        SketchLine{{0, 0}, {5, 0}}, SketchLine{{10, -5}, {10, 5}},
+        SketchLine{{7, -5}, {7, 5}}});
+    const auto endPlan = SketchExtendService::analyzeExtend(lineSketch, {5, 0}, 0.5);
+    assert(endPlan.changed && endPlan.endpoint == ExtendEndpoint::End);
+    assert(std::get<SketchLine>(endPlan.extendedEntity).end.X() == 7.0);
+    assert(std::get<SketchLine>(endPlan.extensionSpan.front()).end.X() == 7.0);
+
+    SketchFeature startSketch("start", SketchSupportType::XY, 100.0, 100.0, {
+        SketchLine{{0, 0}, {5, 0}}, SketchLine{{-10, -5}, {-10, 5}}});
+    const auto startPlan = SketchExtendService::analyzeExtend(startSketch, {0, 0}, 0.5);
+    assert(startPlan.changed && startPlan.endpoint == ExtendEndpoint::Start);
+    assert(std::get<SketchLine>(startPlan.extendedEntity).start.X() == -10.0);
+
+    SketchFeature wrongDirection("wrong", SketchSupportType::XY, 100.0, 100.0, {
+        SketchLine{{0, 0}, {5, 0}}, SketchLine{{-10, -5}, {-10, 5}}});
+    assert(!SketchExtendService::analyzeExtend(wrongDirection, {5, 0}, 0.5).changed);
+
+    SketchFeature arcSketch("arc", SketchSupportType::XY, 100.0, 100.0, {
+        SketchArc{{0, 0}, 10.0, 0.0, std::acos(-1.0) / 2.0, false},
+        SketchLine{{-20, 0}, {20, 0}}});
+    const auto arcEnd = SketchExtendService::analyzeExtend(arcSketch, {0, 10}, 0.5);
+    assert(arcEnd.changed && arcEnd.endpoint == ExtendEndpoint::End);
+    assert(std::abs(std::get<SketchArc>(arcEnd.extendedEntity).endAngle - std::acos(-1.0)) < 1.0e-6);
+    const auto arcStart = SketchExtendService::analyzeExtend(arcSketch, {10, 0}, 0.5);
+    assert(arcStart.changed && arcStart.endpoint == ExtendEndpoint::Start);
+
+    SketchFeature clockwise("clockwise", SketchSupportType::XY, 100.0, 100.0, {
+        SketchArc{{0, 0}, 10.0, 0.0, -std::acos(-1.0) / 2.0, true},
+        SketchLine{{-20, 0}, {20, 0}}});
+    const auto clockwiseEnd = SketchExtendService::analyzeExtend(clockwise, {0, -10}, 0.5);
+    assert(clockwiseEnd.changed);
+    assert(std::get<SketchArc>(clockwiseEnd.extendedEntity).endAngle < -std::acos(-1.0) / 2.0);
+
+    SketchFeature circle("circle", SketchSupportType::XY, 100.0, 100.0, {
+        SketchCircle{{0, 0}, 10.0}});
+    assert(!SketchExtendService::analyzeExtend(circle, {10, 0}, 0.5).changed);
+}
+
+void extendClosesExtrudeProfile()
+{
+    cad::application::ModelingController controller;
+    const auto sketch = controller.createSketch();
+    assert(sketch.success);
+    const auto add = [&controller, &sketch](gp_Pnt2d a, gp_Pnt2d b) {
+        return controller.addSketchLine(sketch.id, a, b).success;
+    };
+    assert(add({-10, 0}, {10, 0}));
+    assert(add({10, 0}, {10, 10}));
+    assert(add({10, 10}, {-10, 10}));
+    assert(add({-10, 10}, {-10, 0}));
+    const auto extrude = controller.createExtrudeFromSketch({{
+        {sketch.id, cad::application::SelectionKind::Object, std::nullopt}}}, 10.0);
+    assert(extrude.success);
+    auto sketchFeature = std::dynamic_pointer_cast<SketchFeature>(
+        controller.body().findFeature(sketch.id));
+    assert(sketchFeature);
+    sketchFeature->replaceEntities(3, 1, {SketchLine{{-10, 10}, {-10, 2}}});
+    controller.body().markDirtyFrom(sketch.id);
+    assert(!controller.body().recompute());
+    assert(controller.extendSketchEntity(sketch.id, {-10, 2}, 0.5).success);
+    assert(controller.body().recompute());
+    auto feature = controller.body().findFeature(extrude.id);
+    assert(feature && !feature->shape().IsNull());
+    controller.undo();
+    assert(!controller.body().recompute());
+    controller.redo();
+    assert(controller.body().recompute());
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("extended.pcad");
+    assert(ProjectFile::save(path, controller.document(), controller.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+        loadedBody.findFeature(sketch.id));
+    assert(loadedSketch && loadedSketch->entityCount() == 4);
+    const auto& extendedLine = std::get<SketchLine>(loadedSketch->entities()[3]);
+    assert(std::abs(extendedLine.end.Y()) < 1.0e-6);
 }
 
 void arcTrim()
@@ -211,6 +300,8 @@ int main()
     lineTrim();
     editSketchValidationAndReopen();
     faceAttachedSketchCanReopenAfterUpstreamEdit();
+    extendLineAndArc();
+    extendClosesExtrudeProfile();
     arcTrim();
     circleTrim();
     intersectionMatrix();

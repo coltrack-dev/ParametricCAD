@@ -3,6 +3,7 @@
 #include "viewer/FeatureEditorPanel.h"
 #include "viewer/ModelPresenter.h"
 #include "operations/SketchTrimService.h"
+#include "operations/SketchExtendService.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -56,25 +57,37 @@ MainWindow::MainWindow(QWidget* parent)
     );
     viewer_->setSketchPointClickedHandler(
         [this](const gp_Pnt2d& point, const double tolerance) {
-            if (sketchTool_ == SketchTool::Trim) viewer_->clearSketchTrimPreview();
-            if (activeSketchId_.empty() || sketchTool_ != SketchTool::Trim) {
+            if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend)
+                viewer_->clearSketchTrimPreview();
+            if (activeSketchId_.empty()
+                || (sketchTool_ != SketchTool::Trim && sketchTool_ != SketchTool::Extend)) {
                 handleSketchPoint(point);
                 return;
             }
-            const auto result = modeling_.trimSketchEntity(activeSketchId_, point, tolerance);
+            const auto result = sketchTool_ == SketchTool::Trim
+                ? modeling_.trimSketchEntity(activeSketchId_, point, tolerance)
+                : modeling_.extendSketchEntity(activeSketchId_, point, tolerance);
             if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
             else refreshModelView(false);
         });
     viewer_->setSketchMouseMovedHandler(
         [this](const gp_Pnt2d& point, const double tolerance) {
-            if (activeSketchId_.empty() || sketchTool_ != SketchTool::Trim) return;
+            if (activeSketchId_.empty()
+                || (sketchTool_ != SketchTool::Trim && sketchTool_ != SketchTool::Extend)) return;
             const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
                 modeling_.body().findFeature(activeSketchId_));
             if (!sketch) { viewer_->clearSketchTrimPreview(); return; }
-            const auto plan = cad::operations::SketchTrimService::previewTrim(
-                *sketch, point, tolerance);
-            if (plan) viewer_->setSketchTrimPreview(plan->removedEntities);
-            else viewer_->clearSketchTrimPreview();
+            if (sketchTool_ == SketchTool::Trim) {
+                const auto plan = cad::operations::SketchTrimService::previewTrim(
+                    *sketch, point, tolerance);
+                if (plan) viewer_->setSketchTrimPreview(plan->removedEntities);
+                else viewer_->clearSketchTrimPreview();
+            } else {
+                const auto plan = cad::operations::SketchExtendService::previewExtend(
+                    *sketch, point, tolerance);
+                if (plan) viewer_->setSketchExtendPreview(plan->extensionSpan);
+                else viewer_->clearSketchTrimPreview();
+            }
         });
     viewer_->setSketchCancelHandler(
         [this]() {
@@ -315,6 +328,9 @@ void MainWindow::createActions()
     sketchTrimAction_ = modelingMenu->addAction("Trim");
     sketchTrimAction_->setEnabled(false);
     connect(sketchTrimAction_, &QAction::triggered, this, &MainWindow::selectSketchTrimTool);
+    sketchExtendAction_ = modelingMenu->addAction("Extend");
+    sketchExtendAction_->setEnabled(false);
+    connect(sketchExtendAction_, &QAction::triggered, this, &MainWindow::selectSketchExtendTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -421,6 +437,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchArcAction_->setEnabled(true);
         sketchRectangleAction_->setEnabled(true);
         sketchTrimAction_->setEnabled(true);
+        sketchExtendAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         updateActionState();
         statusBar()->showMessage("Sketch mode: select a drawing tool");
@@ -441,6 +458,7 @@ void MainWindow::finishSketch()
     sketchArcAction_->setEnabled(false);
     sketchRectangleAction_->setEnabled(false);
     sketchTrimAction_->setEnabled(false);
+    sketchExtendAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
     statusBar()->showMessage("Ready");
@@ -487,6 +505,15 @@ void MainWindow::selectSketchTrimTool()
     sketchSecondPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Trim);
     statusBar()->showMessage("Trim: click a Line, Arc, or Circle segment");
+}
+
+void MainWindow::selectSketchExtendTool()
+{
+    sketchTool_ = SketchTool::Extend;
+    sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Extend);
+    statusBar()->showMessage("Extend: hover and click a Line or Arc endpoint");
 }
 
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point)
