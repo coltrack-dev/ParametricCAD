@@ -79,6 +79,8 @@ public:
                          const gp_Dir& yDirection, const gp_Dir& normal);
     void exitSketchMode();
     bool sketchMode() const noexcept;
+    enum class SketchPreviewTool { None, Line, Circle, Rectangle };
+    void setSketchPreviewTool(SketchPreviewTool tool);
     void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&)> handler);
     void setSketchCancelHandler(std::function<void()> handler);
     std::optional<gp_Pnt2d> sketchPointAtScreen(const QPoint& position) const;
@@ -199,6 +201,9 @@ private:
     gp_Dir sketchXDirection_;
     gp_Dir sketchYDirection_;
     gp_Dir sketchNormal_;
+    SketchPreviewTool sketchPreviewTool_{SketchPreviewTool::None};
+    std::optional<gp_Pnt> sketchPreviewFirstPoint_;
+    Handle(AIS_Shape) sketchPreviewObject_;
     std::function<void(const gp_Pnt2d&)> sketchPointClickedHandler_;
     std::function<void()> sketchCancelHandler_;
 

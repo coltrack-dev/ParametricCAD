@@ -31,6 +31,7 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GeomAbs_SurfaceType.hxx>
@@ -42,8 +43,12 @@
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Ax2.hxx>
+#include <Quantity_Color.hxx>
 
 #if defined(Q_OS_MACOS) || defined(__APPLE__)
 #include <Cocoa_Window.hxx>
@@ -140,6 +145,61 @@ bool transformsClose(const gp_Trsf& first, const gp_Trsf& second)
         }
     }
     return true;
+}
+
+void configureSketchPresentation(
+    const Handle(AIS_Shape)& interactiveShape,
+    const QString& featureId)
+{
+    if (interactiveShape.IsNull() || !featureId.startsWith("sketch-")) return;
+    interactiveShape->SetDisplayMode(AIS_WireFrame);
+    interactiveShape->SetColor(Quantity_NOC_RED);
+    interactiveShape->SetWidth(3.0);
+}
+
+TopoDS_Shape makeSketchPreviewShape(
+    const gp_Pnt& first,
+    const gp_Pnt& current,
+    const gp_Dir& normal,
+    const CadViewer::SketchPreviewTool tool)
+{
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+
+    const double radius = first.Distance(current);
+    if (tool == CadViewer::SketchPreviewTool::Circle && radius > 1.0e-9) {
+        const gp_Circ circle(gp_Ax2(first, normal), radius);
+        auto circleEdge = BRepBuilderAPI_MakeEdge(circle);
+        if (circleEdge.IsDone()) {
+            const TopoDS_Shape edge = circleEdge.Edge();
+            builder.Add(compound, edge);
+        }
+    }
+
+    auto radiusEdge = BRepBuilderAPI_MakeEdge(first, current);
+    if (radiusEdge.IsDone()) {
+        const TopoDS_Shape edge = radiusEdge.Edge();
+        builder.Add(compound, edge);
+    }
+
+    const double markerSize = std::max(radius * 0.08, 1.0e-3);
+    gp_Dir markerX(1.0, 0.0, 0.0);
+    if (std::abs(markerX.Dot(normal)) > 0.95) markerX = gp_Dir(0.0, 1.0, 0.0);
+    gp_Dir markerY(gp_Vec(normal).Crossed(gp_Vec(markerX)));
+    markerX = gp_Dir(gp_Vec(markerY).Crossed(gp_Vec(normal)));
+    for (const auto& direction : {markerX, markerY}) {
+        gp_Pnt start = first;
+        gp_Pnt end = first;
+        start.Translate(-gp_Vec(direction) * markerSize);
+        end.Translate(gp_Vec(direction) * markerSize);
+        auto markerEdge = BRepBuilderAPI_MakeEdge(start, end);
+        if (markerEdge.IsDone()) {
+            const TopoDS_Shape edge = markerEdge.Edge();
+            builder.Add(compound, edge);
+        }
+    }
+    return compound;
 }
 }
 
@@ -363,10 +423,18 @@ void CadViewer::enterSketchMode(
     sketchNormal_ = normal;
     setSelectionMode(SelectionMode::Object);
     if (view_ && !view_->Camera().IsNull()) {
+        // Establish a useful world-to-screen scale before changing the camera
+        // orientation. Without this, a scale inherited from an unrelated 3D
+        // view can make a small mouse movement produce an unexpectedly large
+        // local sketch radius.
+        view_->FitAll();
+        view_->ZFitAll();
         const auto camera = view_->Camera();
         const double distance = std::max(camera->Distance(), 1.0);
         gp_Pnt eye = origin;
-        eye.Translate(-gp_Vec(normal) * distance);
+        // The camera looks from the face's outward side toward the sketch
+        // plane, so its view direction is -normal.
+        eye.Translate(gp_Vec(normal) * distance);
         camera->SetEyeAndCenter(eye, origin);
         camera->SetUp(yDirection);
         invalidateSnapProjectionCache("SKETCH_MODE: aligned camera");
@@ -377,11 +445,26 @@ void CadViewer::enterSketchMode(
 void CadViewer::exitSketchMode()
 {
     sketchMode_ = false;
+    sketchPreviewFirstPoint_.reset();
+    if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+        context_->Remove(sketchPreviewObject_, Standard_True);
+    }
+    sketchPreviewObject_.Nullify();
 }
 
 bool CadViewer::sketchMode() const noexcept
 {
     return sketchMode_;
+}
+
+void CadViewer::setSketchPreviewTool(const SketchPreviewTool tool)
+{
+    sketchPreviewTool_ = tool;
+    sketchPreviewFirstPoint_.reset();
+    if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+        context_->Remove(sketchPreviewObject_, Standard_True);
+    }
+    sketchPreviewObject_.Nullify();
 }
 
 void CadViewer::setSketchPointClickedHandler(
@@ -907,7 +990,9 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
         new AIS_Shape(shape);
 
     if (!shape.IsNull()) {
-        if (shape.ShapeType() == TopAbs_FACE || TopExp_Explorer(shape, TopAbs_FACE).More()) {
+        if (featureId.startsWith("sketch-")) {
+            configureSketchPresentation(interactiveShape, featureId);
+        } else if (shape.ShapeType() == TopAbs_FACE || TopExp_Explorer(shape, TopAbs_FACE).More()) {
             interactiveShape->SetDisplayMode(AIS_Shaded);
             const auto& drawer = interactiveShape->Attributes();
             drawer->SetFaceBoundaryDraw(Standard_True);
@@ -950,7 +1035,11 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
         return;
     }
     const auto& object = found->second;
+    configureSketchPresentation(object, featureId);
     if (object->Shape().IsEqual(shape)) {
+        if (featureId.startsWith("sketch-")) {
+            context_->Redisplay(object, Standard_True);
+        }
         qCDebug(pcadViewerLog) << "updateFeature unchanged" << featureId
                                << "ais" << static_cast<const void*>(object.get());
         return;
@@ -1021,6 +1110,11 @@ void CadViewer::clear()
     }
 
     cancelPushPull();
+    if (!sketchPreviewObject_.IsNull()) {
+        context_->Remove(sketchPreviewObject_, Standard_False);
+        sketchPreviewObject_.Nullify();
+    }
+    sketchPreviewFirstPoint_.reset();
     context_->RemoveAll(Standard_True);
     displayedShapes_.clear();
     featureObjects_.clear();
@@ -1648,8 +1742,22 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     clearAxisHover();
 
     if (sketchMode_ && event->button() == Qt::LeftButton) {
+        const auto point = sketchPointAtScreen(lastMousePosition_);
+        if (point) {
+            gp_Pnt world = sketchOrigin_;
+            world.Translate(gp_Vec(sketchXDirection_) * point->X()
+                + gp_Vec(sketchYDirection_) * point->Y());
+            if (!sketchPreviewFirstPoint_) {
+                sketchPreviewFirstPoint_ = world;
+            } else {
+                sketchPreviewFirstPoint_.reset();
+                if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+                    context_->Remove(sketchPreviewObject_, Standard_True);
+                }
+                sketchPreviewObject_.Nullify();
+            }
+        }
         if (sketchPointClickedHandler_) {
-            const auto point = sketchPointAtScreen(lastMousePosition_);
             if (point) sketchPointClickedHandler_(*point);
         }
         return;
@@ -1752,6 +1860,27 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
     const QPoint currentPosition =
         event->position().toPoint();
+
+    if (sketchMode_ && sketchPreviewFirstPoint_) {
+        const auto point = sketchPointAtScreen(currentPosition);
+        if (point && sketchPreviewTool_ != SketchPreviewTool::None) {
+            gp_Pnt current = sketchOrigin_;
+            current.Translate(gp_Vec(sketchXDirection_) * point->X()
+                + gp_Vec(sketchYDirection_) * point->Y());
+            const auto shape = makeSketchPreviewShape(
+                *sketchPreviewFirstPoint_, current, sketchNormal_, sketchPreviewTool_);
+            if (sketchPreviewObject_.IsNull()) {
+                sketchPreviewObject_ = new AIS_Shape(shape);
+                sketchPreviewObject_->SetDisplayMode(AIS_WireFrame);
+                sketchPreviewObject_->SetColor(Quantity_NOC_YELLOW);
+                sketchPreviewObject_->SetWidth(2.0);
+                context_->Display(sketchPreviewObject_, Standard_True);
+            } else {
+                sketchPreviewObject_->SetShape(shape);
+                context_->Redisplay(sketchPreviewObject_, Standard_True);
+            }
+        }
+    }
 
     if (event->buttons() != Qt::NoButton) {
         clearAxisHover();
@@ -1916,6 +2045,11 @@ void CadViewer::wheelEvent(QWheelEvent* event)
 void CadViewer::keyPressEvent(QKeyEvent* event)
 {
     if (sketchMode_ && event->key() == Qt::Key_Escape) {
+        sketchPreviewFirstPoint_.reset();
+        if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+            context_->Remove(sketchPreviewObject_, Standard_True);
+        }
+        sketchPreviewObject_.Nullify();
         if (sketchCancelHandler_) sketchCancelHandler_();
         event->accept();
         return;

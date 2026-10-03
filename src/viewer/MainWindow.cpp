@@ -332,7 +332,9 @@ void MainWindow::createCylinder()
 
 void MainWindow::createRectangleSketch()
 {
-    reportResult(modeling_.createSketch());
+    const auto result = modeling_.createSketch();
+    reportResult(result);
+    if (result.success) enterSketchEditing(result.id);
 }
 
 void MainWindow::createSketchOnFace()
@@ -352,6 +354,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         activeSketchId_ = sketchId;
         sketchTool_ = SketchTool::Line;
         sketchFirstPoint_.reset();
+        viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
         viewer_->enterSketchMode(frame.origin, frame.xDirection,
             frame.yDirection, frame.normal);
         sketchLineAction_->setEnabled(true);
@@ -382,18 +385,21 @@ void MainWindow::selectSketchLineTool()
 {
     sketchTool_ = SketchTool::Line;
     sketchFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
 }
 
 void MainWindow::selectSketchCircleTool()
 {
     sketchTool_ = SketchTool::Circle;
     sketchFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Circle);
 }
 
 void MainWindow::selectSketchRectangleTool()
 {
     sketchTool_ = SketchTool::Rectangle;
     sketchFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Rectangle);
 }
 
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point)

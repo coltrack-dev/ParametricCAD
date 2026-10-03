@@ -112,8 +112,7 @@ ModelingResult ModelingController::addSketchLine(
 {
     const auto feature = body_.findFeature(sketchId);
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
-    if (!sketch || sketch->supportType() != cad::parametric::SketchSupportType::Face)
-        return {false, {}, "Active sketch does not exist"};
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
     try {
         undoStack_.push(new cad::commands::AddSketchEntityCommand(
             body_, sketch, cad::parametric::SketchLine{start, end}));
@@ -128,8 +127,7 @@ ModelingResult ModelingController::addSketchCircle(
 {
     const auto feature = body_.findFeature(sketchId);
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
-    if (!sketch || sketch->supportType() != cad::parametric::SketchSupportType::Face)
-        return {false, {}, "Active sketch does not exist"};
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
     try {
         undoStack_.push(new cad::commands::AddSketchEntityCommand(
             body_, sketch, cad::parametric::SketchCircle{center, radius}));
