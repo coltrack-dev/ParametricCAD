@@ -49,6 +49,7 @@ private:
     void selectSketchCircleTool();
     void selectSketchArcTool();
     void selectSketchRectangleTool();
+    void selectSketchTrimTool();
     void enterSketchEditing(const std::string& sketchId);
     void handleSketchPoint(const gp_Pnt2d& point);
     void createFace();
@@ -78,8 +79,9 @@ private:
     QAction* sketchCircleAction_{nullptr};
     QAction* sketchArcAction_{nullptr};
     QAction* sketchRectangleAction_{nullptr};
+    QAction* sketchTrimAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
-    enum class SketchTool { None, Line, Circle, Arc, Rectangle };
+    enum class SketchTool { None, Line, Circle, Arc, Rectangle, Trim };
     SketchTool sketchTool_{SketchTool::None};
     std::string activeSketchId_;
     std::optional<gp_Pnt2d> sketchFirstPoint_;

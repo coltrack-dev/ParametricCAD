@@ -5,6 +5,7 @@
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
 #include "operations/SketchProfileBuilder.h"
+#include "operations/SketchTrimService.h"
 
 #include <QLoggingCategory>
 #include <TopoDS.hxx>
@@ -158,6 +159,23 @@ ModelingResult ModelingController::addSketchArc(
         undoStack_.push(new cad::commands::AddSketchEntityCommand(
             body_, sketch, cad::parametric::SketchArc{
                 center, radius, startAngle, endAngle, false}));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::trimSketchEntity(const std::string& sketchId,
+                                                    const gp_Pnt2d& click)
+{
+    const auto feature = body_.findFeature(sketchId);
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    const auto trim = cad::operations::SketchTrimService::trim(*sketch, click);
+    if (!trim.changed) return {false, {}, trim.error};
+    try {
+        undoStack_.push(new cad::commands::TrimSketchEntityCommand(
+            body_, sketch, trim.entityIndex, sketch->entities()[trim.entityIndex], trim.replacements));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);

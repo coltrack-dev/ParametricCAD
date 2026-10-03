@@ -56,7 +56,10 @@ MainWindow::MainWindow(QWidget* parent)
     viewer_->setSketchPointClickedHandler(
         [this](const gp_Pnt2d& point) { handleSketchPoint(point); });
     viewer_->setSketchCancelHandler(
-        [this]() { sketchFirstPoint_.reset(); sketchSecondPoint_.reset(); });
+        [this]() {
+            sketchFirstPoint_.reset(); sketchSecondPoint_.reset();
+            if (sketchTool_ == SketchTool::Trim) selectSketchLineTool();
+        });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         refreshModelView();
         featureEditorPanel_->scheduleRefresh();
@@ -280,6 +283,9 @@ void MainWindow::createActions()
     sketchRectangleAction_ = modelingMenu->addAction("Sketch Rectangle");
     sketchRectangleAction_->setEnabled(false);
     connect(sketchRectangleAction_, &QAction::triggered, this, &MainWindow::selectSketchRectangleTool);
+    sketchTrimAction_ = modelingMenu->addAction("Trim");
+    sketchTrimAction_->setEnabled(false);
+    connect(sketchTrimAction_, &QAction::triggered, this, &MainWindow::selectSketchTrimTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -366,6 +372,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchCircleAction_->setEnabled(true);
         sketchArcAction_->setEnabled(true);
         sketchRectangleAction_->setEnabled(true);
+        sketchTrimAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         statusBar()->showMessage("Sketch mode: select a drawing tool");
     } catch (const std::exception& error) {
@@ -384,6 +391,7 @@ void MainWindow::finishSketch()
     sketchCircleAction_->setEnabled(false);
     sketchArcAction_->setEnabled(false);
     sketchRectangleAction_->setEnabled(false);
+    sketchTrimAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     statusBar()->showMessage("Ready");
     refreshModelView(false);
@@ -422,9 +430,24 @@ void MainWindow::selectSketchRectangleTool()
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Rectangle);
 }
 
+void MainWindow::selectSketchTrimTool()
+{
+    sketchTool_ = SketchTool::Trim;
+    sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Trim: click a Line, Arc, or Circle segment");
+}
+
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
+    if (sketchTool_ == SketchTool::Trim) {
+        const auto result = modeling_.trimSketchEntity(activeSketchId_, point);
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
     if (!sketchFirstPoint_) {
         sketchFirstPoint_ = point;
         return;

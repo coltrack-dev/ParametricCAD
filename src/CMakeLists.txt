@@ -55,6 +55,8 @@ set(PARAMETRIC_CAD_SOURCES
     operations/ParametricFeatures.h
     operations/SketchProfileBuilder.cpp
     operations/SketchProfileBuilder.h
+    operations/SketchTrimService.cpp
+    operations/SketchTrimService.h
     operations/PatternFeatures.cpp
     operations/PatternFeatures.h
     geometry/Point3D.h

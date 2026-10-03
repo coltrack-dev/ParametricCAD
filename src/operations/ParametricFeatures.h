@@ -83,6 +83,8 @@ public:
     std::size_t entityCount() const noexcept;
     void addEntity(SketchEntity entity);
     void removeLastEntity();
+    void replaceEntities(std::size_t index, std::size_t count,
+                         std::vector<SketchEntity> replacements);
     static SketchFrame frameForFace(const TopoDS_Face& face);
     static bool isPlanarFace(const TopoDS_Shape& shape) noexcept;
 

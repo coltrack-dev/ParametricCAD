@@ -64,6 +64,7 @@ add_library(model_test_support STATIC
     ../src/operations/BasicFeatures.cpp
     ../src/operations/ParametricFeatures.cpp
     ../src/operations/SketchProfileBuilder.cpp
+    ../src/operations/SketchTrimService.cpp
     ../src/operations/PatternFeatures.cpp
     ../src/viewer/PushPullDrag.cpp
 )
@@ -105,3 +106,7 @@ set_tests_properties(undo_panel_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_D
 add_executable(controller_tests controller_tests.cpp)
 target_link_libraries(controller_tests PRIVATE model_test_support Qt6::Test)
 add_test(NAME controller_tests COMMAND controller_tests)
+
+add_executable(sketch_trim_tests sketch_trim_tests.cpp)
+target_link_libraries(sketch_trim_tests PRIVATE model_test_support)
+add_test(NAME sketch_trim_tests COMMAND sketch_trim_tests)

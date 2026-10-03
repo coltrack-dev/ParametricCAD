@@ -423,6 +423,20 @@ void SketchFeature::removeLastEntity()
     markDirty();
 }
 
+void SketchFeature::replaceEntities(const std::size_t index, const std::size_t count,
+                                    std::vector<SketchEntity> replacements)
+{
+    if (index >= entities_.size() || count == 0 || index + count > entities_.size()) {
+        throw std::out_of_range("Sketch entity replacement range is invalid");
+    }
+    entities_.erase(entities_.begin() + static_cast<std::ptrdiff_t>(index),
+                    entities_.begin() + static_cast<std::ptrdiff_t>(index + count));
+    entities_.insert(entities_.begin() + static_cast<std::ptrdiff_t>(index),
+                     std::make_move_iterator(replacements.begin()),
+                     std::make_move_iterator(replacements.end()));
+    markDirty();
+}
+
 bool SketchFeature::isPlanarFace(const TopoDS_Shape& shape) noexcept
 {
     if (shape.IsNull() || shape.ShapeType() != TopAbs_FACE) return false;

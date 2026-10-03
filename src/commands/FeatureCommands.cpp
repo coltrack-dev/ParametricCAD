@@ -35,6 +35,29 @@ AddSketchEntityCommand::AddSketchEntityCommand(
         throw std::invalid_argument("Sketch entity command requires an active sketch");
 }
 
+TrimSketchEntityCommand::TrimSketchEntityCommand(
+    parametric::Body& body, std::shared_ptr<parametric::SketchFeature> sketch,
+    const std::size_t index, parametric::SketchEntity original,
+    std::vector<parametric::SketchEntity> replacements)
+    : QUndoCommand("Trim Sketch Entity"), body_(body), sketch_(std::move(sketch)),
+      index_(index), original_(std::move(original)), replacements_(std::move(replacements))
+{
+    if (!sketch_ || body_.findFeature(sketch_->id()) != sketch_ || index_ >= sketch_->entityCount())
+        throw std::invalid_argument("Trim command requires an active sketch entity");
+}
+
+void TrimSketchEntityCommand::redo()
+{
+    sketch_->replaceEntities(index_, 1, replacements_);
+    body_.markDirtyFrom(sketch_->id());
+}
+
+void TrimSketchEntityCommand::undo()
+{
+    sketch_->replaceEntities(index_, replacements_.size(), {original_});
+    body_.markDirtyFrom(sketch_->id());
+}
+
 void AddSketchEntityCommand::redo()
 {
     sketch_->addEntity(entity_);
