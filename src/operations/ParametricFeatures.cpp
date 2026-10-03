@@ -39,6 +39,19 @@ namespace cad::parametric {
 
 namespace {
 
+constexpr double sketchTwoPi = 6.283185307179586476925286766559;
+
+double normalizedArcSweep(const double start, const double end, const bool clockwise)
+{
+    double delta = std::fmod(end - start, sketchTwoPi);
+    if (clockwise) {
+        while (delta >= 0.0) delta -= sketchTwoPi;
+    } else {
+        while (delta <= 0.0) delta += sketchTwoPi;
+    }
+    return delta;
+}
+
 void requireFeature(
     const ParametricFeature::Ptr& feature,
     const char* parameterName
@@ -91,6 +104,18 @@ gp_Pnt worldPoint(const SketchFrame& frame, const gp_Pnt2d& point)
     result.Translate(gp_Vec(frame.xDirection) * point.X()
         + gp_Vec(frame.yDirection) * point.Y());
     return result;
+}
+
+TopoDS_Edge makeArcEdge(const SketchFrame& frame, const SketchArc& arc)
+{
+    const gp_Circ circle(gp_Ax2(worldPoint(frame, arc.center), frame.normal), arc.radius);
+    const double sweep = arc.signedSweep();
+    if (sweep > 0.0) {
+        return BRepBuilderAPI_MakeEdge(
+            circle, arc.startAngle, arc.startAngle + sweep).Edge();
+    }
+    return TopoDS::Edge(BRepBuilderAPI_MakeEdge(
+        circle, arc.startAngle + sweep, arc.startAngle).Edge().Reversed());
 }
 
 TopoDS_Shape compoundOf(const std::vector<TopoDS_Shape>& shapes)
@@ -206,15 +231,34 @@ std::vector<cad::topology::TopologicalReference> legacyReferences(
 
 } // namespace
 
+gp_Pnt2d SketchArc::startPoint() const
+{
+    return {center.X() + radius * std::cos(startAngle),
+        center.Y() + radius * std::sin(startAngle)};
+}
+
+gp_Pnt2d SketchArc::endPoint() const
+{
+    return {center.X() + radius * std::cos(endAngle),
+        center.Y() + radius * std::sin(endAngle)};
+}
+
+double SketchArc::signedSweep() const
+{
+    return normalizedArcSweep(startAngle, endAngle, clockwise);
+}
+
 SketchFeature::SketchFeature(std::string id, double width, double height)
     : SketchFeature(std::move(id), SketchSupportType::XY, width, height)
 {
 }
 
 SketchFeature::SketchFeature(
-    std::string id, const SketchSupportType support, const double width, const double height)
+    std::string id, const SketchSupportType support, const double width, const double height,
+    std::vector<SketchEntity> entities)
     : ParametricFeature(std::move(id), "Rectangle Sketch"),
-      width_(width), height_(height), supportType_(support), frame_(globalSketchFrame(support))
+      width_(width), height_(height), supportType_(support), frame_(globalSketchFrame(support)),
+      entities_(std::move(entities))
 {
     if (support == SketchSupportType::Face)
         throw std::invalid_argument("Global Sketch constructor cannot use Face support");
@@ -279,14 +323,14 @@ void SketchFeature::writeParameters(QJsonObject& object) const
         object.insert("plane", QString::fromStdString(supportName(supportType_)));
         object.insert("width", width_);
         object.insert("height", height_);
-        return;
+    } else {
+        object.insert("supportReference", cad::topology::toJson(*faceReference_));
+        object.insert("frame", QJsonObject{
+            {"origin", QJsonArray{frame_.origin.X(), frame_.origin.Y(), frame_.origin.Z()}},
+            {"xDirection", QJsonArray{frame_.xDirection.X(), frame_.xDirection.Y(), frame_.xDirection.Z()}},
+            {"yDirection", QJsonArray{frame_.yDirection.X(), frame_.yDirection.Y(), frame_.yDirection.Z()}},
+            {"normal", QJsonArray{frame_.normal.X(), frame_.normal.Y(), frame_.normal.Z()}}});
     }
-    object.insert("supportReference", cad::topology::toJson(*faceReference_));
-    object.insert("frame", QJsonObject{
-        {"origin", QJsonArray{frame_.origin.X(), frame_.origin.Y(), frame_.origin.Z()}},
-        {"xDirection", QJsonArray{frame_.xDirection.X(), frame_.xDirection.Y(), frame_.xDirection.Z()}},
-        {"yDirection", QJsonArray{frame_.yDirection.X(), frame_.yDirection.Y(), frame_.yDirection.Z()}},
-        {"normal", QJsonArray{frame_.normal.X(), frame_.normal.Y(), frame_.normal.Z()}}});
     QJsonArray entities;
     for (const auto& entity : entities_) {
         QJsonObject value;
@@ -298,13 +342,22 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             writePoint2d(end, line->end);
             value.insert("start", start);
             value.insert("end", end);
-        } else {
-            const auto& circle = std::get<SketchCircle>(entity);
+        } else if (const auto* circle = std::get_if<SketchCircle>(&entity)) {
             value.insert("type", "Circle");
             QJsonArray center;
-            writePoint2d(center, circle.center);
+            writePoint2d(center, circle->center);
             value.insert("center", center);
-            value.insert("radius", circle.radius);
+            value.insert("radius", circle->radius);
+        } else {
+            const auto& arc = std::get<SketchArc>(entity);
+            value.insert("type", "Arc");
+            QJsonArray center;
+            writePoint2d(center, arc.center);
+            value.insert("center", center);
+            value.insert("radius", arc.radius);
+            value.insert("startAngle", arc.startAngle);
+            value.insert("endAngle", arc.endAngle);
+            value.insert("clockwise", arc.clockwise);
         }
         entities.append(value);
     }
@@ -349,6 +402,15 @@ void SketchFeature::addEntity(SketchEntity entity)
     if (const auto* circle = std::get_if<SketchCircle>(&entity); circle
         && (!std::isfinite(circle->radius) || circle->radius <= 0.0)) {
         throw std::invalid_argument("Sketch circle radius must be positive");
+    }
+    if (const auto* arc = std::get_if<SketchArc>(&entity)) {
+        if (!std::isfinite(arc->center.X()) || !std::isfinite(arc->center.Y())
+            || !std::isfinite(arc->radius) || arc->radius <= 1.0e-6
+            || !std::isfinite(arc->startAngle) || !std::isfinite(arc->endAngle)
+            || std::abs(arc->signedSweep()) <= 1.0e-6
+            || std::abs(arc->signedSweep()) >= sketchTwoPi - 1.0e-6) {
+            throw std::invalid_argument("Sketch arc has invalid radius or sweep");
+        }
     }
     entities_.push_back(std::move(entity));
     markDirty();
@@ -434,11 +496,12 @@ TopoDS_Shape SketchFeature::build() const
         if (const auto* line = std::get_if<SketchLine>(&entity)) {
             edges.push_back(BRepBuilderAPI_MakeEdge(
                 worldPoint(frame, line->start), worldPoint(frame, line->end)).Edge());
-        } else {
-            const auto& circle = std::get<SketchCircle>(entity);
-            const gp_Ax2 axis(worldPoint(frame, circle.center), frame.normal);
+        } else if (const auto* circle = std::get_if<SketchCircle>(&entity)) {
+            const gp_Ax2 axis(worldPoint(frame, circle->center), frame.normal);
             edges.push_back(BRepBuilderAPI_MakeEdge(
-                gp_Circ(axis, circle.radius)).Edge());
+                gp_Circ(axis, circle->radius)).Edge());
+        } else {
+            edges.push_back(makeArcEdge(frame, std::get<SketchArc>(entity)));
         }
     }
     if (edges.size() == 1 || std::all_of(entities_.begin(), entities_.end(),

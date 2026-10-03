@@ -40,13 +40,27 @@ struct SketchCircle
     double radius{0.0};
 };
 
-using SketchEntity = std::variant<SketchLine, SketchCircle>;
+struct SketchArc
+{
+    gp_Pnt2d center;
+    double radius{0.0};
+    double startAngle{0.0};
+    double endAngle{0.0};
+    bool clockwise{false};
+
+    gp_Pnt2d startPoint() const;
+    gp_Pnt2d endPoint() const;
+    double signedSweep() const;
+};
+
+using SketchEntity = std::variant<SketchLine, SketchCircle, SketchArc>;
 
 class SketchFeature final : public ParametricFeature
 {
 public:
     SketchFeature(std::string id, double width, double height);
-    SketchFeature(std::string id, SketchSupportType support, double width, double height);
+    SketchFeature(std::string id, SketchSupportType support, double width, double height,
+                  std::vector<SketchEntity> entities = {});
     SketchFeature(
         std::string id,
         const Ptr& supportSource,

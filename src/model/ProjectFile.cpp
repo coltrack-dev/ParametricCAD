@@ -108,6 +108,14 @@ std::vector<SketchEntity> sketchEntities(const QJsonObject& object)
                 {entity.value("center").toArray().at(0).toDouble(),
                  entity.value("center").toArray().at(1).toDouble()},
                 number(entity, "radius")});
+        } else if (type == "Arc") {
+            result.push_back(SketchArc{
+                {entity.value("center").toArray().at(0).toDouble(),
+                 entity.value("center").toArray().at(1).toDouble()},
+                number(entity, "radius"),
+                number(entity, "startAngle"),
+                number(entity, "endAngle"),
+                boolean(entity, "clockwise")});
         } else {
             throw std::invalid_argument("Unsupported sketch entity type");
         }
@@ -144,7 +152,7 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             const auto supportType = support == "XZ" ? SketchSupportType::XZ
                 : support == "YZ" ? SketchSupportType::YZ : SketchSupportType::XY;
             return std::make_shared<SketchFeature>(string(o, "id"), supportType,
-                number(o, "width"), number(o, "height"));
+                number(o, "width"), number(o, "height"), sketchEntities(o));
         }},
         {"Face", [](const QJsonObject& o, const Body& body) {
             const auto sourceId = string(o, "sourceFeatureId");

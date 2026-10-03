@@ -12,6 +12,7 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 
@@ -131,6 +132,32 @@ ModelingResult ModelingController::addSketchCircle(
     try {
         undoStack_.push(new cad::commands::AddSketchEntityCommand(
             body_, sketch, cad::parametric::SketchCircle{center, radius}));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::addSketchArc(
+    const std::string& sketchId,
+    const gp_Pnt2d& center,
+    const gp_Pnt2d& start,
+    const gp_Pnt2d& end)
+{
+    const auto feature = body_.findFeature(sketchId);
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    const double radius = center.Distance(start);
+    if (!std::isfinite(radius) || radius <= 1.0e-6
+        || center.Distance(end) <= 1.0e-6) {
+        return {false, {}, "Sketch arc requires distinct center and endpoints"};
+    }
+    const double startAngle = std::atan2(start.Y() - center.Y(), start.X() - center.X());
+    const double endAngle = std::atan2(end.Y() - center.Y(), end.X() - center.X());
+    try {
+        undoStack_.push(new cad::commands::AddSketchEntityCommand(
+            body_, sketch, cad::parametric::SketchArc{
+                center, radius, startAngle, endAngle, false}));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);

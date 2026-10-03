@@ -47,6 +47,7 @@ private:
     void finishSketch();
     void selectSketchLineTool();
     void selectSketchCircleTool();
+    void selectSketchArcTool();
     void selectSketchRectangleTool();
     void enterSketchEditing(const std::string& sketchId);
     void handleSketchPoint(const gp_Pnt2d& point);
@@ -75,12 +76,14 @@ private:
     QAction* sketchOnFaceAction_{nullptr};
     QAction* sketchLineAction_{nullptr};
     QAction* sketchCircleAction_{nullptr};
+    QAction* sketchArcAction_{nullptr};
     QAction* sketchRectangleAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
-    enum class SketchTool { None, Line, Circle, Rectangle };
+    enum class SketchTool { None, Line, Circle, Arc, Rectangle };
     SketchTool sketchTool_{SketchTool::None};
     std::string activeSketchId_;
     std::optional<gp_Pnt2d> sketchFirstPoint_;
+    std::optional<gp_Pnt2d> sketchSecondPoint_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this
     // mirror supplies MainWindow actions and model operation inputs without

@@ -56,7 +56,7 @@ MainWindow::MainWindow(QWidget* parent)
     viewer_->setSketchPointClickedHandler(
         [this](const gp_Pnt2d& point) { handleSketchPoint(point); });
     viewer_->setSketchCancelHandler(
-        [this]() { sketchFirstPoint_.reset(); });
+        [this]() { sketchFirstPoint_.reset(); sketchSecondPoint_.reset(); });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         refreshModelView();
         featureEditorPanel_->scheduleRefresh();
@@ -274,6 +274,9 @@ void MainWindow::createActions()
     sketchCircleAction_ = modelingMenu->addAction("Sketch Circle");
     sketchCircleAction_->setEnabled(false);
     connect(sketchCircleAction_, &QAction::triggered, this, &MainWindow::selectSketchCircleTool);
+    sketchArcAction_ = modelingMenu->addAction("Sketch Arc");
+    sketchArcAction_->setEnabled(false);
+    connect(sketchArcAction_, &QAction::triggered, this, &MainWindow::selectSketchArcTool);
     sketchRectangleAction_ = modelingMenu->addAction("Sketch Rectangle");
     sketchRectangleAction_->setEnabled(false);
     connect(sketchRectangleAction_, &QAction::triggered, this, &MainWindow::selectSketchRectangleTool);
@@ -355,11 +358,13 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         activeSketchId_ = sketchId;
         sketchTool_ = SketchTool::Line;
         sketchFirstPoint_.reset();
+        sketchSecondPoint_.reset();
         viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
         viewer_->enterSketchMode(frame.origin, frame.xDirection,
             frame.yDirection, frame.normal);
         sketchLineAction_->setEnabled(true);
         sketchCircleAction_->setEnabled(true);
+        sketchArcAction_->setEnabled(true);
         sketchRectangleAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         statusBar()->showMessage("Sketch mode: select a drawing tool");
@@ -374,8 +379,10 @@ void MainWindow::finishSketch()
     activeSketchId_.clear();
     sketchTool_ = SketchTool::None;
     sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
     sketchLineAction_->setEnabled(false);
     sketchCircleAction_->setEnabled(false);
+    sketchArcAction_->setEnabled(false);
     sketchRectangleAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     statusBar()->showMessage("Ready");
@@ -386,6 +393,7 @@ void MainWindow::selectSketchLineTool()
 {
     sketchTool_ = SketchTool::Line;
     sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
 }
 
@@ -393,13 +401,24 @@ void MainWindow::selectSketchCircleTool()
 {
     sketchTool_ = SketchTool::Circle;
     sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Circle);
+}
+
+void MainWindow::selectSketchArcTool()
+{
+    sketchTool_ = SketchTool::Arc;
+    sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Arc: select center, start, then end");
 }
 
 void MainWindow::selectSketchRectangleTool()
 {
     sketchTool_ = SketchTool::Rectangle;
     sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Rectangle);
 }
 
@@ -410,13 +429,21 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point)
         sketchFirstPoint_ = point;
         return;
     }
+    if (sketchTool_ == SketchTool::Arc && !sketchSecondPoint_) {
+        sketchSecondPoint_ = point;
+        return;
+    }
     const auto first = *sketchFirstPoint_;
     sketchFirstPoint_.reset();
+    const auto second = sketchSecondPoint_;
+    sketchSecondPoint_.reset();
     cad::application::ModelingResult result;
     if (sketchTool_ == SketchTool::Line) {
         result = modeling_.addSketchLine(activeSketchId_, first, point);
     } else if (sketchTool_ == SketchTool::Circle) {
         result = modeling_.addSketchCircle(activeSketchId_, first, first.Distance(point));
+    } else if (sketchTool_ == SketchTool::Arc) {
+        result = modeling_.addSketchArc(activeSketchId_, first, *second, point);
     } else {
         result = modeling_.addSketchLine(activeSketchId_, first,
             {point.X(), first.Y()});

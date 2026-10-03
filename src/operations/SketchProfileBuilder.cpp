@@ -195,6 +195,7 @@ struct SketchEdgeItem
     TopoDS_Edge edge;
     gp_Pnt2d start;
     gp_Pnt2d end;
+    std::vector<gp_Pnt2d> samples;
 };
 
 TopoDS_Wire checkedWire(const std::vector<TopoDS_Edge>& edges)
@@ -205,6 +206,50 @@ TopoDS_Wire checkedWire(const std::vector<TopoDS_Edge>& edges)
         throw std::runtime_error("Sketch profile wire assembly failed");
     }
     return builder.Wire();
+}
+
+SketchEdgeItem arcEdgeItem(const cad::parametric::SketchFrame& frame,
+                           const cad::parametric::SketchArc& arc)
+{
+    if (!std::isfinite(arc.radius) || arc.radius <= endpointTolerance
+        || !std::isfinite(arc.startAngle) || !std::isfinite(arc.endAngle)) {
+        throw std::runtime_error("Sketch arc has invalid radius or angles");
+    }
+    const double sweep = arc.signedSweep();
+    if (!std::isfinite(sweep) || std::abs(sweep) <= endpointTolerance
+        || std::abs(sweep) >= 6.283185307179586 - endpointTolerance) {
+        throw std::runtime_error("Sketch arc has invalid sweep");
+    }
+    const gp_Circ circle(
+        gp_Ax2(worldPoint(frame, arc.center), frame.normal), arc.radius);
+    BRepBuilderAPI_MakeEdge edgeBuilder;
+    if (sweep > 0.0) {
+        edgeBuilder = BRepBuilderAPI_MakeEdge(
+            circle, arc.startAngle, arc.startAngle + sweep);
+    } else {
+        edgeBuilder = BRepBuilderAPI_MakeEdge(
+            circle, arc.startAngle + sweep, arc.startAngle);
+    }
+    if (!edgeBuilder.IsDone()) throw std::runtime_error("Sketch arc construction failed");
+    TopoDS_Edge edge = edgeBuilder.Edge();
+    if (sweep < 0.0) edge = TopoDS::Edge(edge.Reversed());
+
+    const double tolerance = std::max(geometryTolerance, arc.radius * 1.0e-5);
+    const double cosine = std::clamp(1.0 - tolerance / arc.radius, -1.0, 1.0);
+    const double step = std::max(1.0e-3, 2.0 * std::acos(cosine));
+    const int segmentCount = std::max(4, static_cast<int>(std::ceil(std::abs(sweep) / step)));
+    std::vector<gp_Pnt2d> samples;
+    samples.reserve(static_cast<std::size_t>(segmentCount) + 1);
+    for (int index = 0; index <= segmentCount; ++index) {
+        const double angle = arc.startAngle + sweep
+            * static_cast<double>(index) / static_cast<double>(segmentCount);
+        samples.emplace_back(
+            arc.center.X() + arc.radius * std::cos(angle),
+            arc.center.Y() + arc.radius * std::sin(angle));
+    }
+    samples.front() = arc.startPoint();
+    samples.back() = arc.endPoint();
+    return {edge, samples.front(), samples.back(), std::move(samples)};
 }
 
 gp_Pnt2d representativeForPolygon(const std::vector<gp_Pnt2d>& polygon)
@@ -357,7 +402,10 @@ SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& 
             BRepBuilderAPI_MakeEdge edgeBuilder(
                 worldPoint(frame, line->start), worldPoint(frame, line->end));
             if (!edgeBuilder.IsDone()) throw std::runtime_error("Sketch edge construction failed");
-            lineItems.push_back({edgeBuilder.Edge(), line->start, line->end});
+            lineItems.push_back({edgeBuilder.Edge(), line->start, line->end,
+                {line->start, line->end}});
+        } else if (const auto* arc = std::get_if<cad::parametric::SketchArc>(&entity)) {
+            lineItems.push_back(arcEdgeItem(frame, *arc));
         } else {
             const auto circle = std::get<cad::parametric::SketchCircle>(entity);
             if (!std::isfinite(circle.radius) || circle.radius <= endpointTolerance) {
@@ -399,7 +447,8 @@ SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& 
         const auto firstIndex = component.front();
         used[firstIndex] = true;
         edges.push_back(lineItems[firstIndex].edge);
-        polygon.push_back(lineItems[firstIndex].start);
+        polygon.insert(polygon.end(), lineItems[firstIndex].samples.begin(),
+            lineItems[firstIndex].samples.end() - 1);
         const gp_Pnt2d first = lineItems[firstIndex].start;
         gp_Pnt2d tail = lineItems[firstIndex].end;
         for (std::size_t count = 1; count < component.size(); ++count) {
@@ -418,7 +467,15 @@ SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& 
             used[index] = true;
             edges.push_back(reverse
                 ? TopoDS::Edge(lineItems[index].edge.Reversed()) : lineItems[index].edge);
-            polygon.push_back(reverse ? lineItems[index].end : lineItems[index].start);
+            if (reverse) {
+                for (auto sample = lineItems[index].samples.rbegin();
+                     sample != lineItems[index].samples.rend(); ++sample) {
+                    if (sample + 1 != lineItems[index].samples.rend()) polygon.push_back(*sample);
+                }
+            } else {
+                polygon.insert(polygon.end(), lineItems[index].samples.begin(),
+                    lineItems[index].samples.end() - 1);
+            }
             tail = reverse ? lineItems[index].start : lineItems[index].end;
         }
         if (!closeEnough(tail, first)) throw std::runtime_error("Sketch profile is open");

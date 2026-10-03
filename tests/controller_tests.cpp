@@ -331,6 +331,59 @@ private slots:
         QVERIFY(volume(pocketController.body().findFeature(pocket.id)->shape()) < boxVolume);
     }
 
+    void sketchArcMixedProfileIsParametricAndPersistent()
+    {
+        ModelingController controller;
+        const auto sketch = controller.createSketch();
+        QVERIFY(sketch.success);
+        // The four entities form a capsule/slot. Input order is intentionally shuffled.
+        QVERIFY(controller.addSketchArc(
+            sketch.id, {0.0, -20.0}, {-10.0, -20.0}, {10.0, -20.0}).success);
+        QVERIFY(controller.addSketchLine(
+            sketch.id, {10.0, -20.0}, {10.0, 0.0}).success);
+        QVERIFY(controller.addSketchArc(
+            sketch.id, {0.0, 0.0}, {10.0, 0.0}, {-10.0, 0.0}).success);
+        QVERIFY(controller.addSketchLine(
+            sketch.id, {-10.0, 0.0}, {-10.0, -20.0}).success);
+        QVERIFY(controller.addSketchCircle(sketch.id, {0.0, -10.0}, 2.0).success);
+
+        const auto sketchFeature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketch.id));
+        QCOMPARE(sketchFeature->entityCount(), std::size_t{5});
+        const auto& arc = std::get<SketchArc>(sketchFeature->entities().front());
+        QVERIFY(std::abs(arc.startPoint().X() + 10.0) < 1.0e-9);
+        QVERIFY(std::abs(arc.endPoint().X() - 10.0) < 1.0e-9);
+        QVERIFY(std::abs(std::abs(arc.signedSweep()) - std::acos(-1.0)) < 1.0e-9);
+
+        controller.undo();
+        QCOMPARE(sketchFeature->entityCount(), std::size_t{4});
+        controller.redo();
+        QCOMPARE(sketchFeature->entityCount(), std::size_t{5});
+
+        const auto profile = cad::operations::SketchProfileBuilder::build(*sketchFeature);
+        QCOMPARE(profile.faces.size(), std::size_t{1});
+        const auto extrude = controller.createExtrudeFromSketch({{
+            {sketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
+        QVERIFY2(extrude.success, qPrintable(QString::fromStdString(extrude.error)));
+        QVERIFY(volume(controller.body().findFeature(extrude.id)->shape()) > 0.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("arc-sketch.pcad");
+        QVERIFY2(ProjectFile::save(path, controller.document(), controller.body(), error),
+            qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error),
+            qPrintable(error));
+        const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+            loadedBody.findFeature(sketch.id));
+        QVERIFY(loadedSketch);
+        QCOMPARE(loadedSketch->entityCount(), std::size_t{5});
+        QVERIFY(!loadedBody.findFeature(extrude.id)->shape().IsNull());
+    }
+
     void projectControllerReplacesOnlyAfterValidLoad()
     {
         ModelingController controller;
