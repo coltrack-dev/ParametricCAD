@@ -122,6 +122,44 @@ bool applyLineOrientation(cad::parametric::SketchLine& dependent,
     return true;
 }
 
+double normalizedAngle(const double angle)
+{
+    return std::remainder(angle, twoPi);
+}
+
+bool anglesCompatible(const double first, const double second, const double tolerance)
+{
+    return std::abs(normalizedAngle(first - second)) <= tolerance;
+}
+
+bool angleModuloPiCompatible(const double first, const double second, const double tolerance)
+{
+    return std::abs(std::remainder(first - second, 3.14159265358979323846)) <= tolerance;
+}
+
+bool applyAngleBetweenLines(cad::parametric::SketchLine& dependent,
+                            const cad::parametric::SketchLine& reference,
+                            const double relativeAngle, const bool anchorStart,
+                            const double tolerance, bool& changed)
+{
+    const gp_Pnt2d anchor = anchorStart ? dependent.start : dependent.end;
+    const gp_Pnt2d moving = anchorStart ? dependent.end : dependent.start;
+    const double length = anchor.Distance(moving);
+    const double referenceLength = reference.start.Distance(reference.end);
+    if (length <= tolerance || referenceLength <= tolerance) return false;
+    const double referenceAngle = std::atan2(reference.end.Y() - reference.start.Y(),
+        reference.end.X() - reference.start.X());
+    const double targetAngle = normalizedAngle(referenceAngle + relativeAngle);
+    const gp_Pnt2d solved(anchor.X() + length * std::cos(targetAngle),
+        anchor.Y() + length * std::sin(targetAngle));
+    if (anchorStart) {
+        if (!samePoint(dependent.end, solved)) { dependent.end = solved; changed = true; }
+    } else if (!samePoint(dependent.start, solved)) {
+        dependent.start = solved; changed = true;
+    }
+    return true;
+}
+
 } // namespace
 
 SketchSolveResult SketchConstraintSolver::solve(
@@ -139,6 +177,61 @@ SketchSolveResult SketchConstraintSolver::solve(
                 || !std::holds_alternative<cad::parametric::SketchLine>(*b)) {
                 result.status = SolveStatus::Failed;
                 result.error = "Coincident currently supports Line endpoints only";
+                return result;
+            }
+        }
+    }
+    std::unordered_map<std::string, double> angleBetweenValues;
+    for (const auto& constraint : constraints) {
+        const auto* item = std::get_if<cad::parametric::AngleBetweenLinesConstraint>(&constraint);
+        if (!item) continue;
+        if (item->referenceLineId == item->dependentLineId) {
+            result.status = SolveStatus::Failed;
+            result.error = "AngleBetweenLines requires two different Lines";
+            return result;
+        }
+        const auto* reference = lineById(result.entities, item->referenceLineId);
+        const auto* dependent = lineById(result.entities, item->dependentLineId);
+        if (!reference || !dependent) {
+            result.status = SolveStatus::Failed;
+            result.error = "AngleBetweenLines constraint requires two Lines";
+            return result;
+        }
+        if (!std::isfinite(item->angleRadians)) {
+            result.status = SolveStatus::Failed;
+            result.error = "AngleBetweenLines value must be finite";
+            return result;
+        }
+        const auto key = item->referenceLineId + "->" + item->dependentLineId;
+        const auto [it, inserted] = angleBetweenValues.emplace(key, normalizedAngle(item->angleRadians));
+        if (!inserted && !anglesCompatible(it->second, item->angleRadians, tolerance)) {
+            result.status = SolveStatus::Failed;
+            result.error = "Conflicting AngleBetweenLines constraints";
+            return result;
+        }
+        for (const auto& other : constraints) {
+            if (const auto* reversed = std::get_if<cad::parametric::AngleBetweenLinesConstraint>(&other);
+                reversed && reversed->referenceLineId == item->dependentLineId
+                && reversed->dependentLineId == item->referenceLineId
+                && !anglesCompatible(item->angleRadians, -reversed->angleRadians, tolerance)) {
+                result.status = SolveStatus::Failed;
+                result.error = "Conflicting reversed AngleBetweenLines constraints";
+                return result;
+            }
+            if (const auto* parallel = std::get_if<cad::parametric::ParallelConstraint>(&other);
+                parallel && parallel->firstLineId == item->referenceLineId
+                && parallel->secondLineId == item->dependentLineId
+                && !angleModuloPiCompatible(item->angleRadians, 0.0, tolerance)) {
+                result.status = SolveStatus::Failed;
+                result.error = "AngleBetweenLines conflicts with Parallel constraint";
+                return result;
+            }
+            if (const auto* perpendicular = std::get_if<cad::parametric::PerpendicularConstraint>(&other);
+                perpendicular && perpendicular->firstLineId == item->referenceLineId
+                && perpendicular->secondLineId == item->dependentLineId
+                && !angleModuloPiCompatible(item->angleRadians, 3.14159265358979323846 / 2.0, tolerance)) {
+                result.status = SolveStatus::Failed;
+                result.error = "AngleBetweenLines conflicts with Perpendicular constraint";
                 return result;
             }
         }
@@ -376,6 +469,20 @@ SketchSolveResult SketchConstraintSolver::solve(
                 if (!first || !second) { result.status = SolveStatus::Failed; result.error = "Perpendicular constraint requires two Lines"; return result; }
                 if (!applyLineOrientation(*second, *first, true, perpendicular->anchorStart, tolerance, changed)) {
                     result.status = SolveStatus::Failed; result.error = "Cannot solve Perpendicular constraint for zero-length Line"; return result;
+                }
+            } else if (const auto* angleBetween = std::get_if<cad::parametric::AngleBetweenLinesConstraint>(&constraint)) {
+                auto* reference = lineById(result.entities, angleBetween->referenceLineId);
+                auto* dependent = lineById(result.entities, angleBetween->dependentLineId);
+                if (!reference || !dependent) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "AngleBetweenLines constraint requires two Lines";
+                    return result;
+                }
+                if (!applyAngleBetweenLines(*dependent, *reference, angleBetween->angleRadians,
+                    angleBetween->anchorStart, tolerance, changed)) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Cannot solve AngleBetweenLines for zero-length Line";
+                    return result;
                 }
             } else {
                 const auto& radius = std::get<cad::parametric::RadiusConstraint>(constraint);

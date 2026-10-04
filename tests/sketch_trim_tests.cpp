@@ -424,6 +424,63 @@ void parallelAndPerpendicularConstraints()
         && std::holds_alternative<cad::parametric::PerpendicularConstraint>(loaded->constraints().front()));
 }
 
+void angleBetweenLinesConstraints()
+{
+    cad::application::ModelingController controller;
+    const auto created = controller.createSketch();
+    assert(created.success);
+    assert(controller.addSketchLine(created.id, {0, 0}, {10, 0}).success);
+    assert(controller.addSketchLine(created.id, {5, 5}, {11, 8}).success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(controller.body().findFeature(created.id));
+    const auto referenceId = std::get<SketchLine>(sketch->entities()[0]).id;
+    const auto dependentId = std::get<SketchLine>(sketch->entities()[1]).id;
+    const auto dependentStart = std::get<SketchLine>(sketch->entities()[1]).start;
+    const double dependentLength = std::get<SketchLine>(sketch->entities()[1]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[1]).end);
+    const double radians30 = 30.0 * 3.14159265358979323846 / 180.0;
+    assert(controller.addSketchAngleBetweenLines(created.id, referenceId, dependentId, radians30).success);
+    const auto& solved = std::get<SketchLine>(sketch->entities()[1]);
+    assert(solved.start.Distance(dependentStart) < 1.0e-7);
+    assert(near(solved.start.Distance(solved.end), dependentLength));
+    assert(near(std::atan2(solved.end.Y() - solved.start.Y(), solved.end.X() - solved.start.X()), radians30));
+
+    const auto angleId = std::get<AngleBetweenLinesConstraint>(sketch->constraints().back()).id;
+    assert(controller.updateSketchAngleBetweenLines(created.id, angleId,
+        -45.0 * 3.14159265358979323846 / 180.0).success);
+    assert(near(std::atan2(solved.end.Y() - solved.start.Y(), solved.end.X() - solved.start.X()),
+        -45.0 * 3.14159265358979323846 / 180.0));
+    controller.undo();
+    assert(near(std::atan2(solved.end.Y() - solved.start.Y(), solved.end.X() - solved.start.X()), radians30));
+    controller.redo();
+    assert(near(std::atan2(solved.end.Y() - solved.start.Y(), solved.end.X() - solved.start.X()),
+        -45.0 * 3.14159265358979323846 / 180.0));
+
+    cad::application::ModelingController compatibility;
+    const auto compatibleSketch = compatibility.createSketch();
+    assert(compatibleSketch.success);
+    assert(compatibility.addSketchLine(compatibleSketch.id, {0, 0}, {10, 0}).success);
+    assert(compatibility.addSketchLine(compatibleSketch.id, {0, 5}, {5, 5}).success);
+    auto compatible = std::dynamic_pointer_cast<SketchFeature>(
+        compatibility.body().findFeature(compatibleSketch.id));
+    const auto a = std::get<SketchLine>(compatible->entities()[0]).id;
+    const auto b = std::get<SketchLine>(compatible->entities()[1]).id;
+    assert(compatibility.addSketchParallel(compatibleSketch.id, a, b).success);
+    assert(compatibility.addSketchAngleBetweenLines(compatibleSketch.id, a, b, 0.0).success);
+    assert(!compatibility.addSketchAngleBetweenLines(compatibleSketch.id, a, b, radians30).success);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("angle-between-lines.pcad");
+    assert(ProjectFile::save(path, controller.document(), controller.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loaded = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(created.id));
+    assert(loaded && loaded->constraintCount() == 1
+        && std::holds_alternative<AngleBetweenLinesConstraint>(loaded->constraints().front()));
+}
+
 void arcTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
@@ -563,6 +620,7 @@ int main()
     dimensionalConstraintsSolveUndoAndPersist();
     positionalAndAngleConstraints();
     parallelAndPerpendicularConstraints();
+    angleBetweenLinesConstraints();
     arcTrim();
     circleTrim();
     intersectionMatrix();

@@ -63,6 +63,7 @@ private:
     void selectSketchAngleTool();
     void selectSketchParallelTool();
     void selectSketchPerpendicularTool();
+    void selectSketchAngleBetweenLinesTool();
     void enterSketchEditing(const std::string& sketchId);
     void refreshConstraintManager();
     void selectSketchConstraint(const QString& constraintId);
@@ -109,10 +110,12 @@ private:
     QAction* sketchAngleAction_{nullptr};
     QAction* sketchParallelAction_{nullptr};
     QAction* sketchPerpendicularAction_{nullptr};
+    QAction* sketchAngleBetweenLinesAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
     enum class SketchTool { None, Line, Circle, Arc, Rectangle, Trim, Extend,
                             Coincident, Horizontal, Vertical, Distance, Radius,
-                            HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular };
+                            HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular,
+                            AngleBetweenLines };
     SketchTool sketchTool_{SketchTool::None};
     std::string activeSketchId_;
     std::optional<gp_Pnt2d> sketchFirstPoint_;

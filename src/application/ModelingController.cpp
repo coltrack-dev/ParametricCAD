@@ -215,6 +215,8 @@ ModelingResult ModelingController::extendSketchEntity(const std::string& sketchI
             else if constexpr (std::is_same_v<T, cad::parametric::ParallelConstraint>
                 || std::is_same_v<T, cad::parametric::PerpendicularConstraint>)
                 return item.firstLineId == targetId || item.secondLineId == targetId;
+            else if constexpr (std::is_same_v<T, cad::parametric::AngleBetweenLinesConstraint>)
+                return item.referenceLineId == targetId || item.dependentLineId == targetId;
             return false;
         }, constraint);
         if (dimensional)
@@ -452,6 +454,25 @@ ModelingResult ModelingController::addSketchPerpendicular(
     const std::string& secondLineId, const bool anchorStart)
 { return addLineRelationConstraint(body_, undoStack_, sketchId, firstLineId, secondLineId, anchorStart, true); }
 
+ModelingResult ModelingController::addSketchAngleBetweenLines(
+    const std::string& sketchId, const std::string& referenceLineId,
+    const std::string& dependentLineId, const double radians, const bool anchorStart)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !std::isfinite(radians)) return {false, {}, "AngleBetweenLines value must be finite"};
+    const auto isLine = [&sketch](const std::string& id) {
+        return std::any_of(sketch->entities().begin(), sketch->entities().end(),
+            [&id](const auto& entity) { return std::visit([&](const auto& item) {
+                return std::is_same_v<std::decay_t<decltype(item)>, cad::parametric::SketchLine> && item.id == id;
+            }, entity); });
+    };
+    if (referenceLineId == dependentLineId || !isLine(referenceLineId) || !isLine(dependentLineId))
+        return {false, {}, "AngleBetweenLines requires two different Lines"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::SketchConstraint{cad::parametric::AngleBetweenLinesConstraint{
+            referenceLineId, dependentLineId, radians, anchorStart, {}}});
+}
+
 namespace {
 ModelingResult updateDimensionalConstraint(
     cad::parametric::Body& body, QUndoStack& stack, const std::string& sketchId,
@@ -537,6 +558,28 @@ ModelingResult ModelingController::updateSketchAngle(
     for (auto& constraint : after) if (auto* item = std::get_if<cad::parametric::AngleConstraint>(&constraint);
         item && item->id == constraintId) { item->radians = radians; found = true; }
     if (!found) return {false, {}, "Angle constraint does not exist"};
+    const auto solved = cad::operations::SketchConstraintSolver::solve(sketch->entities(), after);
+    if (solved.status != cad::operations::SolveStatus::Solved) return {false, {}, solved.error};
+    try {
+        undoStack_.push(new cad::commands::UpdateSketchConstraintCommand(
+            body_, sketch, sketch->entities(), solved.entities, before, after));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) { return failure(error); }
+}
+
+ModelingResult ModelingController::updateSketchAngleBetweenLines(
+    const std::string& sketchId, const std::string& constraintId, const double radians)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !std::isfinite(radians)) return {false, {}, "AngleBetweenLines value must be finite"};
+    auto before = sketch->constraints();
+    auto after = before;
+    bool found = false;
+    for (auto& constraint : after) {
+        if (auto* item = std::get_if<cad::parametric::AngleBetweenLinesConstraint>(&constraint);
+            item && item->id == constraintId) { item->angleRadians = radians; found = true; }
+    }
+    if (!found) return {false, {}, "AngleBetweenLines constraint does not exist"};
     const auto solved = cad::operations::SketchConstraintSolver::solve(sketch->entities(), after);
     if (solved.status != cad::operations::SolveStatus::Solved) return {false, {}, solved.error};
     try {

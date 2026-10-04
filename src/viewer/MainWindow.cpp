@@ -122,7 +122,8 @@ MainWindow::MainWindow(QWidget* parent)
                 || sketchTool_ == SketchTool::VerticalDistance
                 || sketchTool_ == SketchTool::Angle
                 || sketchTool_ == SketchTool::Parallel
-                || sketchTool_ == SketchTool::Perpendicular) selectSketchLineTool();
+                || sketchTool_ == SketchTool::Perpendicular
+                || sketchTool_ == SketchTool::AngleBetweenLines) selectSketchLineTool();
             constraintFirstPoint_.reset();
         });
     viewer_->setSketchConstraintMarkerClickedHandler(
@@ -273,6 +274,12 @@ void MainWindow::refreshConstraintManager()
         } else if (const auto* value = std::get_if<cad::parametric::PerpendicularConstraint>(&constraint)) {
             item.label = QString("Perpendicular  %1 ⟂ %2")
                 .arg(QString::fromStdString(value->firstLineId), QString::fromStdString(value->secondLineId));
+        } else if (const auto* value = std::get_if<cad::parametric::AngleBetweenLinesConstraint>(&constraint)) {
+            item.label = QString("Angle  %1 → %2 = %3°")
+                .arg(QString::fromStdString(value->referenceLineId),
+                     QString::fromStdString(value->dependentLineId))
+                .arg(value->angleRadians * 180.0 / 3.14159265358979323846, 0, 'f', 2);
+            item.editable = true;
         }
         item.label += status;
         items.push_back(std::move(item));
@@ -313,16 +320,17 @@ void MainWindow::editSketchConstraint(const QString& constraintId)
             const auto* horizontalDistance = std::get_if<cad::parametric::HorizontalDistanceConstraint>(&constraint);
             const auto* verticalDistance = std::get_if<cad::parametric::VerticalDistanceConstraint>(&constraint);
             const auto* angle = std::get_if<cad::parametric::AngleConstraint>(&constraint);
-            if (!distance && !radius && !horizontalDistance && !verticalDistance && !angle) return;
+            const auto* angleBetween = std::get_if<cad::parametric::AngleBetweenLinesConstraint>(&constraint);
+            if (!distance && !radius && !horizontalDistance && !verticalDistance && !angle && !angleBetween) return;
             bool ok = false;
             const double current = distance ? distance->value : radius ? radius->value
                 : horizontalDistance ? horizontalDistance->value : verticalDistance ? verticalDistance->value
-                : angle->radians * 180.0 / 3.14159265358979323846;
+                : (angle ? angle->radians : angleBetween->angleRadians) * 180.0 / 3.14159265358979323846;
             const double value = QInputDialog::getDouble(this,
                 distance || horizontalDistance || verticalDistance ? "Distance constraint"
-                    : angle ? "Angle constraint" : "Radius constraint",
+                    : angle || angleBetween ? "Angle constraint" : "Radius constraint",
                 "Value:", current,
-                angle ? -360.0 : horizontalDistance || verticalDistance ? -1.0e6 : 0.001,
+                angle || angleBetween ? -360.0 : horizontalDistance || verticalDistance ? -1.0e6 : 0.001,
                 1.0e6, 3, &ok);
             if (!ok) return;
             cad::application::ModelingResult result;
@@ -330,7 +338,8 @@ void MainWindow::editSketchConstraint(const QString& constraintId)
             else if (radius) result = modeling_.updateSketchRadius(activeSketchId_, constraintId.toStdString(), value);
             else if (horizontalDistance) result = modeling_.updateSketchHorizontalDistance(activeSketchId_, constraintId.toStdString(), value);
             else if (verticalDistance) result = modeling_.updateSketchVerticalDistance(activeSketchId_, constraintId.toStdString(), value);
-            else result = modeling_.updateSketchAngle(activeSketchId_, constraintId.toStdString(), value * 3.14159265358979323846 / 180.0);
+            else if (angle) result = modeling_.updateSketchAngle(activeSketchId_, constraintId.toStdString(), value * 3.14159265358979323846 / 180.0);
+            else result = modeling_.updateSketchAngleBetweenLines(activeSketchId_, constraintId.toStdString(), value * 3.14159265358979323846 / 180.0);
             if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
             else { selectedConstraintId_ = constraintId; refreshModelView(false); }
             return;
@@ -535,6 +544,9 @@ void MainWindow::createActions()
     sketchPerpendicularAction_ = modelingMenu->addAction("Perpendicular");
     sketchPerpendicularAction_->setEnabled(false);
     connect(sketchPerpendicularAction_, &QAction::triggered, this, &MainWindow::selectSketchPerpendicularTool);
+    sketchAngleBetweenLinesAction_ = modelingMenu->addAction("Angle Between Lines");
+    sketchAngleBetweenLinesAction_->setEnabled(false);
+    connect(sketchAngleBetweenLinesAction_, &QAction::triggered, this, &MainWindow::selectSketchAngleBetweenLinesTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -655,6 +667,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchAngleAction_->setEnabled(true);
         sketchParallelAction_->setEnabled(true);
         sketchPerpendicularAction_->setEnabled(true);
+        sketchAngleBetweenLinesAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         refreshConstraintManager();
         updateActionState();
@@ -689,6 +702,7 @@ void MainWindow::finishSketch()
     sketchAngleAction_->setEnabled(false);
     sketchParallelAction_->setEnabled(false);
     sketchPerpendicularAction_->setEnabled(false);
+    sketchAngleBetweenLinesAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
     statusBar()->showMessage("Ready");
@@ -827,6 +841,14 @@ void MainWindow::selectSketchPerpendicularTool()
     statusBar()->showMessage("Perpendicular: click two Lines");
 }
 
+void MainWindow::selectSketchAngleBetweenLinesTool()
+{
+    sketchTool_ = SketchTool::AngleBetweenLines;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Angle Between Lines: click reference and dependent Lines");
+}
+
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
@@ -910,6 +932,28 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
         const auto result = sketchTool_ == SketchTool::Parallel
             ? modeling_.addSketchParallel(activeSketchId_, constraintFirstPoint_->entityId, *lineId)
             : modeling_.addSketchPerpendicular(activeSketchId_, constraintFirstPoint_->entityId, *lineId);
+        constraintFirstPoint_.reset();
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
+    if (sketchTool_ == SketchTool::AngleBetweenLines) {
+        const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
+            sketch->entities(), point, hitTolerance);
+        if (!lineId) { statusBar()->showMessage("Select a Line", 2000); return; }
+        if (!constraintFirstPoint_) {
+            constraintFirstPoint_ = cad::parametric::SketchPointRef{
+                *lineId, cad::parametric::SketchPointRole::LineStart};
+            statusBar()->showMessage("Angle Between Lines: select dependent Line");
+            return;
+        }
+        bool ok = false;
+        const double degrees = QInputDialog::getDouble(this, "Angle Between Lines",
+            "Degrees:", 30.0, -360.0, 360.0, 3, &ok);
+        if (!ok) return;
+        const auto result = modeling_.addSketchAngleBetweenLines(activeSketchId_,
+            constraintFirstPoint_->entityId, *lineId,
+            degrees * 3.14159265358979323846 / 180.0);
         constraintFirstPoint_.reset();
         if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
         else refreshModelView(false);

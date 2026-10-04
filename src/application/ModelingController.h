@@ -72,6 +72,10 @@ public:
                                           const std::string& firstLineId,
                                           const std::string& secondLineId,
                                           bool anchorStart = true);
+    ModelingResult addSketchAngleBetweenLines(const std::string& sketchId,
+                                              const std::string& referenceLineId,
+                                              const std::string& dependentLineId,
+                                              double radians, bool anchorStart = true);
     ModelingResult updateSketchDistance(const std::string& sketchId,
                                         const std::string& constraintId, double value);
     ModelingResult updateSketchRadius(const std::string& sketchId,
@@ -82,6 +86,8 @@ public:
                                                 const std::string& constraintId, double value);
     ModelingResult updateSketchAngle(const std::string& sketchId,
                                      const std::string& constraintId, double radians);
+    ModelingResult updateSketchAngleBetweenLines(const std::string& sketchId,
+                                                 const std::string& constraintId, double radians);
     ModelingResult removeSketchConstraint(const std::string& sketchId,
                                           const std::string& constraintId);
     ModelingResult createPrimitive(PrimitiveKind kind) override;

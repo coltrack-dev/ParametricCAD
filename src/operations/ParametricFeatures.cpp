@@ -463,13 +463,20 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             value.insert("firstLineId", QString::fromStdString(parallel->firstLineId));
             value.insert("secondLineId", QString::fromStdString(parallel->secondLineId));
             value.insert("anchorStart", parallel->anchorStart);
-        } else {
-            const auto& perpendicular = std::get<PerpendicularConstraint>(constraint);
+        } else if (const auto* perpendicular = std::get_if<PerpendicularConstraint>(&constraint)) {
             value.insert("type", "Perpendicular");
-            value.insert("id", QString::fromStdString(perpendicular.id));
-            value.insert("firstLineId", QString::fromStdString(perpendicular.firstLineId));
-            value.insert("secondLineId", QString::fromStdString(perpendicular.secondLineId));
-            value.insert("anchorStart", perpendicular.anchorStart);
+            value.insert("id", QString::fromStdString(perpendicular->id));
+            value.insert("firstLineId", QString::fromStdString(perpendicular->firstLineId));
+            value.insert("secondLineId", QString::fromStdString(perpendicular->secondLineId));
+            value.insert("anchorStart", perpendicular->anchorStart);
+        } else {
+            const auto& angleBetween = std::get<AngleBetweenLinesConstraint>(constraint);
+            value.insert("type", "AngleBetweenLines");
+            value.insert("id", QString::fromStdString(angleBetween.id));
+            value.insert("referenceLineId", QString::fromStdString(angleBetween.referenceLineId));
+            value.insert("dependentLineId", QString::fromStdString(angleBetween.dependentLineId));
+            value.insert("angleRadians", angleBetween.angleRadians);
+            value.insert("anchorStart", angleBetween.anchorStart);
         }
         constraints.append(value);
     }
@@ -547,6 +554,8 @@ bool SketchFeature::hasConstraintsForEntity(const SketchEntityId& entityId) cons
             if (parallel->firstLineId == entityId || parallel->secondLineId == entityId) return true;
         } else if (const auto* perpendicular = std::get_if<PerpendicularConstraint>(&constraint)) {
             if (perpendicular->firstLineId == entityId || perpendicular->secondLineId == entityId) return true;
+        } else if (const auto* angleBetween = std::get_if<AngleBetweenLinesConstraint>(&constraint)) {
+            if (angleBetween->referenceLineId == entityId || angleBetween->dependentLineId == entityId) return true;
         }
     }
     return false;
