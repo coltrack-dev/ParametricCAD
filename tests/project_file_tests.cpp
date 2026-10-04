@@ -14,6 +14,9 @@
 #include <GProp_GProps.hxx>
 #include <cmath>
 #include <gp_Trsf.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 #include <iostream>
 #include <stdexcept>
 
@@ -75,6 +78,58 @@ int main()
                   && std::abs(loadedCone->placement().TranslationPart().Y() - 6.0) < 1e-9
                   && std::abs(loadedCone->placement().TranslationPart().Z() - 7.0) < 1e-9,
               "placement roundtrip");
+
+        auto rotated = std::make_shared<BoxParametricFeature>("rotated-box", 2, 3, 4);
+        const double angle = 35.0 * std::acos(-1.0) / 180.0;
+        gp_Trsf rotatedPlacement;
+        rotatedPlacement.SetRotation(
+            gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), angle);
+        rotatedPlacement.SetTranslationPart(gp_Vec(11.0, -4.0, 7.0));
+        rotated->setPlacement(rotatedPlacement);
+        body.addFeature(rotated);
+        check(body.recompute(), "rotated placement recompute");
+        const auto rotatedPath = directory.filePath("rotated-placement.pcad");
+        check(ProjectFile::save(rotatedPath, document, body, error), "rotated placement save");
+        QFile roundedPlacementFile(rotatedPath);
+        check(roundedPlacementFile.open(QIODevice::ReadOnly), "read rounded placement file");
+        const auto roundedJson = QJsonDocument::fromJson(roundedPlacementFile.readAll());
+        roundedPlacementFile.close();
+        auto roundedRoot = roundedJson.object();
+        auto roundedBody = roundedRoot.value("body").toArray();
+        for (int index = 0; index < roundedBody.size(); ++index) {
+            auto feature = roundedBody.at(index).toObject();
+            if (feature.value("id").toString() != "rotated-box") continue;
+            auto placement = feature.value("placement").toArray();
+            for (int value = 0; value < placement.size(); ++value) {
+                placement[value] = std::round(placement.at(value).toDouble() * 1.0e9) / 1.0e9;
+            }
+            feature.insert("placement", placement);
+            roundedBody[index] = feature;
+        }
+        roundedRoot.insert("body", roundedBody);
+        check(roundedPlacementFile.open(QIODevice::WriteOnly | QIODevice::Truncate),
+              "write rounded placement file");
+        const auto roundedData = QJsonDocument(roundedRoot).toJson();
+        check(roundedPlacementFile.write(roundedData) == roundedData.size(),
+              "write rounded placement data");
+        roundedPlacementFile.close();
+        Document rotatedDocument;
+        Body rotatedBody;
+        check(ProjectFile::load(rotatedPath, rotatedDocument, rotatedBody, error),
+              "rotated placement load");
+        check(rotatedBody.recompute(), "rotated placement recompute after load");
+        const auto loadedRotated = rotatedBody.findFeature("rotated-box");
+        check(loadedRotated && std::abs(loadedRotated->placement().ScaleFactor() - 1.0) < 1e-12,
+              "rotated placement scale");
+        const auto& loadedMatrix = loadedRotated->placement();
+        check(std::abs(loadedMatrix.Value(1, 1) - std::cos(angle)) < 1e-8
+                  && std::abs(loadedMatrix.Value(1, 2) + std::sin(angle)) < 1e-8
+                  && std::abs(loadedMatrix.Value(2, 1) - std::sin(angle)) < 1e-8
+                  && std::abs(loadedMatrix.Value(2, 2) - std::cos(angle)) < 1e-8
+                  && std::abs(loadedMatrix.TranslationPart().X() - 11.0) < 1e-12
+                  && std::abs(loadedMatrix.TranslationPart().Y() + 4.0) < 1e-12
+                  && std::abs(loadedMatrix.TranslationPart().Z() - 7.0) < 1e-12,
+              "rotated placement roundtrip");
         editable->setNumericProperty("width", 50);
         editable->setNumericProperty("depth", 30);
         editable->setNumericProperty("height", 40);

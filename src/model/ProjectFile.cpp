@@ -13,6 +13,10 @@
 #include <QJsonObject>
 #include <QSaveFile>
 #include <Standard_Failure.hxx>
+#include <gp_Mat.hxx>
+#include <gp_Quaternion.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 #include <cmath>
 #include <functional>
 #include <stdexcept>
@@ -72,6 +76,44 @@ std::vector<int> positiveIntegers(const QJsonObject& o, const char* key)
         result.push_back(value.toInt());
     }
     return result;
+}
+
+gp_Trsf rigidPlacement(const double* values)
+{
+    // Placements are JSON doubles, and hand/generated files may round matrix
+    // coefficients to a fixed number of decimal places. Keep the tolerance
+    // large enough for that serialization noise, while still rejecting real
+    // scale or shear components.
+    constexpr double tolerance = 1.0e-8;
+    const gp_Mat rotation(
+        values[0], values[1], values[2],
+        values[4], values[5], values[6],
+        values[8], values[9], values[10]);
+
+    const auto rowDot = [&rotation](const int first, const int second) {
+        return rotation.Value(first, 1) * rotation.Value(second, 1)
+            + rotation.Value(first, 2) * rotation.Value(second, 2)
+            + rotation.Value(first, 3) * rotation.Value(second, 3);
+    };
+    for (int row = 1; row <= 3; ++row) {
+        if (std::abs(rowDot(row, row) - 1.0) > tolerance) {
+            throw std::invalid_argument("Feature placement is not a rigid rotation");
+        }
+        for (int other = row + 1; other <= 3; ++other) {
+            if (std::abs(rowDot(row, other)) > tolerance) {
+                throw std::invalid_argument("Feature placement is not a rigid rotation");
+            }
+        }
+    }
+    if (std::abs(rotation.Determinant() - 1.0) > tolerance) {
+        throw std::invalid_argument("Feature placement is not a rigid rotation");
+    }
+
+    gp_Trsf placement;
+    placement.SetTransformation(
+        gp_Quaternion(rotation),
+        gp_Vec(values[3], values[7], values[11]));
+    return placement;
 }
 
 std::vector<cad::topology::TopologicalReference> topologicalReferences(
@@ -391,13 +433,7 @@ ParametricFeature::Ptr decode(const QJsonObject& o, const Body& body)
                     "Invalid feature placement value");
             matrix[index] = values.at(index).toDouble();
         }
-        gp_Trsf placement;
-        placement.SetValues(
-            matrix[0], matrix[1], matrix[2], matrix[3],
-            matrix[4], matrix[5], matrix[6], matrix[7],
-            matrix[8], matrix[9], matrix[10], matrix[11]
-        );
-        feature->setPlacement(placement);
+        feature->setPlacement(rigidPlacement(matrix));
     }
     feature->setName(string(o, "name"));
     if (o.contains("visible")) feature->setUserVisible(boolean(o, "visible"));
