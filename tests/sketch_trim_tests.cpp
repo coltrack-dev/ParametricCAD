@@ -5,13 +5,24 @@
 
 #include <cassert>
 #include <cmath>
+#include <iostream>
 #include <QTemporaryDir>
+
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 
 using namespace cad::parametric;
 using cad::operations::SketchTrimService;
 
 namespace {
 bool near(const double a, const double b) { return std::abs(a - b) < 1.0e-6; }
+
+double volumeOf(const TopoDS_Shape& shape)
+{
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(shape, props);
+    return props.Mass();
+}
 
 void lineTrim()
 {
@@ -492,6 +503,8 @@ void tangentAndEqualConstraints()
     const auto lineId = std::get<SketchLine>(sketch->entities()[0]).id;
     const auto circleId = std::get<SketchCircle>(sketch->entities()[1]).id;
     assert(controller.addSketchTangent(sketchResult.id, lineId, circleId).success);
+    assert(controller.body().recompute());
+    assert(!sketch->shape().IsNull());
     const auto& tangentLine = std::get<SketchLine>(sketch->entities()[0]);
     const gp_Vec2d tangentDirection(tangentLine.start, tangentLine.end);
     const gp_Vec2d toCenter(tangentLine.start, {0, 0});
@@ -511,6 +524,149 @@ void tangentAndEqualConstraints()
     equal.undo();
     equal.redo();
     assert(std::abs(std::get<SketchCircle>(equalFeature->entities()[1]).radius - 5.0) < 1.0e-7);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("tangent-equal.pcad");
+    assert(ProjectFile::save(path, controller.document(), controller.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedTangent = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(sketchResult.id));
+    assert(loadedTangent && loadedTangent->constraintCount() == 1
+        && std::holds_alternative<TangentConstraint>(loadedTangent->constraints().front()));
+    assert(std::visit([](const auto& value) { return value.id; }, loadedTangent->entities().front())
+        == std::visit([](const auto& value) { return value.id; }, sketch->entities().front()));
+    assert(loadedBody.recompute());
+    assert(ProjectFile::save(path, equal.document(), equal.body(), error));
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedEqual = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(equalSketch.id));
+    assert(loadedEqual && loadedEqual->constraintCount() == 1
+        && std::holds_alternative<EqualConstraint>(loadedEqual->constraints().front()));
+}
+
+void equalRadiusDownstreamRegression()
+{
+    cad::application::ModelingController controller;
+    const auto sketchResult = controller.createSketch();
+    assert(sketchResult.success);
+    const auto add = [&controller, &sketchResult](gp_Pnt2d a, gp_Pnt2d b) {
+        return controller.addSketchLine(sketchResult.id, a, b).success;
+    };
+    assert(add({-20, -20}, {20, -20}));
+    assert(add({20, -20}, {20, 20}));
+    assert(add({20, 20}, {-20, 20}));
+    assert(add({-20, 20}, {-20, -20}));
+    assert(controller.addSketchCircle(sketchResult.id, {-10, 0}, 5.0).success);
+    assert(controller.addSketchCircle(sketchResult.id, {10, 0}, 7.0).success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(controller.body().findFeature(sketchResult.id));
+    const auto first = std::get<SketchCircle>(sketch->entities()[4]).id;
+    const auto second = std::get<SketchCircle>(sketch->entities()[5]).id;
+    assert(controller.addSketchRadius(sketchResult.id, first, 5.0).success);
+    assert(controller.addSketchEqual(sketchResult.id, first, second).success);
+    const auto extrude = controller.createExtrudeFromSketch({{
+        {sketchResult.id, cad::application::SelectionKind::Object, std::nullopt}}}, 10.0);
+    assert(extrude.success);
+    auto feature = controller.body().findFeature(extrude.id);
+    assert(feature && feature->state() == FeatureState::UpToDate && !feature->shape().IsNull());
+    const double initialVolume = volumeOf(feature->shape());
+    const auto radiusId = std::get<RadiusConstraint>(sketch->constraints().front()).id;
+    assert(controller.updateSketchRadius(sketchResult.id, radiusId, 8.0).success);
+    if (!controller.body().recompute()) {
+        std::cerr << "equal radius recompute failed: " << feature->error() << "\n";
+        assert(false);
+    }
+    assert(std::abs(std::get<SketchCircle>(sketch->entities()[4]).radius - 8.0) < 1.0e-7);
+    assert(std::abs(std::get<SketchCircle>(sketch->entities()[5]).radius - 8.0) < 1.0e-7);
+    const double updatedVolume = volumeOf(feature->shape());
+    assert(updatedVolume < initialVolume);
+    controller.undo();
+    assert(controller.body().recompute());
+    assert(std::abs(volumeOf(feature->shape()) - initialVolume) < 1.0e-6);
+    controller.redo();
+    assert(controller.body().recompute());
+    assert(std::abs(volumeOf(feature->shape()) - updatedVolume) < 1.0e-6);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("equal-radius-extrude.pcad");
+    assert(ProjectFile::save(path, controller.document(), controller.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(sketchResult.id));
+    const auto loadedExtrude = loadedBody.findFeature(extrude.id);
+    assert(loadedSketch && loadedExtrude && loadedSketch->constraintCount() == 2);
+    assert(!loadedExtrude->shape().IsNull() && std::abs(volumeOf(loadedExtrude->shape()) - updatedVolume) < 1.0e-6);
+}
+
+void equalLengthDownstreamRegression()
+{
+    cad::application::ModelingController controller;
+    const auto sketchResult = controller.createSketch();
+    assert(sketchResult.success);
+    const auto add = [&controller, &sketchResult](gp_Pnt2d a, gp_Pnt2d b) {
+        return controller.addSketchLine(sketchResult.id, a, b).success;
+    };
+    assert(add({0, 20}, {40, 20}));
+    assert(add({40, 20}, {40, 0}));
+    assert(add({40, 0}, {0, 0}));
+    assert(add({0, 0}, {0, 20}));
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(controller.body().findFeature(sketchResult.id));
+    const auto top = std::get<SketchLine>(sketch->entities()[0]).id;
+    const auto right = std::get<SketchLine>(sketch->entities()[1]).id;
+    const auto bottom = std::get<SketchLine>(sketch->entities()[2]).id;
+    const auto left = std::get<SketchLine>(sketch->entities()[3]).id;
+    assert(controller.addSketchCoincident(sketchResult.id,
+        {top, SketchPointRole::LineEnd}, {right, SketchPointRole::LineStart}).success);
+    assert(controller.addSketchCoincident(sketchResult.id,
+        {right, SketchPointRole::LineEnd}, {bottom, SketchPointRole::LineStart}).success);
+    assert(controller.addSketchCoincident(sketchResult.id,
+        {bottom, SketchPointRole::LineEnd}, {left, SketchPointRole::LineStart}).success);
+    assert(controller.addSketchCoincident(sketchResult.id,
+        {left, SketchPointRole::LineEnd}, {top, SketchPointRole::LineStart}).success);
+    assert(controller.addSketchDistance(sketchResult.id, top, 40.0).success);
+    assert(controller.addSketchEqual(sketchResult.id, top, bottom).success);
+    const auto extrude = controller.createExtrudeFromSketch({{
+        {sketchResult.id, cad::application::SelectionKind::Object, std::nullopt}}}, 10.0);
+    assert(extrude.success);
+    auto feature = controller.body().findFeature(extrude.id);
+    assert(feature && feature->state() == FeatureState::UpToDate && !feature->shape().IsNull());
+    const double initialVolume = volumeOf(feature->shape());
+    const auto distanceId = std::find_if(sketch->constraints().begin(), sketch->constraints().end(),
+        [](const auto& item) { return std::holds_alternative<DistanceConstraint>(item); });
+    assert(distanceId != sketch->constraints().end());
+    const auto id = std::get<DistanceConstraint>(*distanceId).id;
+    assert(controller.updateSketchDistance(sketchResult.id, id, 60.0).success);
+    assert(controller.body().recompute());
+    assert(near(std::get<SketchLine>(sketch->entities()[0]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[0]).end), 60.0));
+    assert(near(std::get<SketchLine>(sketch->entities()[2]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[2]).end), 60.0));
+    const double updatedVolume = volumeOf(feature->shape());
+    assert(std::abs(updatedVolume - initialVolume) > 1.0e-6);
+    controller.undo();
+    assert(controller.body().recompute());
+    assert(std::abs(volumeOf(feature->shape()) - initialVolume) < 1.0e-6);
+    controller.redo();
+    assert(controller.body().recompute());
+    assert(std::abs(volumeOf(feature->shape()) - updatedVolume) < 1.0e-6);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("equal-length-extrude.pcad");
+    assert(ProjectFile::save(path, controller.document(), controller.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(sketchResult.id));
+    const auto loadedFeature = loadedBody.findFeature(extrude.id);
+    assert(loadedSketch && loadedFeature && !loadedFeature->shape().IsNull());
+    assert(loadedSketch->constraintCount() == sketch->constraintCount());
+    assert(std::abs(volumeOf(loadedFeature->shape()) - updatedVolume) < 1.0e-6);
 }
 
 void arcTrim()
@@ -654,6 +810,8 @@ int main()
     parallelAndPerpendicularConstraints();
     angleBetweenLinesConstraints();
     tangentAndEqualConstraints();
+    equalRadiusDownstreamRegression();
+    equalLengthDownstreamRegression();
     arcTrim();
     circleTrim();
     intersectionMatrix();

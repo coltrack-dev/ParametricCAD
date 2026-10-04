@@ -1053,6 +1053,8 @@ with all parameters and dependencies intact.
 
 ## Sketch constraints (MVP)
 
+**Sketch MVP: COMPLETE WITH KNOWN LIMITATIONS.**
+
 Sketch constraints are stored by stable entity and constraint IDs and are solved by
 the single `SketchConstraintSolver` in local 2D coordinates. The supported relations
 include coincident, horizontal/vertical, dimensional and angular relations,
@@ -1075,3 +1077,13 @@ the same stable constraint ID in the Constraint Manager. Hover state never mutat
 the model and is cleared when the marker, tool, or sketch changes; selection highlight
 remains independent. Equal accepts Line/Line length pairs and Circle/Arc radius pairs.
 Tangent currently supports Line to Circle or Arc only.
+
+Verified downstream chains in the integration suite include Tangent Sketch build/
+re-solve/Save/Load, Equal Length → Extrude, and Equal Radius → Extrude, including
+recompute, Undo/Redo, and persistence. Tangent uses deterministic `Line.start`
+anchor semantics; some closed-profile constructions therefore require additional
+positional constraints and cannot be formed by Tangent alone.
+
+Known post-MVP limitations: approximate DOF analysis, no full nonlinear solver,
+no curve-to-curve Tangent, Symmetry or Fix constraints, no spline/ellipse
+constraints, and no full drafting dimension arrows.
