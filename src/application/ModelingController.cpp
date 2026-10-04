@@ -206,8 +206,12 @@ ModelingResult ModelingController::extendSketchEntity(const std::string& sketchI
         const bool dimensional = std::visit([&](const auto& item) {
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, cad::parametric::DistanceConstraint>
-                || std::is_same_v<T, cad::parametric::RadiusConstraint>)
+                || std::is_same_v<T, cad::parametric::RadiusConstraint>
+                || std::is_same_v<T, cad::parametric::AngleConstraint>)
                 return item.entityId == targetId;
+            else if constexpr (std::is_same_v<T, cad::parametric::HorizontalDistanceConstraint>
+                || std::is_same_v<T, cad::parametric::VerticalDistanceConstraint>)
+                return item.first.entityId == targetId || item.second.entityId == targetId;
             return false;
         }, constraint);
         if (dimensional)
@@ -367,6 +371,49 @@ ModelingResult ModelingController::addSketchRadius(
         cad::parametric::RadiusConstraint{entityId, value, {}});
 }
 
+ModelingResult addPointDistanceConstraint(
+    cad::parametric::Body& body, QUndoStack& stack, const std::string& sketchId,
+    const cad::parametric::SketchPointRef& first,
+    const cad::parametric::SketchPointRef& second, const double value, const bool horizontal)
+{
+    const auto sketch = sketchFor(body, sketchId);
+    if (!sketch || !hasEntity(*sketch, first.entityId) || !hasEntity(*sketch, second.entityId))
+        return {false, {}, "Distance constraint references missing entity"};
+    if (!std::isfinite(value)) return {false, {}, "Point distance must be finite"};
+    return pushConstraint(body, stack, sketch, horizontal
+        ? cad::parametric::SketchConstraint{cad::parametric::HorizontalDistanceConstraint{first, second, value, {}}}
+        : cad::parametric::SketchConstraint{cad::parametric::VerticalDistanceConstraint{first, second, value, {}}});
+}
+
+ModelingResult ModelingController::addSketchHorizontalDistance(
+    const std::string& sketchId, const cad::parametric::SketchPointRef& first,
+    const cad::parametric::SketchPointRef& second, const double value)
+{ return addPointDistanceConstraint(body_, undoStack_, sketchId, first, second, value, true); }
+
+ModelingResult ModelingController::addSketchVerticalDistance(
+    const std::string& sketchId, const cad::parametric::SketchPointRef& first,
+    const cad::parametric::SketchPointRef& second, const double value)
+{ return addPointDistanceConstraint(body_, undoStack_, sketchId, first, second, value, false); }
+
+ModelingResult ModelingController::addSketchAngle(
+    const std::string& sketchId, const std::string& lineId, const double radians,
+    const bool anchorStart)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !hasEntity(*sketch, lineId)) return {false, {}, "Sketch Line does not exist"};
+    const auto line = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+        [&lineId](const auto& entity) {
+            return std::visit([&](const auto& item) {
+                using T = std::decay_t<decltype(item)>;
+                return std::is_same_v<T, cad::parametric::SketchLine> && item.id == lineId;
+            }, entity);
+        });
+    if (line == sketch->entities().end()) return {false, {}, "Angle constraint requires a Line"};
+    if (!std::isfinite(radians)) return {false, {}, "Angle constraint must be finite"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::AngleConstraint{lineId, radians, anchorStart, {}});
+}
+
 namespace {
 ModelingResult updateDimensionalConstraint(
     cad::parametric::Body& body, QUndoStack& stack, const std::string& sketchId,
@@ -406,6 +453,60 @@ ModelingResult ModelingController::updateSketchDistance(
 ModelingResult ModelingController::updateSketchRadius(
     const std::string& sketchId, const std::string& constraintId, const double value)
 { return updateDimensionalConstraint(body_, undoStack_, sketchId, constraintId, value, true); }
+
+ModelingResult updatePointDistanceConstraint(
+    cad::parametric::Body& body, QUndoStack& stack, const std::string& sketchId,
+    const std::string& constraintId, const double value, const bool horizontal)
+{
+    const auto sketch = sketchFor(body, sketchId);
+    if (!sketch || !std::isfinite(value)) return {false, {}, "Point distance must be finite"};
+    auto before = sketch->constraints();
+    auto after = before;
+    bool found = false;
+    for (auto& constraint : after) {
+        if (horizontal) {
+            if (auto* item = std::get_if<cad::parametric::HorizontalDistanceConstraint>(&constraint);
+                item && item->id == constraintId) { item->value = value; found = true; }
+        } else if (auto* item = std::get_if<cad::parametric::VerticalDistanceConstraint>(&constraint);
+                   item && item->id == constraintId) { item->value = value; found = true; }
+    }
+    if (!found) return {false, {}, "Point distance constraint does not exist"};
+    const auto solved = cad::operations::SketchConstraintSolver::solve(sketch->entities(), after);
+    if (solved.status != cad::operations::SolveStatus::Solved) return {false, {}, solved.error};
+    try {
+        stack.push(new cad::commands::UpdateSketchConstraintCommand(
+            body, sketch, sketch->entities(), solved.entities, before, after));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) { return failure(error); }
+}
+
+ModelingResult ModelingController::updateSketchHorizontalDistance(
+    const std::string& sketchId, const std::string& constraintId, const double value)
+{ return updatePointDistanceConstraint(body_, undoStack_, sketchId, constraintId, value, true); }
+
+ModelingResult ModelingController::updateSketchVerticalDistance(
+    const std::string& sketchId, const std::string& constraintId, const double value)
+{ return updatePointDistanceConstraint(body_, undoStack_, sketchId, constraintId, value, false); }
+
+ModelingResult ModelingController::updateSketchAngle(
+    const std::string& sketchId, const std::string& constraintId, const double radians)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !std::isfinite(radians)) return {false, {}, "Angle constraint must be finite"};
+    auto before = sketch->constraints();
+    auto after = before;
+    bool found = false;
+    for (auto& constraint : after) if (auto* item = std::get_if<cad::parametric::AngleConstraint>(&constraint);
+        item && item->id == constraintId) { item->radians = radians; found = true; }
+    if (!found) return {false, {}, "Angle constraint does not exist"};
+    const auto solved = cad::operations::SketchConstraintSolver::solve(sketch->entities(), after);
+    if (solved.status != cad::operations::SolveStatus::Solved) return {false, {}, solved.error};
+    try {
+        undoStack_.push(new cad::commands::UpdateSketchConstraintCommand(
+            body_, sketch, sketch->entities(), solved.entities, before, after));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) { return failure(error); }
+}
 
 ModelingResult ModelingController::removeSketchConstraint(
     const std::string& sketchId, const std::string& constraintId)

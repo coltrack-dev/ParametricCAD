@@ -117,7 +117,10 @@ MainWindow::MainWindow(QWidget* parent)
                 || sketchTool_ == SketchTool::Horizontal
                 || sketchTool_ == SketchTool::Vertical
                 || sketchTool_ == SketchTool::Distance
-                || sketchTool_ == SketchTool::Radius) selectSketchLineTool();
+                || sketchTool_ == SketchTool::Radius
+                || sketchTool_ == SketchTool::HorizontalDistance
+                || sketchTool_ == SketchTool::VerticalDistance
+                || sketchTool_ == SketchTool::Angle) selectSketchLineTool();
             constraintFirstPoint_.reset();
         });
     viewer_->setSketchConstraintMarkerClickedHandler(
@@ -247,6 +250,21 @@ void MainWindow::refreshConstraintManager()
             item.label = QString("Radius  %1 = %2")
                 .arg(QString::fromStdString(value->entityId)).arg(value->value, 0, 'f', 2);
             item.editable = true;
+        } else if (const auto* value = std::get_if<cad::parametric::HorizontalDistanceConstraint>(&constraint)) {
+            item.label = QString("X Distance  %1 → %2 = %3")
+                .arg(QString::fromStdString(value->first.entityId),
+                     QString::fromStdString(value->second.entityId)).arg(value->value, 0, 'f', 2);
+            item.editable = true;
+        } else if (const auto* value = std::get_if<cad::parametric::VerticalDistanceConstraint>(&constraint)) {
+            item.label = QString("Y Distance  %1 → %2 = %3")
+                .arg(QString::fromStdString(value->first.entityId),
+                     QString::fromStdString(value->second.entityId)).arg(value->value, 0, 'f', 2);
+            item.editable = true;
+        } else if (const auto* value = std::get_if<cad::parametric::AngleConstraint>(&constraint)) {
+            item.label = QString("Angle  %1 = %2°")
+                .arg(QString::fromStdString(value->entityId))
+                .arg(value->radians * 180.0 / 3.14159265358979323846, 0, 'f', 2);
+            item.editable = true;
         }
         item.label += status;
         items.push_back(std::move(item));
@@ -284,16 +302,27 @@ void MainWindow::editSketchConstraint(const QString& constraintId)
         if (std::visit([&](const auto& value) { return value.id == constraintId.toStdString(); }, constraint)) {
             const auto* distance = std::get_if<cad::parametric::DistanceConstraint>(&constraint);
             const auto* radius = std::get_if<cad::parametric::RadiusConstraint>(&constraint);
-            if (!distance && !radius) return;
+            const auto* horizontalDistance = std::get_if<cad::parametric::HorizontalDistanceConstraint>(&constraint);
+            const auto* verticalDistance = std::get_if<cad::parametric::VerticalDistanceConstraint>(&constraint);
+            const auto* angle = std::get_if<cad::parametric::AngleConstraint>(&constraint);
+            if (!distance && !radius && !horizontalDistance && !verticalDistance && !angle) return;
             bool ok = false;
-            const double current = distance ? distance->value : radius->value;
+            const double current = distance ? distance->value : radius ? radius->value
+                : horizontalDistance ? horizontalDistance->value : verticalDistance ? verticalDistance->value
+                : angle->radians * 180.0 / 3.14159265358979323846;
             const double value = QInputDialog::getDouble(this,
-                distance ? "Distance constraint" : "Radius constraint",
-                "Value:", current, 0.001, 1.0e6, 3, &ok);
+                distance || horizontalDistance || verticalDistance ? "Distance constraint"
+                    : angle ? "Angle constraint" : "Radius constraint",
+                "Value:", current,
+                angle ? -360.0 : horizontalDistance || verticalDistance ? -1.0e6 : 0.001,
+                1.0e6, 3, &ok);
             if (!ok) return;
-            const auto result = distance
-                ? modeling_.updateSketchDistance(activeSketchId_, constraintId.toStdString(), value)
-                : modeling_.updateSketchRadius(activeSketchId_, constraintId.toStdString(), value);
+            cad::application::ModelingResult result;
+            if (distance) result = modeling_.updateSketchDistance(activeSketchId_, constraintId.toStdString(), value);
+            else if (radius) result = modeling_.updateSketchRadius(activeSketchId_, constraintId.toStdString(), value);
+            else if (horizontalDistance) result = modeling_.updateSketchHorizontalDistance(activeSketchId_, constraintId.toStdString(), value);
+            else if (verticalDistance) result = modeling_.updateSketchVerticalDistance(activeSketchId_, constraintId.toStdString(), value);
+            else result = modeling_.updateSketchAngle(activeSketchId_, constraintId.toStdString(), value * 3.14159265358979323846 / 180.0);
             if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
             else { selectedConstraintId_ = constraintId; refreshModelView(false); }
             return;
@@ -483,6 +512,15 @@ void MainWindow::createActions()
     sketchRadiusAction_ = modelingMenu->addAction("Radius");
     sketchRadiusAction_->setEnabled(false);
     connect(sketchRadiusAction_, &QAction::triggered, this, &MainWindow::selectSketchRadiusTool);
+    sketchHorizontalDistanceAction_ = modelingMenu->addAction("Horizontal Distance");
+    sketchHorizontalDistanceAction_->setEnabled(false);
+    connect(sketchHorizontalDistanceAction_, &QAction::triggered, this, &MainWindow::selectSketchHorizontalDistanceTool);
+    sketchVerticalDistanceAction_ = modelingMenu->addAction("Vertical Distance");
+    sketchVerticalDistanceAction_->setEnabled(false);
+    connect(sketchVerticalDistanceAction_, &QAction::triggered, this, &MainWindow::selectSketchVerticalDistanceTool);
+    sketchAngleAction_ = modelingMenu->addAction("Angle");
+    sketchAngleAction_->setEnabled(false);
+    connect(sketchAngleAction_, &QAction::triggered, this, &MainWindow::selectSketchAngleTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -598,6 +636,9 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchVerticalAction_->setEnabled(true);
         sketchDistanceAction_->setEnabled(true);
         sketchRadiusAction_->setEnabled(true);
+        sketchHorizontalDistanceAction_->setEnabled(true);
+        sketchVerticalDistanceAction_->setEnabled(true);
+        sketchAngleAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         refreshConstraintManager();
         updateActionState();
@@ -627,6 +668,9 @@ void MainWindow::finishSketch()
     sketchVerticalAction_->setEnabled(false);
     sketchDistanceAction_->setEnabled(false);
     sketchRadiusAction_->setEnabled(false);
+    sketchHorizontalDistanceAction_->setEnabled(false);
+    sketchVerticalDistanceAction_->setEnabled(false);
+    sketchAngleAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
     statusBar()->showMessage("Ready");
@@ -725,6 +769,30 @@ void MainWindow::selectSketchRadiusTool()
     statusBar()->showMessage("Radius: click a Circle or Arc");
 }
 
+void MainWindow::selectSketchHorizontalDistanceTool()
+{
+    sketchTool_ = SketchTool::HorizontalDistance;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Horizontal Distance: click two points");
+}
+
+void MainWindow::selectSketchVerticalDistanceTool()
+{
+    sketchTool_ = SketchTool::VerticalDistance;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Vertical Distance: click two points");
+}
+
+void MainWindow::selectSketchAngleTool()
+{
+    sketchTool_ = SketchTool::Angle;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Angle: click a Line");
+}
+
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
@@ -754,6 +822,43 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
         const auto result = modeling_.addSketchCoincident(
             activeSketchId_, *constraintFirstPoint_, *pointRef);
         constraintFirstPoint_.reset();
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
+    if (sketchTool_ == SketchTool::HorizontalDistance
+        || sketchTool_ == SketchTool::VerticalDistance) {
+        const auto pointRef = cad::operations::SketchConstraintSolver::pointAt(
+            sketch->entities(), point, hitTolerance);
+        if (!pointRef) { statusBar()->showMessage("Select a sketch point", 2000); return; }
+        if (!constraintFirstPoint_) {
+            constraintFirstPoint_ = pointRef;
+            statusBar()->showMessage("Select second point");
+            return;
+        }
+        bool ok = false;
+        const double value = QInputDialog::getDouble(this,
+            sketchTool_ == SketchTool::HorizontalDistance ? "Horizontal distance" : "Vertical distance",
+            "Value:", 10.0, -1.0e6, 1.0e6, 3, &ok);
+        if (!ok) return;
+        const auto result = sketchTool_ == SketchTool::HorizontalDistance
+            ? modeling_.addSketchHorizontalDistance(activeSketchId_, *constraintFirstPoint_, *pointRef, value)
+            : modeling_.addSketchVerticalDistance(activeSketchId_, *constraintFirstPoint_, *pointRef, value);
+        constraintFirstPoint_.reset();
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
+    if (sketchTool_ == SketchTool::Angle) {
+        const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
+            sketch->entities(), point, hitTolerance);
+        if (!lineId) { statusBar()->showMessage("Select a Line", 2000); return; }
+        bool ok = false;
+        const double degrees = QInputDialog::getDouble(this, "Angle constraint",
+            "Degrees:", 45.0, -360.0, 360.0, 3, &ok);
+        if (!ok) return;
+        const auto result = modeling_.addSketchAngle(activeSketchId_, *lineId,
+            degrees * 3.14159265358979323846 / 180.0);
         if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
         else refreshModelView(false);
         return;

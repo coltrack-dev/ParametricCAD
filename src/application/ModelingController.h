@@ -55,10 +55,25 @@ public:
                                      bool anchorStart = true);
     ModelingResult addSketchRadius(const std::string& sketchId,
                                    const std::string& entityId, double value);
+    ModelingResult addSketchHorizontalDistance(
+        const std::string& sketchId, const cad::parametric::SketchPointRef& first,
+        const cad::parametric::SketchPointRef& second, double value);
+    ModelingResult addSketchVerticalDistance(
+        const std::string& sketchId, const cad::parametric::SketchPointRef& first,
+        const cad::parametric::SketchPointRef& second, double value);
+    ModelingResult addSketchAngle(const std::string& sketchId,
+                                  const std::string& lineId, double radians,
+                                  bool anchorStart = true);
     ModelingResult updateSketchDistance(const std::string& sketchId,
                                         const std::string& constraintId, double value);
     ModelingResult updateSketchRadius(const std::string& sketchId,
                                       const std::string& constraintId, double value);
+    ModelingResult updateSketchHorizontalDistance(const std::string& sketchId,
+                                                  const std::string& constraintId, double value);
+    ModelingResult updateSketchVerticalDistance(const std::string& sketchId,
+                                                const std::string& constraintId, double value);
+    ModelingResult updateSketchAngle(const std::string& sketchId,
+                                     const std::string& constraintId, double radians);
     ModelingResult removeSketchConstraint(const std::string& sketchId,
                                           const std::string& constraintId);
     ModelingResult createPrimitive(PrimitiveKind kind) override;

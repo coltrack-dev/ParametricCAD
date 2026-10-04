@@ -161,6 +161,21 @@ std::vector<SketchConstraint> sketchConstraints(const QJsonObject& object)
         } else if (type == "Radius") {
             result.push_back(RadiusConstraint{string(constraint, "entityId"),
                 number(constraint, "value"), constraint.value("id").toString().toStdString()});
+        } else if (type == "HorizontalDistance" || type == "VerticalDistance") {
+            const SketchPointRef first{string(constraint, "firstEntityId"),
+                pointRole(string(constraint, "firstRole"))};
+            const SketchPointRef second{string(constraint, "secondEntityId"),
+                pointRole(string(constraint, "secondRole"))};
+            if (type == "HorizontalDistance")
+                result.push_back(HorizontalDistanceConstraint{first, second, number(constraint, "value"),
+                    constraint.value("id").toString().toStdString()});
+            else
+                result.push_back(VerticalDistanceConstraint{first, second, number(constraint, "value"),
+                    constraint.value("id").toString().toStdString()});
+        } else if (type == "Angle") {
+            result.push_back(AngleConstraint{string(constraint, "entityId"),
+                number(constraint, "valueRadians"), boolean(constraint, "anchorStart"),
+                constraint.value("id").toString().toStdString()});
         } else {
             throw std::invalid_argument("Unsupported Sketch constraint type");
         }

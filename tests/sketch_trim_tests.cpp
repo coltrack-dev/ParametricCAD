@@ -297,6 +297,68 @@ void dimensionalConstraintsSolveUndoAndPersist()
     assert(downstreamFeature->state() == FeatureState::UpToDate);
 }
 
+void positionalAndAngleConstraints()
+{
+    cad::application::ModelingController controller;
+    const auto sketchResult = controller.createSketch();
+    assert(sketchResult.success);
+    assert(controller.addSketchLine(sketchResult.id, {0, 0}, {10, 0}).success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+        controller.body().findFeature(sketchResult.id));
+    assert(sketch);
+    const auto lineId = std::get<SketchLine>(sketch->entities().front()).id;
+    assert(controller.addSketchDistance(sketchResult.id, lineId, 50.0).success);
+    assert(controller.addSketchAngle(sketchResult.id, lineId, 30.0 * 3.14159265358979323846 / 180.0).success);
+    const auto& lineAtThirty = std::get<SketchLine>(sketch->entities().front());
+    assert(std::abs(lineAtThirty.start.Distance(lineAtThirty.end) - 50.0) < 1.0e-7);
+    assert(std::abs(std::atan2(lineAtThirty.end.Y() - lineAtThirty.start.Y(),
+        lineAtThirty.end.X() - lineAtThirty.start.X()) - 30.0 * 3.14159265358979323846 / 180.0) < 1.0e-7);
+    const auto angleId = std::get<cad::parametric::AngleConstraint>(sketch->constraints().back()).id;
+    assert(controller.updateSketchAngle(sketchResult.id, angleId,
+        60.0 * 3.14159265358979323846 / 180.0).success);
+    assert(std::abs(std::get<SketchLine>(sketch->entities().front()).start.Distance(
+        std::get<SketchLine>(sketch->entities().front()).end) - 50.0) < 1.0e-7);
+    const auto distanceId = std::get<cad::parametric::DistanceConstraint>(sketch->constraints().front()).id;
+    assert(controller.updateSketchDistance(sketchResult.id, distanceId, 80.0).success);
+    assert(std::abs(std::get<SketchLine>(sketch->entities().front()).start.Distance(
+        std::get<SketchLine>(sketch->entities().front()).end) - 80.0) < 1.0e-7);
+    assert(std::abs(std::atan2(std::get<SketchLine>(sketch->entities().front()).end.Y(),
+        std::get<SketchLine>(sketch->entities().front()).end.X()) - 60.0 * 3.14159265358979323846 / 180.0) < 1.0e-7);
+    controller.undo();
+    assert(std::abs(std::get<SketchLine>(sketch->entities().front()).start.Distance(
+        std::get<SketchLine>(sketch->entities().front()).end) - 50.0) < 1.0e-7);
+    controller.redo();
+
+    cad::application::ModelingController positioning;
+    const auto positioned = positioning.createSketch();
+    assert(positioned.success);
+    assert(positioning.addSketchLine(positioned.id, {0, 0}, {0, 0.1}).success);
+    assert(positioning.addSketchCircle(positioned.id, {5, 5}, 10.0).success);
+    auto positionedSketch = std::dynamic_pointer_cast<SketchFeature>(
+        positioning.body().findFeature(positioned.id));
+    const auto referenceId = std::get<SketchLine>(positionedSketch->entities()[0]).id;
+    const auto circleId = std::get<SketchCircle>(positionedSketch->entities()[1]).id;
+    const cad::parametric::SketchPointRef reference{referenceId, cad::parametric::SketchPointRole::LineStart};
+    const cad::parametric::SketchPointRef center{circleId, cad::parametric::SketchPointRole::CircleCenter};
+    assert(positioning.addSketchHorizontalDistance(positioned.id, reference, center, 30.0).success);
+    assert(positioning.addSketchVerticalDistance(positioned.id, reference, center, 20.0).success);
+    const auto& positionedCircle = std::get<SketchCircle>(positionedSketch->entities()[1]);
+    assert(std::abs(positionedCircle.center.X() - 30.0) < 1.0e-7);
+    assert(std::abs(positionedCircle.center.Y() - 20.0) < 1.0e-7);
+    assert(!positioning.addSketchHorizontalDistance(positioned.id, reference, center, 40.0).success);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("positional-constraints.pcad");
+    assert(ProjectFile::save(path, positioning.document(), positioning.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loaded = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(positioned.id));
+    assert(loaded && loaded->constraintCount() == 2);
+}
+
 void arcTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
@@ -434,6 +496,7 @@ int main()
     extendClosesExtrudeProfile();
     constraintsSolveUndoAndPersist();
     dimensionalConstraintsSolveUndoAndPersist();
+    positionalAndAngleConstraints();
     arcTrim();
     circleTrim();
     intersectionMatrix();

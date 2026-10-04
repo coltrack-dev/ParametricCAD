@@ -643,6 +643,10 @@ void CadViewer::setSketchConstraintMarkers(
             return ref.role == cad::parametric::SketchPointRole::LineStart ? line->start : line->end;
         if (const auto* arc = std::get_if<cad::parametric::SketchArc>(entity))
             return ref.role == cad::parametric::SketchPointRole::ArcStart ? arc->startPoint() : arc->endPoint();
+        if (const auto* circle = std::get_if<cad::parametric::SketchCircle>(entity))
+            if (ref.role == cad::parametric::SketchPointRole::CircleCenter) return circle->center;
+        if (const auto* arc = std::get_if<cad::parametric::SketchArc>(entity))
+            if (ref.role == cad::parametric::SketchPointRole::ArcCenter) return arc->center;
         return std::nullopt;
     };
     for (const auto& constraint : sketch.constraints()) {
@@ -691,6 +695,21 @@ void CadViewer::setSketchConstraintMarkers(
                 }
             }
             text = "R " + std::to_string(item->value);
+        } else if (const auto* item = std::get_if<cad::parametric::HorizontalDistanceConstraint>(&constraint)) {
+            const auto a = point(item->first); const auto b = point(item->second);
+            if (a && b) { position = gp_Pnt2d((a->X() + b->X()) * 0.5, (a->Y() + b->Y()) * 0.5 + 3.0); valid = true; }
+            text = "X " + std::to_string(item->value);
+        } else if (const auto* item = std::get_if<cad::parametric::VerticalDistanceConstraint>(&constraint)) {
+            const auto a = point(item->first); const auto b = point(item->second);
+            if (a && b) { position = gp_Pnt2d((a->X() + b->X()) * 0.5 + 3.0, (a->Y() + b->Y()) * 0.5); valid = true; }
+            text = "Y " + std::to_string(item->value);
+        } else if (const auto* item = std::get_if<cad::parametric::AngleConstraint>(&constraint)) {
+            const auto* entity = find(item->entityId);
+            if (entity) if (const auto* line = std::get_if<cad::parametric::SketchLine>(entity)) {
+                position = gp_Pnt2d((line->start.X() + line->end.X()) * 0.5,
+                    (line->start.Y() + line->end.Y()) * 0.5 + 3.0); valid = true;
+            }
+            text = "A " + std::to_string(item->radians * 180.0 / 3.14159265358979323846);
         }
         if (!valid) continue;
         const auto constraintId = std::visit([](const auto& value) { return value.id; }, constraint);
@@ -725,6 +744,12 @@ void CadViewer::setSketchConstraintHighlight(
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, cad::parametric::CoincidentConstraint>) {
                 for (const auto& id : {item.a.entityId, item.b.entityId}) {
+                    for (const auto& entity : sketch.entities())
+                        if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
+                }
+            } else if constexpr (std::is_same_v<T, cad::parametric::HorizontalDistanceConstraint>
+                || std::is_same_v<T, cad::parametric::VerticalDistanceConstraint>) {
+                for (const auto& id : {item.first.entityId, item.second.entityId}) {
                     for (const auto& entity : sketch.entities())
                         if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
                 }

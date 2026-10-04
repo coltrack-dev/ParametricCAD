@@ -430,12 +430,34 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             value.insert("entityId", QString::fromStdString(distance->entityId));
             value.insert("value", distance->value);
             value.insert("anchorStart", distance->anchorStart);
-        } else {
-            const auto& radius = std::get<RadiusConstraint>(constraint);
+        } else if (const auto* radius = std::get_if<RadiusConstraint>(&constraint)) {
             value.insert("type", "Radius");
-            value.insert("id", QString::fromStdString(radius.id));
-            value.insert("entityId", QString::fromStdString(radius.entityId));
-            value.insert("value", radius.value);
+            value.insert("id", QString::fromStdString(radius->id));
+            value.insert("entityId", QString::fromStdString(radius->entityId));
+            value.insert("value", radius->value);
+        } else if (const auto* horizontalDistance = std::get_if<HorizontalDistanceConstraint>(&constraint)) {
+            value.insert("type", "HorizontalDistance");
+            value.insert("id", QString::fromStdString(horizontalDistance->id));
+            value.insert("firstEntityId", QString::fromStdString(horizontalDistance->first.entityId));
+            value.insert("firstRole", QString::fromStdString(pointRoleName(horizontalDistance->first.role)));
+            value.insert("secondEntityId", QString::fromStdString(horizontalDistance->second.entityId));
+            value.insert("secondRole", QString::fromStdString(pointRoleName(horizontalDistance->second.role)));
+            value.insert("value", horizontalDistance->value);
+        } else if (const auto* verticalDistance = std::get_if<VerticalDistanceConstraint>(&constraint)) {
+            value.insert("type", "VerticalDistance");
+            value.insert("id", QString::fromStdString(verticalDistance->id));
+            value.insert("firstEntityId", QString::fromStdString(verticalDistance->first.entityId));
+            value.insert("firstRole", QString::fromStdString(pointRoleName(verticalDistance->first.role)));
+            value.insert("secondEntityId", QString::fromStdString(verticalDistance->second.entityId));
+            value.insert("secondRole", QString::fromStdString(pointRoleName(verticalDistance->second.role)));
+            value.insert("value", verticalDistance->value);
+        } else {
+            const auto& angle = std::get<AngleConstraint>(constraint);
+            value.insert("type", "Angle");
+            value.insert("id", QString::fromStdString(angle.id));
+            value.insert("entityId", QString::fromStdString(angle.entityId));
+            value.insert("valueRadians", angle.radians);
+            value.insert("anchorStart", angle.anchorStart);
         }
         constraints.append(value);
     }
@@ -503,6 +525,12 @@ bool SketchFeature::hasConstraintsForEntity(const SketchEntityId& entityId) cons
             if (distance->entityId == entityId) return true;
         } else if (const auto* radius = std::get_if<RadiusConstraint>(&constraint)) {
             if (radius->entityId == entityId) return true;
+        } else if (const auto* horizontalDistance = std::get_if<HorizontalDistanceConstraint>(&constraint)) {
+            if (horizontalDistance->first.entityId == entityId || horizontalDistance->second.entityId == entityId) return true;
+        } else if (const auto* verticalDistance = std::get_if<VerticalDistanceConstraint>(&constraint)) {
+            if (verticalDistance->first.entityId == entityId || verticalDistance->second.entityId == entityId) return true;
+        } else if (const auto* angle = std::get_if<AngleConstraint>(&constraint)) {
+            if (angle->entityId == entityId) return true;
         }
     }
     return false;

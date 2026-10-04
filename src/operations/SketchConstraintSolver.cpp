@@ -7,6 +7,7 @@
 namespace cad::operations {
 namespace {
 constexpr double tolerance = 1.0e-7;
+constexpr double twoPi = 6.283185307179586476925286766559;
 
 cad::parametric::SketchEntity* findEntity(
     std::vector<cad::parametric::SketchEntity>& entities,
@@ -57,6 +58,38 @@ bool samePoint(const gp_Pnt2d& a, const gp_Pnt2d& b)
     return a.Distance(b) <= tolerance;
 }
 
+bool setAxisCoordinate(cad::parametric::SketchEntity& entity,
+                       const cad::parametric::SketchPointRole role,
+                       const gp_Pnt2d& point, const bool horizontal)
+{
+    if (auto* line = std::get_if<cad::parametric::SketchLine>(&entity)) {
+        gp_Pnt2d* target = nullptr;
+        if (role == cad::parametric::SketchPointRole::LineStart) target = &line->start;
+        if (role == cad::parametric::SketchPointRole::LineEnd) target = &line->end;
+        if (!target) return false;
+        if (horizontal) target->SetX(point.X()); else target->SetY(point.Y());
+        return true;
+    }
+    if (role == cad::parametric::SketchPointRole::CircleCenter) {
+        auto* circle = std::get_if<cad::parametric::SketchCircle>(&entity);
+        if (!circle) return false;
+        if (horizontal) circle->center.SetX(point.X()); else circle->center.SetY(point.Y());
+        return true;
+    }
+    if (role == cad::parametric::SketchPointRole::ArcCenter) {
+        auto* arc = std::get_if<cad::parametric::SketchArc>(&entity);
+        if (!arc) return false;
+        if (horizontal) arc->center.SetX(point.X()); else arc->center.SetY(point.Y());
+        return true;
+    }
+    return false;
+}
+
+std::string pointKey(const cad::parametric::SketchPointRef& ref)
+{
+    return ref.entityId + ":" + std::to_string(static_cast<int>(ref.role));
+}
+
 } // namespace
 
 SketchSolveResult SketchConstraintSolver::solve(
@@ -75,6 +108,58 @@ SketchSolveResult SketchConstraintSolver::solve(
                 result.status = SolveStatus::Failed;
                 result.error = "Coincident currently supports Line endpoints only";
                 return result;
+            }
+        }
+    }
+    std::unordered_map<std::string, double> horizontalDistances;
+    std::unordered_map<std::string, double> verticalDistances;
+    std::unordered_map<std::string, double> angles;
+    for (const auto& constraint : constraints) {
+        if (const auto* item = std::get_if<cad::parametric::HorizontalDistanceConstraint>(&constraint)) {
+            if (!std::isfinite(item->value)) {
+                result.status = SolveStatus::Failed; result.error = "Horizontal distance must be finite"; return result;
+            }
+            const auto key = pointKey(item->first) + "->" + pointKey(item->second);
+            const auto [it, inserted] = horizontalDistances.emplace(key, item->value);
+            if (!inserted && std::abs(it->second - item->value) > tolerance) {
+                result.status = SolveStatus::Failed; result.error = "Conflicting horizontal distance constraints"; return result;
+            }
+        } else if (const auto* item = std::get_if<cad::parametric::VerticalDistanceConstraint>(&constraint)) {
+            if (!std::isfinite(item->value)) {
+                result.status = SolveStatus::Failed; result.error = "Vertical distance must be finite"; return result;
+            }
+            const auto key = pointKey(item->first) + "->" + pointKey(item->second);
+            const auto [it, inserted] = verticalDistances.emplace(key, item->value);
+            if (!inserted && std::abs(it->second - item->value) > tolerance) {
+                result.status = SolveStatus::Failed; result.error = "Conflicting vertical distance constraints"; return result;
+            }
+        } else if (const auto* item = std::get_if<cad::parametric::AngleConstraint>(&constraint)) {
+            if (!std::isfinite(item->radians)) {
+                result.status = SolveStatus::Failed; result.error = "Angle constraint must be finite"; return result;
+            }
+            const auto [it, inserted] = angles.emplace(item->entityId, item->radians);
+            if (!inserted && std::abs(std::remainder(it->second - item->radians, twoPi)) > tolerance) {
+                result.status = SolveStatus::Failed; result.error = "Conflicting angle constraints"; return result;
+            }
+        }
+    }
+    for (const auto& constraint : constraints) {
+        const auto* angle = std::get_if<cad::parametric::AngleConstraint>(&constraint);
+        if (!angle) continue;
+        const auto* entity = findEntity(result.entities, angle->entityId);
+        const auto* line = entity ? std::get_if<cad::parametric::SketchLine>(entity) : nullptr;
+        if (!line) { result.status = SolveStatus::Failed; result.error = "Angle constraint requires a Line"; return result; }
+        for (const auto& other : constraints) {
+            const bool horizontal = std::get_if<cad::parametric::HorizontalConstraint>(&other)
+                && std::get<cad::parametric::HorizontalConstraint>(other).entityId == angle->entityId;
+            const bool vertical = std::get_if<cad::parametric::VerticalConstraint>(&other)
+                && std::get<cad::parametric::VerticalConstraint>(other).entityId == angle->entityId;
+            const double normalized = std::remainder(angle->radians, twoPi);
+            if (horizontal && std::abs(std::sin(normalized)) > tolerance) {
+                result.status = SolveStatus::Failed; result.error = "Angle conflicts with Horizontal constraint"; return result;
+            }
+            if (vertical && std::abs(std::cos(normalized)) > tolerance) {
+                result.status = SolveStatus::Failed; result.error = "Angle conflicts with Vertical constraint"; return result;
             }
         }
     }
@@ -183,6 +268,45 @@ SketchSolveResult SketchConstraintSolver::solve(
                 if (distance->anchorStart) {
                     if (!samePoint(line->end, solved)) { line->end = solved; changed = true; }
                 } else if (!samePoint(line->start, solved)) { line->start = solved; changed = true; }
+            } else if (const auto* horizontalDistance = std::get_if<cad::parametric::HorizontalDistanceConstraint>(&constraint)) {
+                auto* first = findEntity(result.entities, horizontalDistance->first.entityId);
+                auto* second = findEntity(result.entities, horizontalDistance->second.entityId);
+                const auto firstPoint = first ? pointValue(*first, horizontalDistance->first.role) : std::nullopt;
+                const auto secondPoint = second ? pointValue(*second, horizontalDistance->second.role) : std::nullopt;
+                if (!first || !second || !firstPoint || !secondPoint
+                    || !setAxisCoordinate(*second, horizontalDistance->second.role,
+                        {firstPoint->X() + horizontalDistance->value, secondPoint->Y()}, true)) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Invalid HorizontalDistance point reference";
+                    return result;
+                }
+                if (std::abs(secondPoint->X() - firstPoint->X() - horizontalDistance->value) > tolerance) changed = true;
+            } else if (const auto* verticalDistance = std::get_if<cad::parametric::VerticalDistanceConstraint>(&constraint)) {
+                auto* first = findEntity(result.entities, verticalDistance->first.entityId);
+                auto* second = findEntity(result.entities, verticalDistance->second.entityId);
+                const auto firstPoint = first ? pointValue(*first, verticalDistance->first.role) : std::nullopt;
+                const auto secondPoint = second ? pointValue(*second, verticalDistance->second.role) : std::nullopt;
+                if (!first || !second || !firstPoint || !secondPoint
+                    || !setAxisCoordinate(*second, verticalDistance->second.role,
+                        {secondPoint->X(), firstPoint->Y() + verticalDistance->value}, false)) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Invalid VerticalDistance point reference";
+                    return result;
+                }
+                if (std::abs(secondPoint->Y() - firstPoint->Y() - verticalDistance->value) > tolerance) changed = true;
+            } else if (const auto* angle = std::get_if<cad::parametric::AngleConstraint>(&constraint)) {
+                auto* entity = findEntity(result.entities, angle->entityId);
+                auto* line = entity ? std::get_if<cad::parametric::SketchLine>(entity) : nullptr;
+                if (!line) { result.status = SolveStatus::Failed; result.error = "Angle constraint requires a Line"; return result; }
+                const gp_Pnt2d anchor = angle->anchorStart ? line->start : line->end;
+                const gp_Pnt2d moving = angle->anchorStart ? line->end : line->start;
+                const double length = anchor.Distance(moving);
+                if (length <= tolerance) { result.status = SolveStatus::Failed; result.error = "Cannot solve angle for zero-length Line"; return result; }
+                const gp_Pnt2d solved(anchor.X() + length * std::cos(angle->radians),
+                    anchor.Y() + length * std::sin(angle->radians));
+                if (angle->anchorStart) {
+                    if (!samePoint(line->end, solved)) { line->end = solved; changed = true; }
+                } else if (!samePoint(line->start, solved)) { line->start = solved; changed = true; }
             } else {
                 const auto& radius = std::get<cad::parametric::RadiusConstraint>(constraint);
                 auto* entity = findEntity(result.entities, radius.entityId);
@@ -233,6 +357,12 @@ std::optional<cad::parametric::SketchPointRef> SketchConstraintSolver::pointAt(
                                                std::pair{value.endPoint(), cad::parametric::SketchPointRole::ArcEnd}}) {
                     const double distance = point.Distance(candidate.first);
                     if (distance <= best) { best = distance; result = {{value.id, candidate.second}}; }
+                }
+            } else if constexpr (std::is_same_v<T, cad::parametric::SketchCircle>) {
+                const double distance = point.Distance(value.center);
+                if (distance <= best) {
+                    best = distance;
+                    result = {{value.id, cad::parametric::SketchPointRole::CircleCenter}};
                 }
             }
         };

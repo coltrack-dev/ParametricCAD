@@ -61,7 +61,10 @@ struct SketchArc
 
 using SketchEntity = std::variant<SketchLine, SketchCircle, SketchArc>;
 
-enum class SketchConstraintType { Coincident, Horizontal, Vertical, Distance, Radius };
+enum class SketchConstraintType {
+    Coincident, Horizontal, Vertical, Distance, Radius,
+    HorizontalDistance, VerticalDistance, Angle
+};
 enum class SketchPointRole { LineStart, LineEnd, ArcStart, ArcEnd, CircleCenter, ArcCenter };
 
 struct SketchPointRef
@@ -106,8 +109,33 @@ struct RadiusConstraint
     SketchConstraintId id;
 };
 
+struct HorizontalDistanceConstraint
+{
+    SketchPointRef first;
+    SketchPointRef second;
+    double value{0.0};
+    SketchConstraintId id;
+};
+
+struct VerticalDistanceConstraint
+{
+    SketchPointRef first;
+    SketchPointRef second;
+    double value{0.0};
+    SketchConstraintId id;
+};
+
+struct AngleConstraint
+{
+    SketchEntityId entityId;
+    double radians{0.0};
+    bool anchorStart{true};
+    SketchConstraintId id;
+};
+
 using SketchConstraint = std::variant<CoincidentConstraint,
-    HorizontalConstraint, VerticalConstraint, DistanceConstraint, RadiusConstraint>;
+    HorizontalConstraint, VerticalConstraint, DistanceConstraint, RadiusConstraint,
+    HorizontalDistanceConstraint, VerticalDistanceConstraint, AngleConstraint>;
 
 class SketchFeature final : public ParametricFeature
 {

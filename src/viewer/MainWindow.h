@@ -58,6 +58,9 @@ private:
     void selectSketchVerticalTool();
     void selectSketchDistanceTool();
     void selectSketchRadiusTool();
+    void selectSketchHorizontalDistanceTool();
+    void selectSketchVerticalDistanceTool();
+    void selectSketchAngleTool();
     void enterSketchEditing(const std::string& sketchId);
     void refreshConstraintManager();
     void selectSketchConstraint(const QString& constraintId);
@@ -99,9 +102,13 @@ private:
     QAction* sketchVerticalAction_{nullptr};
     QAction* sketchDistanceAction_{nullptr};
     QAction* sketchRadiusAction_{nullptr};
+    QAction* sketchHorizontalDistanceAction_{nullptr};
+    QAction* sketchVerticalDistanceAction_{nullptr};
+    QAction* sketchAngleAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
     enum class SketchTool { None, Line, Circle, Arc, Rectangle, Trim, Extend,
-                            Coincident, Horizontal, Vertical, Distance, Radius };
+                            Coincident, Horizontal, Vertical, Distance, Radius,
+                            HorizontalDistance, VerticalDistance, Angle };
     SketchTool sketchTool_{SketchTool::None};
     std::string activeSketchId_;
     std::optional<gp_Pnt2d> sketchFirstPoint_;
