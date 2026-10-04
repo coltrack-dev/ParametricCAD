@@ -59,6 +59,10 @@ private:
     void selectSketchDistanceTool();
     void selectSketchRadiusTool();
     void enterSketchEditing(const std::string& sketchId);
+    void refreshConstraintManager();
+    void selectSketchConstraint(const QString& constraintId);
+    void editSketchConstraint(const QString& constraintId);
+    void deleteSketchConstraint(const QString& constraintId);
     void handleSketchPoint(const gp_Pnt2d& point, double hitTolerance);
     void createFace();
     void createExtrude();
@@ -103,6 +107,7 @@ private:
     std::optional<gp_Pnt2d> sketchFirstPoint_;
     std::optional<gp_Pnt2d> sketchSecondPoint_;
     std::optional<cad::parametric::SketchPointRef> constraintFirstPoint_;
+    QString selectedConstraintId_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this
     // mirror supplies MainWindow actions and model operation inputs without

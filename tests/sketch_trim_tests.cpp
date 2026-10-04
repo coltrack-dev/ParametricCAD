@@ -243,6 +243,15 @@ void dimensionalConstraintsSolveUndoAndPersist()
     controller.redo();
     assert(std::abs(std::get<SketchLine>(sketch->entities()[0]).start.Distance(
         std::get<SketchLine>(sketch->entities()[0]).end) - 30.0) < 1.0e-8);
+    const auto beforeRemoveCount = sketch->constraintCount();
+    assert(controller.removeSketchConstraint(sketchResult.id, distanceId).success);
+    assert(sketch->constraintCount() == beforeRemoveCount - 1);
+    assert(std::abs(std::get<SketchLine>(sketch->entities()[0]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[0]).end) - 30.0) < 1.0e-8);
+    controller.undo();
+    assert(sketch->constraintCount() == beforeRemoveCount);
+    controller.redo();
+    assert(sketch->constraintCount() == beforeRemoveCount - 1);
     assert(controller.addSketchRadius(sketchResult.id, circleId, 10.0).success);
     assert(controller.addSketchRadius(sketchResult.id, arcId, 8.0).success);
     assert(std::abs(std::get<SketchCircle>(sketch->entities()[1]).radius - 10.0) < 1.0e-9);

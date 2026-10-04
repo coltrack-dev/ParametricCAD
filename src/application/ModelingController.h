@@ -59,6 +59,8 @@ public:
                                         const std::string& constraintId, double value);
     ModelingResult updateSketchRadius(const std::string& sketchId,
                                       const std::string& constraintId, double value);
+    ModelingResult removeSketchConstraint(const std::string& sketchId,
+                                          const std::string& constraintId);
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;

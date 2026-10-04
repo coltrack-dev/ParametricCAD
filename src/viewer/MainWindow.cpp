@@ -24,6 +24,19 @@
 namespace
 {
 constexpr int ModelPanelWidth = 320;
+
+std::string pointRoleText(const cad::parametric::SketchPointRole role)
+{
+    switch (role) {
+    case cad::parametric::SketchPointRole::LineStart: return "Start";
+    case cad::parametric::SketchPointRole::LineEnd: return "End";
+    case cad::parametric::SketchPointRole::ArcStart: return "Start";
+    case cad::parametric::SketchPointRole::ArcEnd: return "End";
+    case cad::parametric::SketchPointRole::CircleCenter: return "Center";
+    case cad::parametric::SketchPointRole::ArcCenter: return "Center";
+    }
+    return "Point";
+}
 }
 
 MainWindow::MainWindow(QWidget* parent)
@@ -37,6 +50,12 @@ MainWindow::MainWindow(QWidget* parent)
 
     createActions();
     createParametricPanel();
+    featureEditorPanel_->setSketchConstraintSelectionHandler(
+        [this](const QString& id) { selectSketchConstraint(id); });
+    featureEditorPanel_->setSketchConstraintEditHandler(
+        [this](const QString& id) { editSketchConstraint(id); });
+    featureEditorPanel_->setSketchConstraintDeleteHandler(
+        [this](const QString& id) { deleteSketchConstraint(id); });
     viewer_->setPushPullCommittedHandler(
         [this](const QString& featureId, const int faceIndex,
                const gp_Vec& normal, const double distance) {
@@ -101,6 +120,8 @@ MainWindow::MainWindow(QWidget* parent)
                 || sketchTool_ == SketchTool::Radius) selectSketchLineTool();
             constraintFirstPoint_.reset();
         });
+    viewer_->setSketchConstraintMarkerClickedHandler(
+        [this](const std::string& id) { selectSketchConstraint(QString::fromStdString(id)); });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         viewer_->clearSketchTrimPreview();
         refreshModelView();
@@ -183,9 +204,113 @@ void MainWindow::refreshModelView(const bool fitView)
     if (!activeSketchId_.empty()) {
         const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
             modeling_.body().findFeature(activeSketchId_));
-        if (sketch) viewer_->setSketchConstraintMarkers(*sketch);
+        if (sketch) viewer_->setSketchConstraintMarkers(*sketch, selectedConstraintId_.toStdString());
     }
+    refreshConstraintManager();
     statusBar()->showMessage(result.rebuilt ? "Model updated" : QString::fromStdString(result.error), 3000);
+}
+
+void MainWindow::refreshConstraintManager()
+{
+    if (activeSketchId_.empty()) {
+        selectedConstraintId_.clear();
+        featureEditorPanel_->setSketchConstraints({}, false);
+        viewer_->clearSketchConstraintHighlight();
+        return;
+    }
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    if (!sketch) return;
+    std::vector<SketchConstraintListItem> items;
+    const auto solved = cad::operations::SketchConstraintSolver::solve(
+        sketch->entities(), sketch->constraints());
+    const QString status = solved.status == cad::operations::SolveStatus::Solved
+        ? QString() : QString(" [conflict: %1]").arg(QString::fromStdString(solved.error));
+    for (const auto& constraint : sketch->constraints()) {
+        SketchConstraintListItem item;
+        item.id = std::visit([](const auto& value) { return value.id; }, constraint);
+        if (const auto* value = std::get_if<cad::parametric::HorizontalConstraint>(&constraint)) {
+            item.label = QString("H  %1").arg(QString::fromStdString(value->entityId));
+        } else if (const auto* value = std::get_if<cad::parametric::VerticalConstraint>(&constraint)) {
+            item.label = QString("V  %1").arg(QString::fromStdString(value->entityId));
+        } else if (const auto* value = std::get_if<cad::parametric::CoincidentConstraint>(&constraint)) {
+            item.label = QString("Coincident  %1.%2 ↔ %3.%4")
+                .arg(QString::fromStdString(value->a.entityId),
+                     QString::fromStdString(pointRoleText(value->a.role)),
+                     QString::fromStdString(value->b.entityId),
+                     QString::fromStdString(pointRoleText(value->b.role)));
+        } else if (const auto* value = std::get_if<cad::parametric::DistanceConstraint>(&constraint)) {
+            item.label = QString("Distance  %1 = %2")
+                .arg(QString::fromStdString(value->entityId)).arg(value->value, 0, 'f', 2);
+            item.editable = true;
+        } else if (const auto* value = std::get_if<cad::parametric::RadiusConstraint>(&constraint)) {
+            item.label = QString("Radius  %1 = %2")
+                .arg(QString::fromStdString(value->entityId)).arg(value->value, 0, 'f', 2);
+            item.editable = true;
+        }
+        item.label += status;
+        items.push_back(std::move(item));
+    }
+    if (!selectedConstraintId_.isEmpty() && std::none_of(items.begin(), items.end(),
+        [this](const auto& item) { return QString::fromStdString(item.id) == selectedConstraintId_; }))
+        selectedConstraintId_.clear();
+    featureEditorPanel_->setSketchConstraints(std::move(items), !activeSketchId_.empty());
+    if (!selectedConstraintId_.isEmpty()) {
+        featureEditorPanel_->setSketchConstraintSelected(selectedConstraintId_);
+        viewer_->setSketchConstraintHighlight(*sketch, selectedConstraintId_.toStdString());
+    } else {
+        viewer_->clearSketchConstraintHighlight();
+    }
+}
+
+void MainWindow::selectSketchConstraint(const QString& constraintId)
+{
+    selectedConstraintId_ = constraintId;
+    featureEditorPanel_->setSketchConstraintSelected(constraintId);
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    if (sketch) {
+        viewer_->setSketchConstraintMarkers(*sketch, constraintId.toStdString());
+        viewer_->setSketchConstraintHighlight(*sketch, constraintId.toStdString());
+    }
+}
+
+void MainWindow::editSketchConstraint(const QString& constraintId)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    if (!sketch) return;
+    for (const auto& constraint : sketch->constraints()) {
+        if (std::visit([&](const auto& value) { return value.id == constraintId.toStdString(); }, constraint)) {
+            const auto* distance = std::get_if<cad::parametric::DistanceConstraint>(&constraint);
+            const auto* radius = std::get_if<cad::parametric::RadiusConstraint>(&constraint);
+            if (!distance && !radius) return;
+            bool ok = false;
+            const double current = distance ? distance->value : radius->value;
+            const double value = QInputDialog::getDouble(this,
+                distance ? "Distance constraint" : "Radius constraint",
+                "Value:", current, 0.001, 1.0e6, 3, &ok);
+            if (!ok) return;
+            const auto result = distance
+                ? modeling_.updateSketchDistance(activeSketchId_, constraintId.toStdString(), value)
+                : modeling_.updateSketchRadius(activeSketchId_, constraintId.toStdString(), value);
+            if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+            else { selectedConstraintId_ = constraintId; refreshModelView(false); }
+            return;
+        }
+    }
+}
+
+void MainWindow::deleteSketchConstraint(const QString& constraintId)
+{
+    if (activeSketchId_.empty()) return;
+    const auto result = modeling_.removeSketchConstraint(
+        activeSketchId_, constraintId.toStdString());
+    if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+    else {
+        selectedConstraintId_.clear();
+        refreshModelView(false);
+    }
 }
 
 void MainWindow::applySelection(
@@ -457,6 +582,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchFirstPoint_.reset();
         sketchSecondPoint_.reset();
         constraintFirstPoint_.reset();
+        selectedConstraintId_.clear();
         viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
         viewer_->enterSketchMode(frame.origin, frame.xDirection,
             frame.yDirection, frame.normal);
@@ -473,6 +599,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchDistanceAction_->setEnabled(true);
         sketchRadiusAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
+        refreshConstraintManager();
         updateActionState();
         statusBar()->showMessage("Sketch mode: select a drawing tool");
     } catch (const std::exception& error) {
@@ -488,6 +615,7 @@ void MainWindow::finishSketch()
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
     constraintFirstPoint_.reset();
+    selectedConstraintId_.clear();
     sketchLineAction_->setEnabled(false);
     sketchCircleAction_->setEnabled(false);
     sketchArcAction_->setEnabled(false);
@@ -527,6 +655,7 @@ void MainWindow::selectSketchArcTool()
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    refreshConstraintManager();
     statusBar()->showMessage("Arc: select center, start, then end");
 }
 

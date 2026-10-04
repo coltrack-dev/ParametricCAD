@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QLoggingCategory>
 #include <QScopedValueRollback>
 #include <QDoubleSpinBox>
@@ -276,6 +277,42 @@ void FeatureEditorPanel::createUi()
 
     rootLayout->addWidget(propertiesWidget_, 1);
 
+    auto* constraintsTitle = new QLabel("<b>Sketch Constraints</b>", this);
+    rootLayout->addWidget(constraintsTitle);
+    constraintList_ = new QListWidget(this);
+    constraintList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    rootLayout->addWidget(constraintList_, 1);
+    auto* constraintButtons = new QHBoxLayout();
+    editConstraintButton_ = new QPushButton("Edit", this);
+    deleteConstraintButton_ = new QPushButton("Delete", this);
+    editConstraintButton_->setEnabled(false);
+    deleteConstraintButton_->setEnabled(false);
+    constraintButtons->addWidget(editConstraintButton_);
+    constraintButtons->addWidget(deleteConstraintButton_);
+    rootLayout->addLayout(constraintButtons);
+    connect(constraintList_, &QListWidget::itemClicked, this,
+        [this](QListWidgetItem* item) {
+            if (item) {
+                editConstraintButton_->setEnabled(item->data(Qt::UserRole + 1).toBool());
+                deleteConstraintButton_->setEnabled(true);
+            }
+            if (item && sketchConstraintSelectionHandler_)
+                sketchConstraintSelectionHandler_(item->data(Qt::UserRole).toString());
+        });
+    connect(constraintList_, &QListWidget::itemDoubleClicked, this,
+        [this](QListWidgetItem* item) {
+            if (item && sketchConstraintEditHandler_)
+                sketchConstraintEditHandler_(item->data(Qt::UserRole).toString());
+        });
+    connect(editConstraintButton_, &QPushButton::clicked, this, [this]() {
+        if (constraintList_->currentItem() && sketchConstraintEditHandler_)
+            sketchConstraintEditHandler_(constraintList_->currentItem()->data(Qt::UserRole).toString());
+    });
+    connect(deleteConstraintButton_, &QPushButton::clicked, this, [this]() {
+        if (constraintList_->currentItem() && sketchConstraintDeleteHandler_)
+            sketchConstraintDeleteHandler_(constraintList_->currentItem()->data(Qt::UserRole).toString());
+    });
+
     connect(
         boxButton,
         &QPushButton::clicked,
@@ -378,6 +415,54 @@ void FeatureEditorPanel::createUi()
 
     clearProperties();
 }
+
+void FeatureEditorPanel::setSketchConstraints(
+    std::vector<SketchConstraintListItem> items, const bool editable)
+{
+    constraintList_->clear();
+    for (const auto& item : items) {
+        auto* row = new QListWidgetItem(item.label, constraintList_);
+        row->setData(Qt::UserRole, QString::fromStdString(item.id));
+        row->setData(Qt::UserRole + 1, item.editable);
+    }
+    editConstraintButton_->setEnabled(editable && constraintList_->currentItem()
+        && constraintList_->currentItem()->data(Qt::UserRole + 1).toBool());
+    deleteConstraintButton_->setEnabled(editable && constraintList_->currentItem());
+}
+
+void FeatureEditorPanel::clearSketchConstraintSelection()
+{
+    constraintList_->clearSelection();
+    editConstraintButton_->setEnabled(false);
+    deleteConstraintButton_->setEnabled(false);
+}
+
+void FeatureEditorPanel::setSketchConstraintSelected(const QString& id)
+{
+    for (int i = 0; i < constraintList_->count(); ++i) {
+        auto* item = constraintList_->item(i);
+        if (item->data(Qt::UserRole).toString() == id) {
+            constraintList_->setCurrentItem(item);
+            item->setSelected(true);
+            editConstraintButton_->setEnabled(item->data(Qt::UserRole + 1).toBool());
+            deleteConstraintButton_->setEnabled(true);
+            return;
+        }
+    }
+    clearSketchConstraintSelection();
+}
+
+void FeatureEditorPanel::setSketchConstraintSelectionHandler(
+    std::function<void(const QString&)> handler)
+{ sketchConstraintSelectionHandler_ = std::move(handler); }
+
+void FeatureEditorPanel::setSketchConstraintEditHandler(
+    std::function<void(const QString&)> handler)
+{ sketchConstraintEditHandler_ = std::move(handler); }
+
+void FeatureEditorPanel::setSketchConstraintDeleteHandler(
+    std::function<void(const QString&)> handler)
+{ sketchConstraintDeleteHandler_ = std::move(handler); }
 
 void FeatureEditorPanel::addBox()
 {

@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QStringList>
 #include "application/FeatureEditingService.h"
+#include "operations/ParametricFeatures.h"
 
 #include <functional>
 #include <string>
@@ -11,6 +12,15 @@
 class QFormLayout;
 class QLabel;
 class QTreeWidget;
+class QListWidget;
+class QPushButton;
+
+struct SketchConstraintListItem
+{
+    cad::parametric::SketchConstraintId id;
+    QString label;
+    bool editable{false};
+};
 
 class FeatureEditorPanel final : public QWidget
 {
@@ -30,6 +40,12 @@ public:
     void refresh();
     QStringList selectedFeatureIds() const;
     void selectFeatures(const QStringList& featureIds);
+    void setSketchConstraints(std::vector<SketchConstraintListItem> items, bool editable);
+    void clearSketchConstraintSelection();
+    void setSketchConstraintSelected(const QString& id);
+    void setSketchConstraintSelectionHandler(std::function<void(const QString&)> handler);
+    void setSketchConstraintEditHandler(std::function<void(const QString&)> handler);
+    void setSketchConstraintDeleteHandler(std::function<void(const QString&)> handler);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -82,6 +98,12 @@ private:
     QWidget* propertiesWidget_{nullptr};
     QFormLayout* propertiesLayout_{nullptr};
     QLabel* messageLabel_{nullptr};
+    QListWidget* constraintList_{nullptr};
+    QPushButton* editConstraintButton_{nullptr};
+    QPushButton* deleteConstraintButton_{nullptr};
+    std::function<void(const QString&)> sketchConstraintSelectionHandler_;
+    std::function<void(const QString&)> sketchConstraintEditHandler_;
+    std::function<void(const QString&)> sketchConstraintDeleteHandler_;
 
     std::function<void()> modelChangedHandler_;
     std::function<void(const QStringList&)> featureSelectedHandler_;

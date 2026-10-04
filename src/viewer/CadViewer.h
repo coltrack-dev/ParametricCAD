@@ -86,13 +86,18 @@ public:
     void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
     void setSketchMouseMovedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
     void setSketchCancelHandler(std::function<void()> handler);
+    void setSketchConstraintMarkerClickedHandler(std::function<void(const std::string&)> handler);
     std::optional<gp_Pnt2d> sketchPointAtScreen(const QPoint& position) const;
     double sketchLocalToleranceFromPixels(const QPoint& position, double pixels) const;
     void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void setSketchExtendPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void clearSketchTrimPreview();
-    void setSketchConstraintMarkers(const cad::parametric::SketchFeature& sketch);
+    void setSketchConstraintMarkers(const cad::parametric::SketchFeature& sketch,
+                                    const std::string& selectedConstraintId = {});
     void clearSketchConstraintMarkers();
+    void setSketchConstraintHighlight(const cad::parametric::SketchFeature& sketch,
+                                      const std::string& constraintId);
+    void clearSketchConstraintHighlight();
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler
     );
@@ -218,7 +223,14 @@ private:
     std::function<void(const gp_Pnt2d&, double)> sketchMouseMovedHandler_;
     std::function<void()> sketchCancelHandler_;
     Handle(AIS_Shape) sketchTrimPreviewObject_;
-    std::vector<Handle(AIS_TextLabel)> sketchConstraintMarkers_;
+    struct SketchConstraintMarker
+    {
+        cad::parametric::SketchConstraintId constraintId;
+        Handle(AIS_TextLabel) presentation;
+    };
+    std::vector<SketchConstraintMarker> sketchConstraintMarkers_;
+    Handle(AIS_Shape) sketchConstraintHighlightObject_;
+    std::function<void(const std::string&)> sketchConstraintMarkerClickedHandler_;
 
     std::unique_ptr<cad::viewer::TransformGizmo> transformGizmo_;
     cad::viewer::SnapManager snapManager_;

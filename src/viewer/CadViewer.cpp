@@ -501,6 +501,7 @@ void CadViewer::exitSketchMode()
     sketchPreviewObject_.Nullify();
     clearSketchTrimPreview();
     clearSketchConstraintMarkers();
+    clearSketchConstraintHighlight();
 }
 
 bool CadViewer::sketchMode() const noexcept
@@ -534,6 +535,12 @@ void CadViewer::setSketchMouseMovedHandler(
 void CadViewer::setSketchCancelHandler(std::function<void()> handler)
 {
     sketchCancelHandler_ = std::move(handler);
+}
+
+void CadViewer::setSketchConstraintMarkerClickedHandler(
+    std::function<void(const std::string&)> handler)
+{
+    sketchConstraintMarkerClickedHandler_ = std::move(handler);
 }
 
 std::optional<gp_Pnt2d> CadViewer::sketchPointAtScreen(const QPoint& position) const
@@ -606,13 +613,14 @@ void CadViewer::clearSketchConstraintMarkers()
 {
     if (!context_.IsNull()) {
         for (const auto& marker : sketchConstraintMarkers_)
-            if (!marker.IsNull()) context_->Remove(marker, Standard_False);
+            if (!marker.presentation.IsNull()) context_->Remove(marker.presentation, Standard_False);
     }
     sketchConstraintMarkers_.clear();
     if (!context_.IsNull()) context_->CurrentViewer()->Redraw();
 }
 
-void CadViewer::setSketchConstraintMarkers(const cad::parametric::SketchFeature& sketch)
+void CadViewer::setSketchConstraintMarkers(
+    const cad::parametric::SketchFeature& sketch, const std::string& selectedConstraintId)
 {
     clearSketchConstraintMarkers();
     if (!sketchMode_ || context_.IsNull()) return;
@@ -685,15 +693,57 @@ void CadViewer::setSketchConstraintMarkers(const cad::parametric::SketchFeature&
             text = "R " + std::to_string(item->value);
         }
         if (!valid) continue;
+        const auto constraintId = std::visit([](const auto& value) { return value.id; }, constraint);
         auto marker = new AIS_TextLabel();
         marker->SetText(TCollection_ExtendedString(text.c_str()));
         marker->SetPosition(world(position));
-        marker->SetColor(Quantity_NOC_YELLOW);
+        marker->SetColor(constraintId == selectedConstraintId ? Quantity_NOC_ORANGE : Quantity_NOC_YELLOW);
         marker->SetHeight(14.0);
         context_->Display(marker, Standard_False);
-        sketchConstraintMarkers_.push_back(marker);
+        sketchConstraintMarkers_.push_back({constraintId, marker});
     }
     context_->CurrentViewer()->Redraw();
+}
+
+void CadViewer::clearSketchConstraintHighlight()
+{
+    if (!sketchConstraintHighlightObject_.IsNull() && !context_.IsNull())
+        context_->Remove(sketchConstraintHighlightObject_, Standard_True);
+    sketchConstraintHighlightObject_.Nullify();
+}
+
+void CadViewer::setSketchConstraintHighlight(
+    const cad::parametric::SketchFeature& sketch, const std::string& constraintId)
+{
+    clearSketchConstraintHighlight();
+    if (!sketchMode_ || context_.IsNull()) return;
+    std::vector<cad::parametric::SketchEntity> targets;
+    const auto entityId = [](const auto& item) { return item.entityId; };
+    for (const auto& constraint : sketch.constraints()) {
+        if (!std::visit([&](const auto& item) { return item.id == constraintId; }, constraint)) continue;
+        std::visit([&](const auto& item) {
+            using T = std::decay_t<decltype(item)>;
+            if constexpr (std::is_same_v<T, cad::parametric::CoincidentConstraint>) {
+                for (const auto& id : {item.a.entityId, item.b.entityId}) {
+                    for (const auto& entity : sketch.entities())
+                        if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
+                }
+            } else {
+                for (const auto& entity : sketch.entities())
+                    if (std::visit([&](const auto& value) { return value.id == entityId(item); }, entity)) targets.push_back(entity);
+            }
+        }, constraint);
+        break;
+    }
+    if (targets.empty()) return;
+    const auto shape = makeTrimPreviewShape(
+        {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_}, targets);
+    if (shape.IsNull()) return;
+    sketchConstraintHighlightObject_ = new AIS_Shape(shape);
+    sketchConstraintHighlightObject_->SetDisplayMode(AIS_WireFrame);
+    sketchConstraintHighlightObject_->SetColor(Quantity_NOC_GREEN);
+    sketchConstraintHighlightObject_->SetWidth(6.0);
+    context_->Display(sketchConstraintHighlightObject_, Standard_True);
 }
 
 void CadViewer::updateTransformGizmo()
@@ -1972,6 +2022,19 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     clearAxisHover();
 
     if (sketchMode_ && event->button() == Qt::LeftButton) {
+        if (sketchPreviewTool_ != SketchPreviewTool::Trim
+            && sketchPreviewTool_ != SketchPreviewTool::Extend
+            && !context_.IsNull()) {
+            context_->MoveTo(lastMousePosition_.x(), lastMousePosition_.y(), view_, Standard_False);
+            const auto detected = context_->DetectedInteractive();
+            for (const auto& marker : sketchConstraintMarkers_) {
+                if (!marker.presentation.IsNull() && detected == marker.presentation) {
+                    if (sketchConstraintMarkerClickedHandler_)
+                        sketchConstraintMarkerClickedHandler_(marker.constraintId);
+                    return;
+                }
+            }
+        }
         const auto point = sketchPointAtScreen(lastMousePosition_);
         if (point) {
             gp_Pnt world = sketchOrigin_;

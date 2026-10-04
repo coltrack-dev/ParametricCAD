@@ -407,6 +407,28 @@ ModelingResult ModelingController::updateSketchRadius(
     const std::string& sketchId, const std::string& constraintId, const double value)
 { return updateDimensionalConstraint(body_, undoStack_, sketchId, constraintId, value, true); }
 
+ModelingResult ModelingController::removeSketchConstraint(
+    const std::string& sketchId, const std::string& constraintId)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    const auto before = sketch->constraints();
+    auto after = before;
+    const auto it = std::find_if(after.begin(), after.end(), [&constraintId](const auto& constraint) {
+        return std::visit([&constraintId](const auto& item) { return item.id == constraintId; }, constraint);
+    });
+    if (it == after.end()) return {false, {}, "Sketch constraint does not exist"};
+    after.erase(it);
+    const auto solved = cad::operations::SketchConstraintSolver::solve(sketch->entities(), after);
+    if (solved.status != cad::operations::SolveStatus::Solved)
+        return {false, {}, solved.error};
+    try {
+        undoStack_.push(new cad::commands::RemoveSketchConstraintCommand(
+            body_, sketch, sketch->entities(), solved.entities, before, after));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) { return failure(error); }
+}
+
 ModelingResult ModelingController::createPrimitive(const PrimitiveKind kind)
 {
     switch (kind) {
