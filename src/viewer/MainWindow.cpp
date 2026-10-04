@@ -129,6 +129,19 @@ MainWindow::MainWindow(QWidget* parent)
         });
     viewer_->setSketchConstraintMarkerClickedHandler(
         [this](const std::string& id) { selectSketchConstraint(QString::fromStdString(id)); });
+    viewer_->setSketchConstraintMarkerHoveredHandler(
+        [this](const std::string& id) {
+            const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+                modeling_.body().findFeature(activeSketchId_));
+            if (!sketch) return;
+            if (id.empty()) {
+                if (!selectedConstraintId_.isEmpty()) viewer_->setSketchConstraintHighlight(
+                    *sketch, selectedConstraintId_.toStdString());
+                else viewer_->clearSketchConstraintHighlight();
+            } else if (QString::fromStdString(id) != selectedConstraintId_) {
+                viewer_->setSketchConstraintHighlight(*sketch, id);
+            }
+        });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         viewer_->clearSketchTrimPreview();
         refreshModelView();
@@ -1009,8 +1022,11 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
             target = cad::operations::SketchConstraintSolver::lineAt(sketch->entities(), point, hitTolerance);
         else if (sketchTool_ == SketchTool::Tangent)
             target = cad::operations::SketchConstraintSolver::circleOrArcAt(sketch->entities(), point, hitTolerance);
-        else
+        else {
             target = cad::operations::SketchConstraintSolver::lineAt(sketch->entities(), point, hitTolerance);
+            if (!target) target = cad::operations::SketchConstraintSolver::circleOrArcAt(
+                sketch->entities(), point, hitTolerance);
+        }
         if (!target) { statusBar()->showMessage("Select a compatible sketch entity", 2000); return; }
         if (!constraintFirstPoint_) {
             constraintFirstPoint_ = cad::parametric::SketchPointRef{*target, cad::parametric::SketchPointRole::LineStart};

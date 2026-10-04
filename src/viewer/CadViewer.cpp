@@ -543,6 +543,12 @@ void CadViewer::setSketchConstraintMarkerClickedHandler(
     sketchConstraintMarkerClickedHandler_ = std::move(handler);
 }
 
+void CadViewer::setSketchConstraintMarkerHoveredHandler(
+    std::function<void(const std::string&)> handler)
+{
+    sketchConstraintMarkerHoveredHandler_ = std::move(handler);
+}
+
 std::optional<gp_Pnt2d> CadViewer::sketchPointAtScreen(const QPoint& position) const
 {
     if (!sketchMode_) return std::nullopt;
@@ -2250,6 +2256,16 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
     const QPoint currentPosition =
         event->position().toPoint();
+
+    if (sketchMode_ && sketchPreviewTool_ == SketchPreviewTool::None && !context_.IsNull()) {
+        context_->MoveTo(currentPosition.x(), currentPosition.y(), view_, Standard_False);
+        std::string hovered;
+        const auto detected = context_->DetectedInteractive();
+        for (const auto& marker : sketchConstraintMarkers_) {
+            if (!marker.presentation.IsNull() && detected == marker.presentation) { hovered = marker.constraintId; break; }
+        }
+        if (sketchConstraintMarkerHoveredHandler_) sketchConstraintMarkerHoveredHandler_(hovered);
+    }
 
     if (sketchMode_ && (sketchPreviewTool_ == SketchPreviewTool::Trim
         || sketchPreviewTool_ == SketchPreviewTool::Extend)) {

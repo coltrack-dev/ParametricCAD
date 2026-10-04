@@ -1068,3 +1068,10 @@ are not serialized.
 Constraint status shown while editing is an approximate DOF estimate: `Under-constrained`,
 `Fully constrained`, or `Conflicting`. It is intentionally not an exact symbolic rank
 analysis; unsupported pairs and nonlinear solver behavior remain controlled failures.
+
+Constraint markers are transient AIS labels. In normal Sketch selection mode,
+hovering a marker temporarily highlights its linked geometry and clicking it selects
+the same stable constraint ID in the Constraint Manager. Hover state never mutates
+the model and is cleared when the marker, tool, or sketch changes; selection highlight
+remains independent. Equal accepts Line/Line length pairs and Circle/Arc radius pairs.
+Tangent currently supports Line to Circle or Arc only.

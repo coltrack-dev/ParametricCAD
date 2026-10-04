@@ -87,6 +87,7 @@ public:
     void setSketchMouseMovedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
     void setSketchCancelHandler(std::function<void()> handler);
     void setSketchConstraintMarkerClickedHandler(std::function<void(const std::string&)> handler);
+    void setSketchConstraintMarkerHoveredHandler(std::function<void(const std::string&)> handler);
     std::optional<gp_Pnt2d> sketchPointAtScreen(const QPoint& position) const;
     double sketchLocalToleranceFromPixels(const QPoint& position, double pixels) const;
     void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities);
@@ -231,6 +232,7 @@ private:
     std::vector<SketchConstraintMarker> sketchConstraintMarkers_;
     Handle(AIS_Shape) sketchConstraintHighlightObject_;
     std::function<void(const std::string&)> sketchConstraintMarkerClickedHandler_;
+    std::function<void(const std::string&)> sketchConstraintMarkerHoveredHandler_;
 
     std::unique_ptr<cad::viewer::TransformGizmo> transformGizmo_;
     cad::viewer::SnapManager snapManager_;
