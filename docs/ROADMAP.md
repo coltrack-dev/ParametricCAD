@@ -128,6 +128,8 @@ Further Boolean work is deferred until Phase 2 is reliable.
 - Dirty/FAILED markers in the tree and error details in the properties panel.
 - Tree selection uses existing AIS objects without clear/redisplay/Fit All.
 - Parameter refresh no longer calls Fit All; load and explicit Fit still do.
+- Face/edge/vertex selection is restored across feature rebuilds when a unique
+  geometry-signature match exists; missing or ambiguous topology is dropped.
 
 **In progress**
 
@@ -138,7 +140,7 @@ Further Boolean work is deferred until Phase 2 is reliable.
 
 - Context menus and feature icons.
 - Per-feature visibility toggle and isolate/hide objects.
-- Preserve topology selections where possible when geometry changes.
+- Improve topology naming beyond the current geometry-signature fallback.
 
 ## Audit findings and TODOs
 

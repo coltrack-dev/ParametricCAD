@@ -29,6 +29,11 @@
 #include "viewer/TransformMath.h"
 #include "viewer/SelectionAdapter.h"
 #include "operations/ParametricFeatures.h"
+#include "model/TopologicalReference.h"
+
+namespace cad::parametric {
+class Body;
+}
 
 class QAction;
 class QLabel;
@@ -76,6 +81,12 @@ public:
     void setSelectionMode(SelectionMode mode);
     SelectionMode selectionMode() const;
     cad::application::SelectionSnapshot selectionSnapshot() const;
+    std::vector<cad::topology::TopologicalReference> captureTopologySelection(
+        const cad::parametric::Body& body) const;
+    void restoreSelection(
+        const cad::parametric::Body& body,
+        const std::vector<cad::topology::TopologicalReference>& topology,
+        const std::vector<std::string>& objectFeatureIds);
     void clearSelection();
     void enterSketchMode(const gp_Pnt& origin, const gp_Dir& xDirection,
                          const gp_Dir& yDirection, const gp_Dir& normal);

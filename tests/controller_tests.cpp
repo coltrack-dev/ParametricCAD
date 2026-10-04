@@ -705,6 +705,43 @@ private slots:
         QCOMPARE(ambiguous.status, ResolveStatus::Ambiguous);
     }
 
+    void topologyReferencesSurviveBoxResizeAndUndoRedo()
+    {
+        using namespace cad::topology;
+        ModelingController controller;
+        const auto created = controller.createBox();
+        QVERIFY(created.success);
+        const auto original = controller.body().findFeature(created.id)->shape();
+
+        TopTools_IndexedMapOfShape faces;
+        TopTools_IndexedMapOfShape edges;
+        TopTools_IndexedMapOfShape vertices;
+        TopExp::MapShapes(original, TopAbs_FACE, faces);
+        TopExp::MapShapes(original, TopAbs_EDGE, edges);
+        TopExp::MapShapes(original, TopAbs_VERTEX, vertices);
+        const auto face = TopologicalSignatureBuilder::createReference(created.id, original, faces(1));
+        const auto edge = TopologicalSignatureBuilder::createReference(created.id, original, edges(1));
+        const auto vertex = TopologicalSignatureBuilder::createReference(created.id, original, vertices(1));
+
+        QVERIFY(controller.setFeatureProperty(created.id, "width", 150.0).success);
+        const auto resized = controller.body().findFeature(created.id)->shape();
+        QCOMPARE(TopologicalReferenceResolver::resolveAgainstShape(face, resized).status,
+                 ResolveStatus::Resolved);
+        QCOMPARE(TopologicalReferenceResolver::resolveAgainstShape(edge, resized).status,
+                 ResolveStatus::Resolved);
+        QCOMPARE(TopologicalReferenceResolver::resolveAgainstShape(vertex, resized).status,
+                 ResolveStatus::Resolved);
+
+        controller.undo();
+        QCOMPARE(TopologicalReferenceResolver::resolveAgainstShape(
+                     face, controller.body().findFeature(created.id)->shape()).status,
+                 ResolveStatus::Resolved);
+        controller.redo();
+        QCOMPARE(TopologicalReferenceResolver::resolveAgainstShape(
+                     edge, controller.body().findFeature(created.id)->shape()).status,
+                 ResolveStatus::Resolved);
+    }
+
     void topologicalReferencesCoverFaceVertexAndPersistence()
     {
         using namespace cad::topology;

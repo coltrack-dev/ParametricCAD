@@ -183,9 +183,20 @@ must not be reused after recompute or presentation replacement.
 OCCT selection/detection. OCCT remains the source of truth; the state does not
 perform picking, activate selection modes, or own tool behavior. `MainWindow`
 keeps `selectedObjectIds_` as an application/UI compatibility projection used
-by actions, model-operation inputs, and refresh-survival filtering. The
+by actions and model-operation inputs. The
 `FeatureEditorPanel` keeps only Qt tree selection and uses signal blocking for
 programmatic viewer-to-tree synchronization.
+
+`TopoDS_Shape` identity is transient: feature rebuilds may replace every
+subshape. Persistent active topology selection therefore uses
+`featureId + TopologicalReference`, not a stored `TopoDS_Shape` or iteration
+index. A reference records Face/Edge/Vertex kind and geometry signatures
+(surface/curve type, measurements, points, normals where applicable, and
+bounding box). During refresh, `ModelPresenter` captures references before
+recompute; `CadViewer` resolves them only inside the original feature and
+restores the resolved OCCT owners after AIS presentation updates. Missing or
+ambiguous matches are dropped. Geometry signatures are an MVP fallback
+persistent-naming strategy, not a guaranteed final persistent naming solution.
 
 Interaction priority remains local to `CadViewer`: active transform capture
 and independent `TransformGizmo` handle picking are processed before model

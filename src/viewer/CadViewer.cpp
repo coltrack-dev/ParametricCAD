@@ -1,5 +1,7 @@
 #include "viewer/CadViewer.h"
 
+#include "model/Body.h"
+
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -13,6 +15,7 @@
 #include <QLabel>
 #include <QKeyEvent>
 #include <QLoggingCategory>
+#include <StdSelect_BRepOwner.hxx>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QResizeEvent>
@@ -1521,6 +1524,69 @@ CadViewer::SelectionMode CadViewer::selectionMode() const
 cad::application::SelectionSnapshot CadViewer::selectionSnapshot() const
 {
     return selectionState_.snapshot();
+}
+
+std::vector<cad::topology::TopologicalReference> CadViewer::captureTopologySelection(
+    const cad::parametric::Body& body) const
+{
+    std::vector<cad::topology::TopologicalReference> result;
+    if (!selectionAdapter_) return result;
+
+    for (const auto& hit : selectionAdapter_->selectedHits()) {
+        if (!hit.hasSubshape() || hit.shape.IsNull()) continue;
+        const auto feature = body.findFeature(hit.item.featureId.toStdString());
+        if (!feature || feature->shape().IsNull()) continue;
+        try {
+            result.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+                feature->id(), feature->shape(), hit.shape));
+            qCDebug(pcadViewerLog) << "captured topology" << hit.item.featureId
+                                   << static_cast<int>(hit.item.kind)
+                                   << hit.item.currentSubshapeIndex.value_or(0);
+        } catch (const Standard_Failure& failure) {
+            qCWarning(pcadViewerLog) << "failed to capture topology"
+                                     << hit.item.featureId
+                                     << failure.GetMessageString();
+        } catch (const std::exception& failure) {
+            qCWarning(pcadViewerLog) << "failed to capture topology"
+                                     << hit.item.featureId
+                                     << failure.what();
+        }
+    }
+    return result;
+}
+
+void CadViewer::restoreSelection(
+    const cad::parametric::Body& body,
+    const std::vector<cad::topology::TopologicalReference>& topology,
+    const std::vector<std::string>& objectFeatureIds)
+{
+    if (!initialized_ || !context_) return;
+
+    context_->ClearSelected(Standard_False);
+    const cad::topology::TopologicalReferenceResolver resolver(body);
+    for (const auto& reference : topology) {
+        const auto resolved = resolver.resolve(reference);
+        qCDebug(pcadViewerLog) << "restore topology" << QString::fromStdString(reference.featureId)
+                               << "status" << static_cast<int>(resolved.status)
+                               << "candidates" << resolved.candidateCount
+                               << "score" << resolved.bestScore;
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape) continue;
+        const auto object = featureObjects_.find(QString::fromStdString(reference.featureId));
+        if (object == featureObjects_.end() || object->second.IsNull()) continue;
+        const Handle(StdSelect_BRepOwner) owner = new StdSelect_BRepOwner(
+            *resolved.shape, object->second, 0, Standard_True);
+        context_->AddOrRemoveSelected(owner, Standard_False);
+    }
+    for (const auto& featureId : objectFeatureIds) {
+        const auto object = featureObjects_.find(QString::fromStdString(featureId));
+        if (object != featureObjects_.end() && !object->second.IsNull()
+            && context_->IsDisplayed(object->second)) {
+            context_->AddOrRemoveSelected(object->second, Standard_False);
+        }
+    }
+    context_->UpdateCurrentViewer();
+    syncSelectionStateFromOcct();
+    updateTransformGizmo();
 }
 
 void CadViewer::setPushPullCommittedHandler(

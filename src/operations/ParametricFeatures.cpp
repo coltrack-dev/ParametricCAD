@@ -260,7 +260,8 @@ std::vector<cad::topology::TopologicalReference> legacyReferences(
     std::vector<cad::topology::TopologicalReference> result;
     result.reserve(indices.size());
     for (const int index : indices) {
-        result.push_back({featureId, cad::topology::TopologicalKind::Edge, index, std::nullopt});
+        result.push_back({featureId, cad::topology::TopologicalKind::Edge, index, std::nullopt,
+                          std::nullopt});
     }
     return result;
 }

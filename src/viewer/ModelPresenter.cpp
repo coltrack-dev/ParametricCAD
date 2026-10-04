@@ -14,6 +14,9 @@ cad::viewer::ModelPresenter::ModelPresenter(cad::parametric::Body& body, CadView
 
 cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
 {
+    const auto selectedTopology = viewer_.captureTopologySelection(body_);
+    const auto selection = viewer_.selectionSnapshot();
+    std::vector<std::string> selectedObjects = selection.selectedObjectIds();
     qCDebug(pcadPresenterLog) << "refresh begin features"
                               << static_cast<qulonglong>(body_.features().size());
     PresentationResult result;
@@ -40,6 +43,7 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
         hidden.append(QString::fromStdString(id));
     }
     viewer_.setHiddenFeatures(hidden);
+    viewer_.restoreSelection(body_, selectedTopology, selectedObjects);
     qCDebug(pcadPresenterLog) << "refresh complete rebuilt" << result.rebuilt
                               << "presented" << static_cast<qulonglong>(result.presentedIds.size());
     return result;

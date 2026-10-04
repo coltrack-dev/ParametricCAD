@@ -211,14 +211,11 @@ void MainWindow::createParametricPanel()
 void MainWindow::refreshModelView(const bool fitView)
 {
     const auto result = presenter_->refresh();
-    QStringList surviving;
-    for (const auto& id : selectedObjectIds_) {
-        if (std::find_if(result.presentedIds.begin(), result.presentedIds.end(),
-                [&id](const auto& candidate) { return QString::fromStdString(candidate) == id; })
-            != result.presentedIds.end()) surviving.append(id);
-    }
     featureEditorPanel_->setFeatures(modeling_.features());
-    applySelection(surviving);
+    // ModelPresenter restores the OCCT selection, including topology
+    // references. Do not select feature objects again here: that would
+    // discard restored face/edge/vertex selection.
+    applySelectionSnapshot(viewer_->selectionSnapshot(), false);
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (fitView) viewer_->fitAll();
     if (!activeSketchId_.empty()) {

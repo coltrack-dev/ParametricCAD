@@ -1,6 +1,7 @@
 #pragma once
 
 #include <TopoDS_Shape.hxx>
+#include <Bnd_Box.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
@@ -27,6 +28,7 @@ struct FaceSignature {
     std::optional<gp_Dir> normal;
     double area{0.0};
     std::optional<double> radius;
+    Bnd_Box boundingBox;
 };
 
 struct EdgeSignature {
@@ -37,10 +39,12 @@ struct EdgeSignature {
     gp_Pnt lastPoint;
     std::optional<gp_Dir> direction;
     std::optional<double> radius;
+    Bnd_Box boundingBox;
 };
 
 struct VertexSignature {
     gp_Pnt point;
+    Bnd_Box boundingBox;
 };
 
 using TopologicalSignature = std::variant<FaceSignature, EdgeSignature, VertexSignature>;
@@ -50,6 +54,8 @@ struct TopologicalReference {
     TopologicalKind kind{TopologicalKind::Edge};
     std::optional<int> transientIndex;
     std::optional<TopologicalSignature> signature;
+    // Reserved for a future kernel/application persistent naming scheme.
+    std::optional<std::string> persistentId;
 
     bool isLegacy() const noexcept { return !signature.has_value(); }
 };
@@ -75,6 +81,8 @@ struct TopologicalResolveResult {
     std::optional<TopoDS_Shape> shape;
     std::optional<int> resolvedIndex;
     std::string error;
+    int candidateCount{0};
+    double bestScore{0.0};
 };
 
 class TopologicalSignatureBuilder final
