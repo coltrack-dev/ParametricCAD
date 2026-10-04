@@ -28,7 +28,7 @@ The model layer is in `src/model`:
 
 - `ParametricFeature` is the base class for the canonical parametric history.
   It owns a stable ID, display name, parameters in derived classes, generated
-  `TopoDS_Shape`, dependencies, and recompute state.
+  `TopoDS_Shape`, dependencies, recompute state, and persistent user visibility.
 - `Body` owns an ordered collection of shared parametric features. It validates
   feature insertion/removal, propagates dirty state through the history,
   recomputes the body, and exposes the resulting shape and error message.
@@ -68,6 +68,37 @@ label, a `PropertyValue`, optional numeric limits, and an editable flag. The
 editor creates controls from this metadata and sends edits to the generic
 `FeatureEditingService`; `ModelingController` validates the descriptor and
 records changes with `ChangeParametricPropertyCommand`.
+
+### Visibility
+
+`ParametricFeature::userVisible` is persistent user state, separate from
+feature validity and automatic dependency visibility. Hiding a feature does
+not delete it, suppress recompute, or break dependency links. The effective
+viewer rule is centralized in `FeatureVisibility`:
+
+```text
+effectiveVisible(feature) =
+    valid shape
+    && userVisible
+    && inside temporary isolate filter
+    && not automatically hidden as a dependency
+```
+
+`ModelPresenter` projects this result with AIS `Display`/`Erase`. Boolean
+operands and other consumed dependencies remain governed by their existing
+`hiddenDependencyIds()` policy. `Show All` clears persistent user-hidden flags
+but does not expose dependencies that modeling semantics still hide.
+
+Isolate is temporary presenter state. It filters the effective display set
+without rewriting user visibility flags, so clearing isolation restores the
+visibility that existed before it. Visibility changes use one atomic
+`SetFeatureVisibilityCommand`, do not recompute geometry, and are persisted as
+an optional `visible` feature field. Legacy files without the field default to
+visible.
+
+When a feature becomes effectively hidden, the viewer clears any selection of
+that feature, invalidates snap references, and updates the existing
+`SelectionState::primary` → `TransformGizmo` pipeline.
 
 ## Parametric features and recompute
 

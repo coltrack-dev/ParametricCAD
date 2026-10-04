@@ -10,6 +10,7 @@
 #include <GProp_GProps.hxx>
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 using namespace cad::parametric;
 using namespace cad::commands;
@@ -158,6 +159,72 @@ private slots:
         QVERIFY(hidden(body, "hexagon") && hidden(body, "cylinder"));
         stack.redo();
         QVERIFY(!body.findFeature("cut"));
+    }
+
+    void userVisibilityUndoRedoAndIsolation()
+    {
+        Body body;
+        QUndoStack stack;
+        auto a = std::make_shared<BoxParametricFeature>("a", 2, 2, 2);
+        auto b = std::make_shared<BoxParametricFeature>("b", 3, 3, 3);
+        auto c = std::make_shared<BoxParametricFeature>("c", 4, 4, 4);
+        stack.push(new AddFeatureCommand(body, a, "Create A"));
+        stack.push(new AddFeatureCommand(body, b, "Create B"));
+        stack.push(new AddFeatureCommand(body, c, "Create C"));
+
+        stack.push(new SetFeatureVisibilityCommand(
+            body, {"a", "b"}, {true, true}, {false, false}, "Hide Features"));
+        QVERIFY(!a->userVisible() && !b->userVisible());
+        QVERIFY(hidden(body, "a") && hidden(body, "b"));
+        QVERIFY(c->userVisible() && !hidden(body, "c"));
+        stack.undo();
+        QVERIFY(a->userVisible() && b->userVisible());
+        stack.redo();
+        QVERIFY(!a->userVisible() && !b->userVisible());
+
+        const auto isolated = hiddenFeatureIds(body, {"c"});
+        QVERIFY(std::find(isolated.begin(), isolated.end(), "a") != isolated.end());
+        QVERIFY(std::find(isolated.begin(), isolated.end(), "b") != isolated.end());
+        QVERIFY(std::find(isolated.begin(), isolated.end(), "c") == isolated.end());
+        const auto restored = hiddenFeatureIds(body);
+        QVERIFY(std::find(restored.begin(), restored.end(), "a") != restored.end());
+        QVERIFY(std::find(restored.begin(), restored.end(), "b") != restored.end());
+        QVERIFY(std::find(restored.begin(), restored.end(), "c") == restored.end());
+    }
+
+    void visibilityPersistsAndShowAllPreservesAutomaticHiddenDependencies()
+    {
+        Document document;
+        Body body;
+        QUndoStack stack;
+        auto base = std::make_shared<HexagonFeature>("base", 30, 12);
+        auto tool = std::make_shared<CylinderParametricFeature>("tool", 5, 20);
+        auto cut = std::make_shared<BooleanFeature>("cut", base, tool, BooleanOperation::Cut);
+        stack.push(new AddFeatureCommand(body, base, "Create Base"));
+        stack.push(new AddFeatureCommand(body, tool, "Create Tool"));
+        stack.push(new AddFeatureCommand(body, cut, "Create Cut"));
+        stack.push(new SetFeatureVisibilityCommand(
+            body, {"cut"}, {true}, {false}, "Hide Cut"));
+        QVERIFY(!cut->userVisible());
+        stack.push(new SetFeatureVisibilityCommand(
+            body, {"base", "tool", "cut"},
+            {true, true, false}, {true, true, true}, "Show All Features"));
+        QVERIFY(cut->userVisible());
+        QVERIFY(hidden(body, "base") && hidden(body, "tool"));
+        stack.push(new SetFeatureVisibilityCommand(
+            body, {"tool"}, {true}, {false}, "Hide Tool"));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("visibility.pcad");
+        QVERIFY2(ProjectFile::save(path, document, body, error), qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+        QVERIFY(loadedBody.findFeature("cut")->userVisible());
+        QVERIFY(loadedBody.findFeature("base")->userVisible());
+        QVERIFY(!loadedBody.findFeature("tool")->userVisible());
     }
 
     void removeRestoresOrderAndSource()

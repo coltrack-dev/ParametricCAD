@@ -15,6 +15,7 @@ struct FeatureDescriptor
 {
     std::string id;
     std::string name;
+    bool visible{true};
     cad::parametric::FeatureState state;
     std::string error;
     std::vector<cad::parametric::FeatureProperty> properties;
@@ -62,6 +63,9 @@ public:
         const std::string& currentId = {}
     ) = 0;
     virtual ModelingResult deleteFeature(const std::string& featureId) = 0;
+    virtual ModelingResult setFeatureVisibility(
+        const std::vector<std::string>& featureIds, bool visible) = 0;
+    virtual ModelingResult showAllFeatures() = 0;
     virtual void undo() = 0;
     virtual void redo() = 0;
 };

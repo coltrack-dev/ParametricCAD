@@ -194,6 +194,36 @@ void MainWindow::createParametricPanel()
     );
     featureEditorPanel_->setFeatureDoubleClickedHandler(
         [this](const QString& featureId) { editSketchById(featureId); });
+    featureEditorPanel_->setVisibilityHandlers(
+        [this](const QStringList& featureIds) {
+            std::vector<std::string> ids;
+            for (const auto& id : featureIds) ids.push_back(id.toStdString());
+            const auto result = modeling_.setFeatureVisibility(ids, false);
+            if (!result.success) statusBar()->showMessage(
+                QString::fromStdString(result.error), 3000);
+            else refreshModelView(false);
+        },
+        [this](const QStringList& featureIds) {
+            std::vector<std::string> ids;
+            for (const auto& id : featureIds) ids.push_back(id.toStdString());
+            const auto result = modeling_.setFeatureVisibility(ids, true);
+            if (!result.success) statusBar()->showMessage(
+                QString::fromStdString(result.error), 3000);
+            else refreshModelView(false);
+        },
+        [this](const QStringList& featureIds) {
+            std::vector<std::string> ids;
+            for (const auto& id : featureIds) ids.push_back(id.toStdString());
+            presenter_->setIsolatedFeatures(ids);
+            refreshModelView(false);
+        },
+        [this]() {
+            presenter_->clearIsolation();
+            const auto result = modeling_.showAllFeatures();
+            if (!result.success) statusBar()->showMessage(
+                QString::fromStdString(result.error), 3000);
+            else refreshModelView(false);
+        });
 
     connect(viewer_, &CadViewer::selectionChanged, this,
         [this](const cad::application::SelectionSnapshot& selection) {

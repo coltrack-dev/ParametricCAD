@@ -1400,10 +1400,15 @@ void CadViewer::setHiddenFeatures(const QStringList& featureIds)
         changed = true;
     }
     if (changed) {
+        const bool selectedFeatureHidden = std::any_of(
+            selectionState_.selected.begin(), selectionState_.selected.end(),
+            [&featureIds](const auto& item) { return featureIds.contains(item.featureId); });
+        if (selectedFeatureHidden) context_->ClearSelected(Standard_False);
         invalidateSnapReferenceCache("MODEL_CHANGED: visibility changed");
         resetDetectedCycle();
         selectionState_.hovered.reset();
         syncSelectionStateFromOcct();
+        updateTransformGizmo();
         context_->UpdateCurrentViewer();
     }
 }

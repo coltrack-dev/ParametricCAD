@@ -76,6 +76,8 @@ public:
     const TopoDS_Shape& shape() const noexcept;
     const gp_Trsf& placement() const noexcept;
     void setPlacement(const gp_Trsf& placement);
+    bool userVisible() const noexcept;
+    void setUserVisible(bool visible) noexcept;
 
     const std::vector<std::weak_ptr<ParametricFeature>>& dependencies() const noexcept;
     void addDependency(const Ptr& dependency);
@@ -93,6 +95,7 @@ private:
     std::string name_;
     TopoDS_Shape shape_;
     gp_Trsf placement_;
+    bool userVisible_{true};
     FeatureState state_{FeatureState::Dirty};
     std::string error_;
     std::vector<std::weak_ptr<ParametricFeature>> dependencies_;

@@ -132,6 +132,8 @@ Further Boolean work is deferred until Phase 2 is reliable.
   geometry-signature match exists; missing or ambiguous topology is dropped.
 - SnapManager supports cached endpoint, midpoint, and bounded edge-intersection
   candidates with endpoint-first priority and transform-time hysteresis.
+- Feature-tree visibility supports persistent Hide/Show, temporary Isolate and
+  Show All without changing feature history or recompute semantics.
 
 **In progress**
 

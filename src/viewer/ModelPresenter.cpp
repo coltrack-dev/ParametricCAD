@@ -28,7 +28,7 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
         return ids;
     }());
     QStringList hidden;
-    for (const auto& id : cad::parametric::hiddenFeatureIds(body_)) {
+    for (const auto& id : cad::parametric::hiddenFeatureIds(body_, isolatedFeatureIds_)) {
         hidden.append(QString::fromStdString(id));
     }
     viewer_.setHiddenFeatures(hidden);
@@ -39,4 +39,22 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
 void cad::viewer::ModelPresenter::clear()
 {
     viewer_.clear();
+    isolatedFeatureIds_.clear();
+}
+
+void cad::viewer::ModelPresenter::setIsolatedFeatures(
+    const std::vector<std::string>& featureIds)
+{
+    isolatedFeatureIds_.clear();
+    isolatedFeatureIds_.insert(featureIds.begin(), featureIds.end());
+}
+
+void cad::viewer::ModelPresenter::clearIsolation()
+{
+    isolatedFeatureIds_.clear();
+}
+
+bool cad::viewer::ModelPresenter::isolationActive() const noexcept
+{
+    return !isolatedFeatureIds_.empty();
 }

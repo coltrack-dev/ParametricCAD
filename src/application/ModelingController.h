@@ -142,6 +142,9 @@ public:
         const std::string& currentId = {}
     ) override;
     ModelingResult deleteFeature(const std::string& featureId) override;
+    ModelingResult setFeatureVisibility(
+        const std::vector<std::string>& featureIds, bool visible) override;
+    ModelingResult showAllFeatures() override;
     void undo() override;
     void redo() override;
     ModelingResult setFeatureProperty(

@@ -400,6 +400,7 @@ ParametricFeature::Ptr decode(const QJsonObject& o, const Body& body)
         feature->setPlacement(placement);
     }
     feature->setName(string(o, "name"));
+    if (o.contains("visible")) feature->setUserVisible(boolean(o, "visible"));
     return feature;
 }
 }

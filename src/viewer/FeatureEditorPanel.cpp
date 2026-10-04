@@ -4,9 +4,12 @@
 
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QColor>
+#include <QBrush>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QScopedValueRollback>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
@@ -176,6 +179,18 @@ void FeatureEditorPanel::setFeatureDoubleClickedHandler(
     featureDoubleClickedHandler_ = std::move(handler);
 }
 
+void FeatureEditorPanel::setVisibilityHandlers(
+    std::function<void(const QStringList&)> hide,
+    std::function<void(const QStringList&)> show,
+    std::function<void(const QStringList&)> isolate,
+    std::function<void()> showAll)
+{
+    hideHandler_ = std::move(hide);
+    showHandler_ = std::move(show);
+    isolateHandler_ = std::move(isolate);
+    showAllHandler_ = std::move(showAll);
+}
+
 void FeatureEditorPanel::createUi()
 {
     auto* rootLayout = new QVBoxLayout(this);
@@ -249,6 +264,7 @@ void FeatureEditorPanel::createUi()
         QSizePolicy::Expanding,
         QSizePolicy::Expanding
     );
+    tree_->setContextMenuPolicy(Qt::CustomContextMenu);
 
     rootLayout->addWidget(tree_, 2);
 
@@ -403,6 +419,42 @@ void FeatureEditorPanel::createUi()
                 if (!id.isEmpty()) featureDoubleClickedHandler_(id);
             }
         });
+    connect(tree_, &QTreeWidget::customContextMenuRequested, this,
+        [this](const QPoint& position) {
+            auto* item = tree_->itemAt(position);
+            if (!item || !item->data(0, FeatureIdRole).isValid()) return;
+            if (!item->isSelected()) {
+                tree_->clearSelection();
+                item->setSelected(true);
+                tree_->setCurrentItem(item);
+            }
+            const auto ids = selectedFeatureIds();
+            if (ids.isEmpty()) return;
+            bool hasVisible = false;
+            bool hasHidden = false;
+            for (const auto& feature : features_) {
+                if (!ids.contains(QString::fromStdString(feature.id))) continue;
+                if (feature.visible) hasVisible = true;
+                else hasHidden = true;
+            }
+            QMenu menu(tree_);
+            auto* hide = menu.addAction("Hide");
+            auto* show = menu.addAction("Show");
+            auto* isolate = menu.addAction("Isolate");
+            menu.addSeparator();
+            auto* showAll = menu.addAction("Show All");
+            hide->setEnabled(hasVisible);
+            show->setEnabled(hasHidden);
+            QObject::connect(hide, &QAction::triggered, this,
+                [this, ids]() { if (hideHandler_) hideHandler_(ids); });
+            QObject::connect(show, &QAction::triggered, this,
+                [this, ids]() { if (showHandler_) showHandler_(ids); });
+            QObject::connect(isolate, &QAction::triggered, this,
+                [this, ids]() { if (isolateHandler_) isolateHandler_(ids); });
+            QObject::connect(showAll, &QAction::triggered, this,
+                [this]() { if (showAllHandler_) showAllHandler_(); });
+            menu.exec(tree_->viewport()->mapToGlobal(position));
+        });
 
     clearProperties();
 }
@@ -549,6 +601,11 @@ void FeatureEditorPanel::refresh()
             FeatureIdRole,
             id
         );
+
+        if (!feature.visible) {
+            item->setForeground(0, QBrush(QColor(130, 130, 130)));
+            item->setToolTip(0, "Hidden");
+        }
 
         item->setSelected(selectedIds.contains(id));
         if (id == currentId) {

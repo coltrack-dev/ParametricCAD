@@ -3,6 +3,7 @@
 #include "model/Body.h"
 
 #include <string>
+#include <set>
 #include <vector>
 
 class CadViewer;
@@ -23,10 +24,14 @@ public:
 
     PresentationResult refresh();
     void clear();
+    void setIsolatedFeatures(const std::vector<std::string>& featureIds);
+    void clearIsolation();
+    bool isolationActive() const noexcept;
 
 private:
     cad::parametric::Body& body_;
     CadViewer& viewer_;
+    std::set<std::string> isolatedFeatureIds_;
 };
 
 } // namespace cad::viewer

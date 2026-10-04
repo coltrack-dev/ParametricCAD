@@ -268,6 +268,45 @@ void TransformFeatureCommand::redo()
     apply(after_);
 }
 
+SetFeatureVisibilityCommand::SetFeatureVisibilityCommand(
+    parametric::Body& body,
+    std::vector<std::string> featureIds,
+    std::vector<bool> before,
+    std::vector<bool> after,
+    const QString& text)
+    : QUndoCommand(text), body_(body), featureIds_(std::move(featureIds)),
+      before_(std::move(before)), after_(std::move(after))
+{
+    if (featureIds_.empty() || featureIds_.size() != before_.size()
+        || featureIds_.size() != after_.size()) {
+        throw std::invalid_argument("Visibility command has invalid state");
+    }
+    for (const auto& featureId : featureIds_) {
+        if (!body_.findFeature(featureId)) {
+            throw std::invalid_argument("Visibility target does not exist: " + featureId);
+        }
+    }
+}
+
+void SetFeatureVisibilityCommand::apply(const std::vector<bool>& values)
+{
+    for (std::size_t index = 0; index < featureIds_.size(); ++index) {
+        const auto feature = body_.findFeature(featureIds_[index]);
+        if (!feature) throw std::invalid_argument("Visibility target no longer exists");
+        feature->setUserVisible(values[index]);
+    }
+}
+
+void SetFeatureVisibilityCommand::undo()
+{
+    apply(before_);
+}
+
+void SetFeatureVisibilityCommand::redo()
+{
+    apply(after_);
+}
+
 void AddFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());

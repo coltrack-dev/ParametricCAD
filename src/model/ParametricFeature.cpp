@@ -98,7 +98,8 @@ QJsonObject ParametricFeature::serialize() const
     QJsonObject object{
         {"id", QString::fromStdString(id_)},
         {"name", QString::fromStdString(name_)},
-        {"type", QString::fromLatin1(typeId())}
+        {"type", QString::fromLatin1(typeId())},
+        {"visible", userVisible_}
     };
     QJsonArray placement;
     for (int row = 1; row <= 3; ++row) {
@@ -130,6 +131,16 @@ void ParametricFeature::setPlacement(const gp_Trsf& placement)
 {
     placement_ = placement;
     markDirty();
+}
+
+bool ParametricFeature::userVisible() const noexcept
+{
+    return userVisible_;
+}
+
+void ParametricFeature::setUserVisible(const bool visible) noexcept
+{
+    userVisible_ = visible;
 }
 
 void ParametricFeature::copyPlacementTo(const Ptr& feature) const

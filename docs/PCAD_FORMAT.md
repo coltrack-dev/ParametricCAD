@@ -6,7 +6,9 @@ Canonical `body` records may contain an optional `placement` array with twelve
 finite numbers: the first three rows of an OCCT `gp_Trsf` (3x3 rotation and
 translation). It is applied after rebuilding the feature geometry and stores
 Move/Rotate results. Missing placement is identity, preserving compatibility
-with existing v1 files. Transient previews and undo history are not serialized.
+with existing v1 files. An optional `visible` boolean stores persistent user
+visibility; missing `visible` defaults to `true`. Temporary Isolate state,
+transient previews and undo history are not serialized.
 
 ## Implemented format (version 1)
 
@@ -27,6 +29,10 @@ with existing v1 files. Transient previews and undo history are not serialized.
   `legacy-cylinder-N`). New saves write this array empty.
 - `body` contains ID/name/type plus parameters for Box, Cylinder, Cone, Sphere,
   Torus, Hexagon, Boolean, Sketch, Face and Extrude. Type names are case-sensitive.
+- `visible` is persistent user visibility. `false` hides a feature without
+  deleting it, suppressing recompute, or changing dependencies. Automatic
+  dependency/operand hiding remains presentation policy and is not replaced by
+  this field.
 - Boolean dependencies are stored as `left`/`right` IDs and `operation`
   (`Fuse`, `Cut`, `Common`); sources must precede the dependent entry.
 - Other body parameters: Cylinder (`radius`, `height`), Cone (`bottomRadius`,

@@ -45,8 +45,8 @@ std::vector<FeatureDescriptor> ModelingController::features() const
     std::vector<FeatureDescriptor> result;
     result.reserve(body_.features().size());
     for (const auto& feature : body_.features()) {
-        result.push_back({feature->id(), feature->name(), feature->state(),
-                          feature->error(), feature->properties()});
+        result.push_back({feature->id(), feature->name(), feature->userVisible(),
+                          feature->state(), feature->error(), feature->properties()});
     }
     return result;
 }
@@ -1000,6 +1000,56 @@ ModelingResult ModelingController::deleteFeature(const std::string& featureId)
         }
         undoStack_.push(new cad::commands::RemoveFeatureCommand(body_, featureId));
         return {true, featureId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::setFeatureVisibility(
+    const std::vector<std::string>& featureIds, const bool visible)
+{
+    if (featureIds.empty()) return {false, {}, "No features selected"};
+    std::vector<std::string> ids;
+    std::vector<bool> before;
+    std::vector<bool> after;
+    for (const auto& featureId : featureIds) {
+        const auto feature = body_.findFeature(featureId);
+        if (!feature) return {false, {}, "Feature does not exist: " + featureId};
+        if (std::find(ids.begin(), ids.end(), featureId) != ids.end()) continue;
+        ids.push_back(featureId);
+        before.push_back(feature->userVisible());
+        after.push_back(visible);
+    }
+    if (ids.empty() || std::equal(before.begin(), before.end(), after.begin())) {
+        return {true, {}, {}};
+    }
+    try {
+        undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+            body_, std::move(ids), std::move(before), std::move(after),
+            visible ? "Show Features" : "Hide Features"));
+        return {true, {}, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::showAllFeatures()
+{
+    std::vector<std::string> ids;
+    std::vector<bool> before;
+    std::vector<bool> after;
+    for (const auto& feature : body_.features()) {
+        ids.push_back(feature->id());
+        before.push_back(feature->userVisible());
+        after.push_back(true);
+    }
+    if (ids.empty() || std::equal(before.begin(), before.end(), after.begin())) {
+        return {true, {}, {}};
+    }
+    try {
+        undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+            body_, std::move(ids), std::move(before), std::move(after), "Show All Features"));
+        return {true, {}, {}};
     } catch (const std::exception& error) {
         return failure(error);
     }

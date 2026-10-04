@@ -218,6 +218,27 @@ private:
     gp_Trsf after_;
 };
 
+class SetFeatureVisibilityCommand final : public QUndoCommand
+{
+public:
+    SetFeatureVisibilityCommand(
+        parametric::Body& body,
+        std::vector<std::string> featureIds,
+        std::vector<bool> before,
+        std::vector<bool> after,
+        const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const std::vector<bool>& values);
+
+    parametric::Body& body_;
+    std::vector<std::string> featureIds_;
+    std::vector<bool> before_;
+    std::vector<bool> after_;
+};
+
 class RemoveFeatureCommand final : public QUndoCommand
 {
 public:
