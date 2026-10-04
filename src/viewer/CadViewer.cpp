@@ -9,7 +9,6 @@
 #include <QAction>
 #include <QApplication>
 #include <QDebug>
-#include <QElapsedTimer>
 #include <QFocusEvent>
 #include <QActionGroup>
 #include <QLabel>
@@ -984,7 +983,7 @@ void CadViewer::beginTransform(
 
 void CadViewer::invalidateSnapReferenceCache(const char* reason)
 {
-    qDebug() << "Snap cache invalidated:" << reason;
+    Q_UNUSED(reason);
     snapReferenceCache_.clear();
     snapCandidateCache_.clear();
     transformSnapCandidates_.reset();
@@ -994,7 +993,7 @@ void CadViewer::invalidateSnapReferenceCache(const char* reason)
 
 void CadViewer::invalidateSnapProjectionCache(const char* reason)
 {
-    qDebug() << "Snap screen projection cache invalidated:" << reason;
+    Q_UNUSED(reason);
     snapScreenProjectionCache_.clear();
 }
 
@@ -1009,8 +1008,6 @@ void CadViewer::updateTransformSnap(
     const auto project = [this, width, height](const gp_Pnt& point) {
         return projectWorldPoint(view_, point, width, height);
     };
-    QElapsedTimer snapTimer;
-    snapTimer.start();
     activeSnap_ = snapManager_.findCandidate(
         *transformSnapCandidates_,
         delta,
@@ -1018,9 +1015,6 @@ void CadViewer::updateTransformSnap(
         activeSnap_,
         snapScreenIndex_.get()
     );
-    if (snapTimer.elapsed() > 2) {
-        qWarning() << "SnapManager::findCandidate took" << snapTimer.elapsed() << "ms";
-    }
     if (activeSnap_) {
         const gp_Trsf correction = activeSnap_->correction;
         delta = correction;
@@ -1087,12 +1081,6 @@ void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
 void CadViewer::updateTransformPreview(const QPoint& position)
 {
     if (!transformDragging_ || transformObject_.IsNull()) return;
-    QElapsedTimer frameTimer;
-    frameTimer.start();
-    qint64 rayAndMathMs = 0;
-    qint64 snapMs = 0;
-    qint64 presentationMs = 0;
-    qint64 viewerUpdateMs = 0;
     ViewRay currentRay;
     if (!makeViewRay(position, currentRay)) return;
 
@@ -1129,45 +1117,21 @@ void CadViewer::updateTransformPreview(const QPoint& position)
             *angle);
     }
 
-    rayAndMathMs = frameTimer.elapsed();
     const gp_Trsf previousDelta = transformDelta_;
     const gp_Trsf rawDelta = delta;
     gp_Pnt movedPivot = transformPivot_;
-    QElapsedTimer snapTimer;
-    snapTimer.start();
     updateTransformSnap(delta, movedPivot, rawDelta);
-    snapMs = snapTimer.elapsed();
     if (transformsClose(previousDelta, delta)) {
         return;
     }
     transformDelta_ = delta;
-    QElapsedTimer locationTimer;
-    locationTimer.start();
     const auto previewObject = transformCopyMode_
         ? transformPreviewObject_
         : transformObject_;
     if (!previewObject.IsNull()) {
         context_->SetLocation(previewObject, TopLoc_Location(delta));
     }
-    if (locationTimer.elapsed() > 2) {
-        qWarning() << "Transform preview SetLocation took"
-                   << locationTimer.elapsed() << "ms";
-    }
-    presentationMs = locationTimer.elapsed();
-    QElapsedTimer redrawTimer;
-    redrawTimer.start();
     context_->UpdateCurrentViewer();
-    viewerUpdateMs = redrawTimer.elapsed();
-    if (redrawTimer.elapsed() > 2) {
-        qWarning() << "Transform preview viewer update took" << redrawTimer.elapsed() << "ms";
-    }
-    if (frameTimer.elapsed() > 2) {
-        qWarning() << "Transform mouse move breakdown: ray/math" << rayAndMathMs
-                   << "ms, snapping" << snapMs
-                   << "ms, presentation" << presentationMs
-                   << "ms, viewer" << viewerUpdateMs
-                   << "ms, total" << frameTimer.elapsed() << "ms";
-    }
 }
 
 void CadViewer::commitTransform()
@@ -1397,8 +1361,6 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
 
 void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureId)
 {
-    qCDebug(pcadViewerLog) << "updateFeature begin" << featureId
-                           << "shapeNull" << shape.IsNull();
     if (shape.IsNull()) return;
     const auto found = featureObjects_.find(featureId);
     if (found == featureObjects_.end()) {
@@ -1411,8 +1373,6 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
         if (featureId.startsWith("sketch-")) {
             context_->Redisplay(object, Standard_True);
         }
-        qCDebug(pcadViewerLog) << "updateFeature unchanged" << featureId
-                               << "ais" << static_cast<const void*>(object.get());
         return;
     }
 
@@ -1421,8 +1381,6 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     invalidateSnapReferenceCache("MODEL_CHANGED: feature shape updated");
     selectionState_.hovered.reset();
     object->SetShape(shape);
-    qCDebug(pcadViewerLog) << "updateFeature SetShape" << featureId
-                           << "ais" << static_cast<const void*>(object.get());
     context_->Redisplay(object, Standard_True);
     syncSelectionStateFromOcct();
 }
@@ -1551,9 +1509,6 @@ std::vector<cad::topology::TopologicalReference> CadViewer::captureTopologySelec
         try {
             result.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
                 feature->id(), feature->shape(), hit.shape));
-            qCDebug(pcadViewerLog) << "captured topology" << hit.item.featureId
-                                   << static_cast<int>(hit.item.kind)
-                                   << hit.item.currentSubshapeIndex.value_or(0);
         } catch (const Standard_Failure& failure) {
             qCWarning(pcadViewerLog) << "failed to capture topology"
                                      << hit.item.featureId
@@ -1578,10 +1533,6 @@ void CadViewer::restoreSelection(
     const cad::topology::TopologicalReferenceResolver resolver(body);
     for (const auto& reference : topology) {
         const auto resolved = resolver.resolve(reference);
-        qCDebug(pcadViewerLog) << "restore topology" << QString::fromStdString(reference.featureId)
-                               << "status" << static_cast<int>(resolved.status)
-                               << "candidates" << resolved.candidateCount
-                               << "score" << resolved.bestScore;
         if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape) continue;
         const auto object = featureObjects_.find(QString::fromStdString(reference.featureId));
         if (object == featureObjects_.end() || object->second.IsNull()) continue;
@@ -2384,13 +2335,7 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     }
 
     if (transformDragging_) {
-        QElapsedTimer gizmoTimer;
-        gizmoTimer.start();
         updateTransformPreview(currentPosition);
-        if (gizmoTimer.elapsed() > 2) {
-            qWarning() << "TransformGizmo mouse move handling took"
-                       << gizmoTimer.elapsed() << "ms";
-        }
         lastMousePosition_ = currentPosition;
         return;
     }
@@ -2462,14 +2407,8 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         }
 
         if (transformMode_ && transformGizmo_) {
-            QElapsedTimer gizmoTimer;
-            gizmoTimer.start();
             transformGizmo_->setHovered(
                 transformGizmo_->hitTest(currentPosition, view_));
-            if (gizmoTimer.elapsed() > 2) {
-                qWarning() << "TransformGizmo mouse move handling took"
-                           << gizmoTimer.elapsed() << "ms";
-            }
         } else {
             updateHover(currentPosition);
         }

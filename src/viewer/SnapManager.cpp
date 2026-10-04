@@ -10,9 +10,6 @@
 #include <GeomAbs_SurfaceType.hxx>
 #include <Geom_Circle.hxx>
 #include <GeomAPI_ExtremaCurveCurve.hxx>
-#include <QDebug>
-#include <QElapsedTimer>
-#include <QLoggingCategory>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -25,8 +22,6 @@
 #include <set>
 
 namespace cad::viewer {
-
-Q_LOGGING_CATEGORY(pcadSnapLog, "parametric.snap")
 
 namespace
 {
@@ -509,11 +504,7 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     const std::vector<SnapReference>& targets
 ) const
 {
-    QElapsedTimer timer;
-    timer.start();
     std::vector<SnapCandidate> result;
-    std::map<QString, std::size_t> candidatesBySource;
-    std::map<QString, std::size_t> candidatesByTarget;
     std::vector<SnapReference> uniqueSources;
     std::vector<SnapReference> uniqueTargets;
     std::set<QString> sourceKeys;
@@ -536,14 +527,6 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
         if (targetKeys.insert(referenceKey(intersection)).second)
             uniqueTargets.push_back(std::move(intersection));
     }
-    std::map<SnapReferenceType, std::size_t> referenceCounts;
-    for (const auto& target : uniqueTargets) ++referenceCounts[target.type];
-    qCDebug(pcadSnapLog) << "SnapManager references by type"
-             << "endpoint" << referenceCounts[SnapReferenceType::Endpoint]
-             << "midpoint" << referenceCounts[SnapReferenceType::Midpoint]
-             << "intersection" << referenceCounts[SnapReferenceType::Intersection]
-             << "edge pairs" << gLastNearbyEdgePairCount
-             << "intersection candidates" << gLastIntersectionCandidateCount;
     std::size_t sourceIndex = 0;
     for (const auto& source : uniqueSources) {
         for (const auto& target : uniqueTargets) {
@@ -570,8 +553,6 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
             auto cachedTarget = target;
             if (cachedSource.geometry) cachedSource.shape.Nullify();
             if (cachedTarget.geometry) cachedTarget.shape.Nullify();
-            candidatesBySource[source.ownerId]++;
-            candidatesByTarget[target.ownerId]++;
             result.push_back({
                 std::move(cachedSource),
                 std::move(cachedTarget),
@@ -584,32 +565,6 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
             });
         }
         ++sourceIndex;
-    }
-    if (timer.elapsed() > 2) {
-        qWarning() << "SnapManager candidate collection/OCCT projection took"
-                   << timer.elapsed() << "ms for" << result.size() << "candidates"
-                   << "(sources" << sources.size() << "->" << uniqueSources.size()
-                   << ", targets" << targets.size() << "->" << uniqueTargets.size() << ')';
-        std::vector<std::pair<QString, std::size_t>> contributors(
-            candidatesByTarget.begin(), candidatesByTarget.end());
-        std::sort(contributors.begin(), contributors.end(),
-            [](const auto& left, const auto& right) { return left.second > right.second; });
-        const int limit = std::min<int>(5, contributors.size());
-        for (int index = 0; index < limit; ++index) {
-            qWarning() << "SnapManager target contributor"
-                       << contributors[static_cast<std::size_t>(index)].first
-                       << contributors[static_cast<std::size_t>(index)].second;
-        }
-        std::vector<std::pair<QString, std::size_t>> sourceContributors(
-            candidatesBySource.begin(), candidatesBySource.end());
-        std::sort(sourceContributors.begin(), sourceContributors.end(),
-            [](const auto& left, const auto& right) { return left.second > right.second; });
-        const int sourceLimit = std::min<int>(5, sourceContributors.size());
-        for (int index = 0; index < sourceLimit; ++index) {
-            qWarning() << "SnapManager source contributor"
-                       << sourceContributors[static_cast<std::size_t>(index)].first
-                       << sourceContributors[static_cast<std::size_t>(index)].second;
-        }
     }
     return result;
 }
@@ -633,13 +588,9 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
     const SnapScreenIndex* screenIndex
 ) const
 {
-    QElapsedTimer totalTimer;
-    totalTimer.start();
     const double limit = active
         ? ActivationTolerancePixels * HysteresisMultiplier
         : ActivationTolerancePixels;
-    QElapsedTimer projectionTimer;
-    projectionTimer.start();
     std::size_t sourceCount = 0;
     for (const auto& candidate : candidates) {
         sourceCount = std::max(sourceCount, candidate.sourceIndex + 1);
@@ -657,13 +608,6 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
         }
         sourceProjected[candidate.sourceIndex] = true;
     }
-    if (projectionTimer.elapsed() > 2) {
-        qWarning() << "SnapManager source projection phase took"
-                   << projectionTimer.elapsed() << "ms for" << sourceCount << "sources";
-    }
-
-    QElapsedTimer distanceTimer;
-    distanceTimer.start();
     std::optional<SnapCandidate> result;
     std::vector<std::size_t> candidateIndices;
     if (screenIndex) {
@@ -700,13 +644,7 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
                 result = std::move(candidate);
             }
     }
-    if (distanceTimer.elapsed() > 2) {
-        qWarning() << "SnapManager nearest-distance phase took"
-                   << distanceTimer.elapsed() << "ms for" << candidates.size() << "candidates";
-    }
     if (result) {
-        QElapsedTimer correctionTimer;
-        correctionTimer.start();
         auto source = result->source;
         source.point.Transform(previewTransform);
         if (source.frame) {
@@ -734,21 +672,6 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
         }
         result->correction = correctionFor(
             source, result->target, source.point, result->targetPoint);
-        static int lastLoggedKind = -1;
-        if (lastLoggedKind != static_cast<int>(result->kind)) {
-            qCDebug(pcadSnapLog) << "SnapManager selected snap type"
-                                  << static_cast<int>(result->kind)
-                                  << "distance" << result->screenDistance;
-            lastLoggedKind = static_cast<int>(result->kind);
-        }
-        if (correctionTimer.elapsed() > 2) {
-            qWarning() << "SnapManager candidate correction phase took"
-                       << correctionTimer.elapsed() << "ms";
-        }
-    }
-    if (totalTimer.elapsed() > 2) {
-        qWarning() << "SnapManager::findCandidate total took"
-                   << totalTimer.elapsed() << "ms";
     }
     return result;
 }

@@ -1,13 +1,10 @@
 #include "model/Body.h"
 
 #include <algorithm>
-#include <QLoggingCategory>
 #include <stdexcept>
 #include <unordered_set>
 
 namespace cad::parametric {
-
-Q_LOGGING_CATEGORY(pcadBodyLog, "parametric.body")
 
 void Body::addFeature(const FeaturePtr& feature)
 {
@@ -92,17 +89,10 @@ const TopoDS_Shape& Body::shape() const noexcept
 
 bool Body::recompute()
 {
-    qCDebug(pcadBodyLog) << "recompute begin features"
-                         << static_cast<qulonglong>(features_.size());
     lastError_.clear();
     resultShape_.Nullify();
 
     for (const FeaturePtr& feature : features_) {
-        qCDebug(pcadBodyLog) << "recompute feature"
-                              << QString::fromStdString(feature->id())
-                              << "ptr" << static_cast<const void*>(feature.get())
-                              << "dirty" << feature->isDirty()
-                              << "state" << static_cast<int>(feature->state());
         if (feature->isDirty() && !feature->recompute()) {
             lastError_ =
                 "Feature '" + feature->name() + "' failed: " + feature->error();
@@ -121,8 +111,6 @@ bool Body::recompute()
         }
     }
 
-    qCDebug(pcadBodyLog) << "recompute complete resultNull" << resultShape_.IsNull()
-                          << "error" << QString::fromStdString(lastError_);
     return !resultShape_.IsNull() || features_.empty();
 }
 

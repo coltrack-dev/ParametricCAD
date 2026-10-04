@@ -7,7 +7,6 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QLoggingCategory>
 #include <QScopedValueRollback>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
@@ -30,8 +29,6 @@
 #include <vector>
 
 namespace {
-
-Q_LOGGING_CATEGORY(pcadEditorLog, "parametric.editor")
 
 constexpr int FeatureIdRole = Qt::UserRole + 1;
 
@@ -124,9 +121,6 @@ bool FeatureEditorPanel::eventFilter(QObject* watched, QEvent* event)
 
 void FeatureEditorPanel::reportResult(const cad::application::ModelingResult& result)
 {
-    qCDebug(pcadEditorLog) << "reportResult" << "success" << result.success
-                           << "id" << QString::fromStdString(result.id)
-                           << "error" << QString::fromStdString(result.error);
     if (!result.success) {
         setPanelMessage(QString::fromStdString(result.error), true);
         return;
@@ -138,15 +132,12 @@ void FeatureEditorPanel::reportResult(const cad::application::ModelingResult& re
     // and panel refresh until the current event has returned.
     const QString resultId = QString::fromStdString(result.id);
     QTimer::singleShot(0, this, [this, resultId]() {
-        qCDebug(pcadEditorLog) << "deferred refresh begin" << resultId
-                               << "panel" << static_cast<const void*>(this);
         if (modelChangedHandler_) {
             modelChangedHandler_();
         } else {
             refresh();
         }
         if (!resultId.isEmpty()) selectFeatures({resultId});
-        qCDebug(pcadEditorLog) << "deferred refresh complete" << resultId;
     });
 }
 
@@ -641,10 +632,6 @@ void FeatureEditorPanel::rebuildProperties(
             [this, featureId, property, editor]() {
                 if (updatingProperties_ || refreshPending_ || !service_) return;
                 const double after = editor->value();
-                qCDebug(pcadEditorLog) << "queue property edit"
-                                       << QString::fromStdString(featureId)
-                                       << QString::fromStdString(property.key)
-                                       << after;
                 const auto apply = [this, featureId, property, after]() {
                     if (!service_) return;
                     if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
@@ -676,10 +663,6 @@ void FeatureEditorPanel::rebuildProperties(
                 [this, featureId, property, editor]() {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
                     const int after = editor->value();
-                    qCDebug(pcadEditorLog) << "queue property edit"
-                                           << QString::fromStdString(featureId)
-                                           << QString::fromStdString(property.key)
-                                           << after;
                     const auto apply = [this, featureId, property, after]() {
                         if (!service_) return;
                         if (propertyMatchesCurrentValue(featureId, property.key, after)) return;

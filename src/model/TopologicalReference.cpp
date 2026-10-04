@@ -15,7 +15,6 @@
 #include <TopoDS.hxx>
 
 #include <QJsonArray>
-#include <QLoggingCategory>
 
 #include <algorithm>
 #include <cmath>
@@ -24,8 +23,6 @@
 #include <tuple>
 
 namespace cad::topology {
-
-Q_LOGGING_CATEGORY(pcadTopologyLog, "parametric.topology")
 
 namespace {
 
@@ -392,9 +389,6 @@ TopologicalResolveResult TopologicalReferenceResolver::resolveAgainstShape(
     }
     if (matches.empty())
     {
-        qCDebug(pcadTopologyLog) << "unresolved topology"
-                                 << QString::fromStdString(reference.featureId)
-                                 << "candidates" << 0;
         return {ResolveStatus::Missing, std::nullopt, std::nullopt,
                 "Referenced topology is missing", 0, 0.0};
     }
@@ -403,16 +397,9 @@ TopologicalResolveResult TopologicalReferenceResolver::resolveAgainstShape(
     if (matches.size() > 1
         && std::abs(std::get<0>(matches[0]) - std::get<0>(matches[1])) <= 0.05)
     {
-        qCDebug(pcadTopologyLog) << "ambiguous topology"
-                                 << QString::fromStdString(reference.featureId)
-                                 << "candidates" << static_cast<int>(matches.size());
         return {ResolveStatus::Ambiguous, std::nullopt, std::nullopt,
                 "Referenced topology is ambiguous", static_cast<int>(matches.size()), 0.0};
     }
-    qCDebug(pcadTopologyLog) << "resolved" << QString::fromStdString(reference.featureId)
-                             << "candidates" << static_cast<int>(matches.size())
-                             << "index" << std::get<1>(matches.front())
-                             << "score" << std::get<0>(matches.front());
     return {ResolveStatus::Resolved, std::get<2>(matches.front()), std::get<1>(matches.front()), {},
             static_cast<int>(matches.size()), std::get<0>(matches.front())};
 }
