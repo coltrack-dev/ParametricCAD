@@ -22,6 +22,7 @@
 #include <QWheelEvent>
 
 #include <AIS_DisplayMode.hxx>
+#include <TCollection_ExtendedString.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -499,6 +500,7 @@ void CadViewer::exitSketchMode()
     }
     sketchPreviewObject_.Nullify();
     clearSketchTrimPreview();
+    clearSketchConstraintMarkers();
 }
 
 bool CadViewer::sketchMode() const noexcept
@@ -598,6 +600,100 @@ void CadViewer::clearSketchTrimPreview()
     if (!sketchTrimPreviewObject_.IsNull() && !context_.IsNull())
         context_->Remove(sketchTrimPreviewObject_, Standard_True);
     sketchTrimPreviewObject_.Nullify();
+}
+
+void CadViewer::clearSketchConstraintMarkers()
+{
+    if (!context_.IsNull()) {
+        for (const auto& marker : sketchConstraintMarkers_)
+            if (!marker.IsNull()) context_->Remove(marker, Standard_False);
+    }
+    sketchConstraintMarkers_.clear();
+    if (!context_.IsNull()) context_->CurrentViewer()->Redraw();
+}
+
+void CadViewer::setSketchConstraintMarkers(const cad::parametric::SketchFeature& sketch)
+{
+    clearSketchConstraintMarkers();
+    if (!sketchMode_ || context_.IsNull()) return;
+    const auto world = [this](const gp_Pnt2d& point) {
+        gp_Pnt result = sketchOrigin_;
+        result.Translate(gp_Vec(sketchXDirection_) * point.X()
+            + gp_Vec(sketchYDirection_) * point.Y());
+        return result;
+    };
+    const auto find = [&sketch](const std::string& id) -> const cad::parametric::SketchEntity* {
+        for (const auto& entity : sketch.entities()) {
+            if (std::visit([&](const auto& value) { return value.id == id; }, entity)) return &entity;
+        }
+        return nullptr;
+    };
+    const auto point = [&](const cad::parametric::SketchPointRef& ref) -> std::optional<gp_Pnt2d> {
+        const auto* entity = find(ref.entityId);
+        if (!entity) return std::nullopt;
+        if (const auto* line = std::get_if<cad::parametric::SketchLine>(entity))
+            return ref.role == cad::parametric::SketchPointRole::LineStart ? line->start : line->end;
+        if (const auto* arc = std::get_if<cad::parametric::SketchArc>(entity))
+            return ref.role == cad::parametric::SketchPointRole::ArcStart ? arc->startPoint() : arc->endPoint();
+        return std::nullopt;
+    };
+    for (const auto& constraint : sketch.constraints()) {
+        std::string text;
+        gp_Pnt2d position;
+        bool valid = false;
+        if (const auto* item = std::get_if<cad::parametric::HorizontalConstraint>(&constraint)) {
+            const auto* entity = find(item->entityId);
+            if (entity) {
+                if (const auto* line = std::get_if<cad::parametric::SketchLine>(entity)) {
+                    position = gp_Pnt2d((line->start.X() + line->end.X()) * 0.5,
+                        (line->start.Y() + line->end.Y()) * 0.5 + 2.0);
+                    valid = true;
+                }
+            }
+            text = "H";
+        } else if (const auto* item = std::get_if<cad::parametric::VerticalConstraint>(&constraint)) {
+            const auto* entity = find(item->entityId);
+            if (entity) {
+                if (const auto* line = std::get_if<cad::parametric::SketchLine>(entity)) {
+                    position = gp_Pnt2d((line->start.X() + line->end.X()) * 0.5 + 2.0,
+                        (line->start.Y() + line->end.Y()) * 0.5);
+                    valid = true;
+                }
+            }
+            text = "V";
+        } else if (const auto* item = std::get_if<cad::parametric::CoincidentConstraint>(&constraint)) {
+            const auto p = point(item->a);
+            if (p) { position = *p; valid = true; }
+            text = "•";
+        } else if (const auto* item = std::get_if<cad::parametric::DistanceConstraint>(&constraint)) {
+            const auto* entity = find(item->entityId);
+            if (entity) if (const auto* line = std::get_if<cad::parametric::SketchLine>(entity)) {
+                position = gp_Pnt2d((line->start.X() + line->end.X()) * 0.5,
+                    (line->start.Y() + line->end.Y()) * 0.5 + 3.0);
+                valid = true;
+            }
+            text = "D " + std::to_string(item->value);
+        } else if (const auto* item = std::get_if<cad::parametric::RadiusConstraint>(&constraint)) {
+            const auto* entity = find(item->entityId);
+            if (entity) {
+                if (const auto* circle = std::get_if<cad::parametric::SketchCircle>(entity)) {
+                    position = gp_Pnt2d(circle->center.X() + circle->radius, circle->center.Y()); valid = true;
+                } else if (const auto* arc = std::get_if<cad::parametric::SketchArc>(entity)) {
+                    position = arc->startPoint(); valid = true;
+                }
+            }
+            text = "R " + std::to_string(item->value);
+        }
+        if (!valid) continue;
+        auto marker = new AIS_TextLabel();
+        marker->SetText(TCollection_ExtendedString(text.c_str()));
+        marker->SetPosition(world(position));
+        marker->SetColor(Quantity_NOC_YELLOW);
+        marker->SetHeight(14.0);
+        context_->Display(marker, Standard_False);
+        sketchConstraintMarkers_.push_back(marker);
+    }
+    context_->CurrentViewer()->Redraw();
 }
 
 void CadViewer::updateTransformGizmo()

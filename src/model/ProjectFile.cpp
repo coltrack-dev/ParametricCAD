@@ -146,13 +146,21 @@ std::vector<SketchConstraint> sketchConstraints(const QJsonObject& object)
         if (type == "Coincident") {
             result.push_back(CoincidentConstraint{
                 {string(constraint, "aEntityId"), pointRole(string(constraint, "aRole"))},
-                {string(constraint, "bEntityId"), pointRole(string(constraint, "bRole"))}});
+                {string(constraint, "bEntityId"), pointRole(string(constraint, "bRole"))},
+                constraint.value("id").toString().toStdString()});
         } else if (type == "Horizontal") {
             result.push_back(HorizontalConstraint{string(constraint, "entityId"),
-                boolean(constraint, "anchorStart")});
+                boolean(constraint, "anchorStart"), constraint.value("id").toString().toStdString()});
         } else if (type == "Vertical") {
             result.push_back(VerticalConstraint{string(constraint, "entityId"),
-                boolean(constraint, "anchorStart")});
+                boolean(constraint, "anchorStart"), constraint.value("id").toString().toStdString()});
+        } else if (type == "Distance") {
+            result.push_back(DistanceConstraint{string(constraint, "entityId"),
+                number(constraint, "value"), boolean(constraint, "anchorStart"),
+                constraint.value("id").toString().toStdString()});
+        } else if (type == "Radius") {
+            result.push_back(RadiusConstraint{string(constraint, "entityId"),
+                number(constraint, "value"), constraint.value("id").toString().toStdString()});
         } else {
             throw std::invalid_argument("Unsupported Sketch constraint type");
         }

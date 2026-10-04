@@ -13,6 +13,7 @@
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Shape.hxx>
+#include <AIS_TextLabel.hxx>
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <Aspect_DisplayConnection.hxx>
@@ -90,6 +91,8 @@ public:
     void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void setSketchExtendPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void clearSketchTrimPreview();
+    void setSketchConstraintMarkers(const cad::parametric::SketchFeature& sketch);
+    void clearSketchConstraintMarkers();
     void setPushPullCommittedHandler(
         std::function<void(const QString&, int, const gp_Vec&, double)> handler
     );
@@ -215,6 +218,7 @@ private:
     std::function<void(const gp_Pnt2d&, double)> sketchMouseMovedHandler_;
     std::function<void()> sketchCancelHandler_;
     Handle(AIS_Shape) sketchTrimPreviewObject_;
+    std::vector<Handle(AIS_TextLabel)> sketchConstraintMarkers_;
 
     std::unique_ptr<cad::viewer::TransformGizmo> transformGizmo_;
     cad::viewer::SnapManager snapManager_;

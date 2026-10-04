@@ -50,6 +50,15 @@ public:
     ModelingResult addSketchCoincident(const std::string& sketchId,
                                        const cad::parametric::SketchPointRef& a,
                                        const cad::parametric::SketchPointRef& b);
+    ModelingResult addSketchDistance(const std::string& sketchId,
+                                     const std::string& lineId, double value,
+                                     bool anchorStart = true);
+    ModelingResult addSketchRadius(const std::string& sketchId,
+                                   const std::string& entityId, double value);
+    ModelingResult updateSketchDistance(const std::string& sketchId,
+                                        const std::string& constraintId, double value);
+    ModelingResult updateSketchRadius(const std::string& sketchId,
+                                      const std::string& constraintId, double value);
     ModelingResult createPrimitive(PrimitiveKind kind) override;
     ModelingResult createFace(const std::vector<std::string>& selection) override;
     ModelingResult createExtrude(const std::vector<std::string>& selection) override;

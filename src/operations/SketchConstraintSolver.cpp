@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace cad::operations {
 namespace {
@@ -98,6 +99,35 @@ SketchSolveResult SketchConstraintSolver::solve(
             }
         }
     }
+    std::unordered_map<std::string, double> distanceValues;
+    std::unordered_map<std::string, double> radiusValues;
+    for (const auto& constraint : constraints) {
+        if (const auto* distance = std::get_if<cad::parametric::DistanceConstraint>(&constraint)) {
+            if (!std::isfinite(distance->value) || distance->value <= tolerance) {
+                result.status = SolveStatus::Failed;
+                result.error = "Distance constraint value must be finite and positive";
+                return result;
+            }
+            const auto [it, inserted] = distanceValues.emplace(distance->entityId, distance->value);
+            if (!inserted && std::abs(it->second - distance->value) > tolerance) {
+                result.status = SolveStatus::Failed;
+                result.error = "Conflicting distance constraints";
+                return result;
+            }
+        } else if (const auto* radius = std::get_if<cad::parametric::RadiusConstraint>(&constraint)) {
+            if (!std::isfinite(radius->value) || radius->value <= tolerance) {
+                result.status = SolveStatus::Failed;
+                result.error = "Radius constraint value must be finite and positive";
+                return result;
+            }
+            const auto [it, inserted] = radiusValues.emplace(radius->entityId, radius->value);
+            if (!inserted && std::abs(it->second - radius->value) > tolerance) {
+                result.status = SolveStatus::Failed;
+                result.error = "Conflicting radius constraints";
+                return result;
+            }
+        }
+    }
     for (int iteration = 0; iteration < 40; ++iteration) {
         bool changed = false;
         for (const auto& constraint : constraints) {
@@ -121,16 +151,59 @@ SketchSolveResult SketchConstraintSolver::solve(
                 if (vertical->anchorStart) {
                     if (std::abs(line.end.X() - x) > tolerance) { line.end.SetX(x); changed = true; }
                 } else if (std::abs(line.start.X() - x) > tolerance) { line.start.SetX(x); changed = true; }
-            } else {
-                const auto& coincident = std::get<cad::parametric::CoincidentConstraint>(constraint);
-                auto* master = findEntity(result.entities, coincident.a.entityId);
-                auto* slave = findEntity(result.entities, coincident.b.entityId);
-                const auto masterPoint = pointValue(*master, coincident.a.role);
-                const auto slavePoint = pointValue(*slave, coincident.b.role);
-                if (!masterPoint || !slavePoint || !setPoint(*slave, coincident.b.role, *masterPoint)) {
+            } else if (const auto* coincident = std::get_if<cad::parametric::CoincidentConstraint>(&constraint)) {
+                auto* master = findEntity(result.entities, coincident->a.entityId);
+                auto* slave = findEntity(result.entities, coincident->b.entityId);
+                const auto masterPoint = master ? pointValue(*master, coincident->a.role) : std::nullopt;
+                const auto slavePoint = slave ? pointValue(*slave, coincident->b.role) : std::nullopt;
+                if (!masterPoint || !slavePoint || !slave
+                    || !setPoint(*slave, coincident->b.role, *masterPoint)) {
                     result.status = SolveStatus::Failed; result.error = "Invalid Coincident point reference"; return result;
                 }
                 if (!samePoint(*masterPoint, *slavePoint)) changed = true;
+            } else if (const auto* distance = std::get_if<cad::parametric::DistanceConstraint>(&constraint)) {
+                auto* entity = findEntity(result.entities, distance->entityId);
+                auto* line = entity ? std::get_if<cad::parametric::SketchLine>(entity) : nullptr;
+                if (!line) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Distance constraint requires a Line";
+                    return result;
+                }
+                const gp_Pnt2d anchor = distance->anchorStart ? line->start : line->end;
+                const gp_Pnt2d moving = distance->anchorStart ? line->end : line->start;
+                gp_Vec2d direction(anchor, moving);
+                if (direction.SquareMagnitude() <= tolerance * tolerance) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Cannot solve zero-length line distance";
+                    return result;
+                }
+                direction.Normalize();
+                const gp_Pnt2d solved(anchor.X() + direction.X() * distance->value,
+                    anchor.Y() + direction.Y() * distance->value);
+                if (distance->anchorStart) {
+                    if (!samePoint(line->end, solved)) { line->end = solved; changed = true; }
+                } else if (!samePoint(line->start, solved)) { line->start = solved; changed = true; }
+            } else {
+                const auto& radius = std::get<cad::parametric::RadiusConstraint>(constraint);
+                auto* entity = findEntity(result.entities, radius.entityId);
+                if (!entity) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Radius constraint target entity is missing";
+                    return result;
+                }
+                if (auto* circle = std::get_if<cad::parametric::SketchCircle>(entity)) {
+                    if (std::abs(circle->radius - radius.value) > tolerance) {
+                        circle->radius = radius.value; changed = true;
+                    }
+                } else if (auto* arc = std::get_if<cad::parametric::SketchArc>(entity)) {
+                    if (std::abs(arc->radius - radius.value) > tolerance) {
+                        arc->radius = radius.value; changed = true;
+                    }
+                } else {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Radius constraint requires a Circle or Arc";
+                    return result;
+                }
             }
         }
         if (!changed) return result;
@@ -185,6 +258,27 @@ std::optional<cad::parametric::SketchEntityId> SketchConstraintSolver::lineAt(
         if (closest.Distance(point) <= hitTolerance) return line->id;
     }
     return std::nullopt;
+}
+
+std::optional<cad::parametric::SketchEntityId> SketchConstraintSolver::circleOrArcAt(
+    const std::vector<cad::parametric::SketchEntity>& entities,
+    const gp_Pnt2d& point, const double hitTolerance)
+{
+    double best = hitTolerance;
+    std::optional<cad::parametric::SketchEntityId> result;
+    for (const auto& entity : entities) {
+        std::visit([&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, cad::parametric::SketchCircle>) {
+                const double distance = std::abs(value.center.Distance(point) - value.radius);
+                if (distance <= best) { best = distance; result = value.id; }
+            } else if constexpr (std::is_same_v<T, cad::parametric::SketchArc>) {
+                const double distance = std::abs(value.center.Distance(point) - value.radius);
+                if (distance <= best) { best = distance; result = value.id; }
+            }
+        }, entity);
+    }
+    return result;
 }
 
 } // namespace cad::operations

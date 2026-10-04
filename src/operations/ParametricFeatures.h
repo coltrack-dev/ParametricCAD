@@ -19,6 +19,7 @@
 namespace cad::parametric {
 
 using SketchEntityId = std::string;
+using SketchConstraintId = std::string;
 
 enum class SketchSupportType { XY, XZ, YZ, Face };
 
@@ -60,7 +61,7 @@ struct SketchArc
 
 using SketchEntity = std::variant<SketchLine, SketchCircle, SketchArc>;
 
-enum class SketchConstraintType { Coincident, Horizontal, Vertical };
+enum class SketchConstraintType { Coincident, Horizontal, Vertical, Distance, Radius };
 enum class SketchPointRole { LineStart, LineEnd, ArcStart, ArcEnd, CircleCenter, ArcCenter };
 
 struct SketchPointRef
@@ -73,22 +74,40 @@ struct CoincidentConstraint
 {
     SketchPointRef a;
     SketchPointRef b;
+    SketchConstraintId id;
 };
 
 struct HorizontalConstraint
 {
     SketchEntityId entityId;
     bool anchorStart{true};
+    SketchConstraintId id;
 };
 
 struct VerticalConstraint
 {
     SketchEntityId entityId;
     bool anchorStart{true};
+    SketchConstraintId id;
+};
+
+struct DistanceConstraint
+{
+    SketchEntityId entityId;
+    double value{0.0};
+    bool anchorStart{true};
+    SketchConstraintId id;
+};
+
+struct RadiusConstraint
+{
+    SketchEntityId entityId;
+    double value{0.0};
+    SketchConstraintId id;
 };
 
 using SketchConstraint = std::variant<CoincidentConstraint,
-    HorizontalConstraint, VerticalConstraint>;
+    HorizontalConstraint, VerticalConstraint, DistanceConstraint, RadiusConstraint>;
 
 class SketchFeature final : public ParametricFeature
 {

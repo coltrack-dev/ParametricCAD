@@ -214,6 +214,80 @@ void constraintsSolveUndoAndPersist()
     assert(std::abs(std::get<SketchLine>(loadedSketch->entities().front()).end.Y()) < 1.0e-9);
 }
 
+void dimensionalConstraintsSolveUndoAndPersist()
+{
+    cad::application::ModelingController controller;
+    const auto sketchResult = controller.createSketch();
+    assert(sketchResult.success);
+    assert(controller.addSketchLine(sketchResult.id, {0, 0}, {10, 3}).success);
+    assert(controller.addSketchCircle(sketchResult.id, {30, 0}, 5.0).success);
+    assert(controller.addSketchArc(sketchResult.id, {50, 0}, {55, 0}, {50, 5}).success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+        controller.body().findFeature(sketchResult.id));
+    assert(sketch && sketch->entityCount() == 3);
+    const auto lineId = std::get<SketchLine>(sketch->entities()[0]).id;
+    const auto circleId = std::get<SketchCircle>(sketch->entities()[1]).id;
+    const auto arcId = std::get<SketchArc>(sketch->entities()[2]).id;
+    assert(controller.addSketchHorizontal(sketchResult.id, lineId).success);
+    assert(controller.addSketchDistance(sketchResult.id, lineId, 20.0).success);
+    assert(std::abs(std::get<SketchLine>(sketch->entities()[0]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[0]).end) - 20.0) < 1.0e-8);
+    const auto distanceId = std::get<cad::parametric::DistanceConstraint>(
+        sketch->constraints().back()).id;
+    assert(controller.updateSketchDistance(sketchResult.id, distanceId, 30.0).success);
+    assert(std::abs(std::get<SketchLine>(sketch->entities()[0]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[0]).end) - 30.0) < 1.0e-8);
+    controller.undo();
+    assert(std::abs(std::get<SketchLine>(sketch->entities()[0]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[0]).end) - 20.0) < 1.0e-8);
+    controller.redo();
+    assert(std::abs(std::get<SketchLine>(sketch->entities()[0]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[0]).end) - 30.0) < 1.0e-8);
+    assert(controller.addSketchRadius(sketchResult.id, circleId, 10.0).success);
+    assert(controller.addSketchRadius(sketchResult.id, arcId, 8.0).success);
+    assert(std::abs(std::get<SketchCircle>(sketch->entities()[1]).radius - 10.0) < 1.0e-9);
+    assert(std::abs(std::get<SketchArc>(sketch->entities()[2]).radius - 8.0) < 1.0e-9);
+    const auto count = sketch->constraintCount();
+    assert(!controller.addSketchRadius(sketchResult.id, circleId, -1.0).success);
+    assert(sketch->constraintCount() == count);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("dimensional-constraints.pcad");
+    assert(ProjectFile::save(path, controller.document(), controller.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+        loadedBody.findFeature(sketchResult.id));
+    assert(loadedSketch && loadedSketch->constraintCount() == count);
+    assert(std::abs(std::get<SketchCircle>(loadedSketch->entities()[1]).radius - 10.0) < 1.0e-9);
+
+    cad::application::ModelingController downstream;
+    const auto downstreamSketch = downstream.createSketch();
+    assert(downstreamSketch.success);
+    assert(downstream.addSketchCircle(downstreamSketch.id, {0, 0}, 5.0).success);
+    const auto extrude = downstream.createExtrudeFromSketch({{
+        {downstreamSketch.id, cad::application::SelectionKind::Object, std::nullopt}}}, 10.0);
+    assert(extrude.success);
+    const auto downstreamFeature = downstream.body().findFeature(extrude.id);
+    const auto circle = std::dynamic_pointer_cast<SketchFeature>(
+        downstream.body().findFeature(downstreamSketch.id));
+    assert(circle && downstreamFeature && downstreamFeature->state() == FeatureState::UpToDate);
+    const auto downstreamCircleId = std::get<SketchCircle>(circle->entities().front()).id;
+    assert(downstream.addSketchRadius(downstreamSketch.id, downstreamCircleId, 10.0).success);
+    assert(downstream.body().recompute());
+    assert(downstreamFeature->state() == FeatureState::UpToDate
+        && !downstreamFeature->shape().IsNull());
+    downstream.undo();
+    assert(downstream.body().recompute());
+    assert(downstreamFeature->state() == FeatureState::UpToDate);
+    downstream.redo();
+    assert(downstream.body().recompute());
+    assert(downstreamFeature->state() == FeatureState::UpToDate);
+}
+
 void arcTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
@@ -350,6 +424,7 @@ int main()
     extendLineAndArc();
     extendClosesExtrudeProfile();
     constraintsSolveUndoAndPersist();
+    dimensionalConstraintsSolveUndoAndPersist();
     arcTrim();
     circleTrim();
     intersectionMatrix();

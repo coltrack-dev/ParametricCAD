@@ -54,6 +54,16 @@ void ensureEntityId(SketchEntity& entity)
     std::visit([&id](auto& value) { value.id = id; }, entity);
 }
 
+void ensureConstraintId(SketchConstraint& constraint)
+{
+    const auto makeId = [] {
+        return "constraint-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    };
+    std::visit([&](auto& value) {
+        if (value.id.empty()) value.id = makeId();
+    }, constraint);
+}
+
 std::string pointRoleName(const SketchPointRole role)
 {
     switch (role) {
@@ -399,19 +409,33 @@ void SketchFeature::writeParameters(QJsonObject& object) const
         QJsonObject value;
         if (const auto* coincident = std::get_if<CoincidentConstraint>(&constraint)) {
             value.insert("type", "Coincident");
+            value.insert("id", QString::fromStdString(coincident->id));
             value.insert("aEntityId", QString::fromStdString(coincident->a.entityId));
             value.insert("aRole", QString::fromStdString(pointRoleName(coincident->a.role)));
             value.insert("bEntityId", QString::fromStdString(coincident->b.entityId));
             value.insert("bRole", QString::fromStdString(pointRoleName(coincident->b.role)));
         } else if (const auto* horizontal = std::get_if<HorizontalConstraint>(&constraint)) {
             value.insert("type", "Horizontal");
+            value.insert("id", QString::fromStdString(horizontal->id));
             value.insert("entityId", QString::fromStdString(horizontal->entityId));
             value.insert("anchorStart", horizontal->anchorStart);
-        } else {
-            const auto& vertical = std::get<VerticalConstraint>(constraint);
+        } else if (const auto* vertical = std::get_if<VerticalConstraint>(&constraint)) {
             value.insert("type", "Vertical");
-            value.insert("entityId", QString::fromStdString(vertical.entityId));
-            value.insert("anchorStart", vertical.anchorStart);
+            value.insert("id", QString::fromStdString(vertical->id));
+            value.insert("entityId", QString::fromStdString(vertical->entityId));
+            value.insert("anchorStart", vertical->anchorStart);
+        } else if (const auto* distance = std::get_if<DistanceConstraint>(&constraint)) {
+            value.insert("type", "Distance");
+            value.insert("id", QString::fromStdString(distance->id));
+            value.insert("entityId", QString::fromStdString(distance->entityId));
+            value.insert("value", distance->value);
+            value.insert("anchorStart", distance->anchorStart);
+        } else {
+            const auto& radius = std::get<RadiusConstraint>(constraint);
+            value.insert("type", "Radius");
+            value.insert("id", QString::fromStdString(radius.id));
+            value.insert("entityId", QString::fromStdString(radius.entityId));
+            value.insert("value", radius.value);
         }
         constraints.append(value);
     }
@@ -454,12 +478,14 @@ std::size_t SketchFeature::constraintCount() const noexcept { return constraints
 
 void SketchFeature::setConstraints(std::vector<SketchConstraint> constraints)
 {
+    for (auto& constraint : constraints) ensureConstraintId(constraint);
     constraints_ = std::move(constraints);
     markDirty();
 }
 
 void SketchFeature::replaceConstraints(std::vector<SketchConstraint> constraints)
 {
+    for (auto& constraint : constraints) ensureConstraintId(constraint);
     constraints_ = std::move(constraints);
     markDirty();
 }
@@ -471,7 +497,13 @@ bool SketchFeature::hasConstraintsForEntity(const SketchEntityId& entityId) cons
             if (coincident->a.entityId == entityId || coincident->b.entityId == entityId) return true;
         } else if (const auto* horizontal = std::get_if<HorizontalConstraint>(&constraint)) {
             if (horizontal->entityId == entityId) return true;
-        } else if (std::get<VerticalConstraint>(constraint).entityId == entityId) return true;
+        } else if (const auto* vertical = std::get_if<VerticalConstraint>(&constraint)) {
+            if (vertical->entityId == entityId) return true;
+        } else if (const auto* distance = std::get_if<DistanceConstraint>(&constraint)) {
+            if (distance->entityId == entityId) return true;
+        } else if (const auto* radius = std::get_if<RadiusConstraint>(&constraint)) {
+            if (radius->entityId == entityId) return true;
+        }
     }
     return false;
 }

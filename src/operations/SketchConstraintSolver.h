@@ -30,6 +30,9 @@ public:
     static std::optional<cad::parametric::SketchEntityId> lineAt(
         const std::vector<cad::parametric::SketchEntity>& entities,
         const gp_Pnt2d& point, double tolerance);
+    static std::optional<cad::parametric::SketchEntityId> circleOrArcAt(
+        const std::vector<cad::parametric::SketchEntity>& entities,
+        const gp_Pnt2d& point, double tolerance);
 };
 
 } // namespace cad::operations

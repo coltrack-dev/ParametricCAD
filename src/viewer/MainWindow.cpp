@@ -4,6 +4,7 @@
 #include "viewer/ModelPresenter.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
+#include "operations/SketchConstraintSolver.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -95,7 +96,9 @@ MainWindow::MainWindow(QWidget* parent)
             if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend
                 || sketchTool_ == SketchTool::Coincident
                 || sketchTool_ == SketchTool::Horizontal
-                || sketchTool_ == SketchTool::Vertical) selectSketchLineTool();
+                || sketchTool_ == SketchTool::Vertical
+                || sketchTool_ == SketchTool::Distance
+                || sketchTool_ == SketchTool::Radius) selectSketchLineTool();
             constraintFirstPoint_.reset();
         });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
@@ -177,6 +180,11 @@ void MainWindow::refreshModelView(const bool fitView)
     applySelection(surviving);
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (fitView) viewer_->fitAll();
+    if (!activeSketchId_.empty()) {
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(activeSketchId_));
+        if (sketch) viewer_->setSketchConstraintMarkers(*sketch);
+    }
     statusBar()->showMessage(result.rebuilt ? "Model updated" : QString::fromStdString(result.error), 3000);
 }
 
@@ -344,6 +352,12 @@ void MainWindow::createActions()
     sketchVerticalAction_ = modelingMenu->addAction("Vertical");
     sketchVerticalAction_->setEnabled(false);
     connect(sketchVerticalAction_, &QAction::triggered, this, &MainWindow::selectSketchVerticalTool);
+    sketchDistanceAction_ = modelingMenu->addAction("Distance");
+    sketchDistanceAction_->setEnabled(false);
+    connect(sketchDistanceAction_, &QAction::triggered, this, &MainWindow::selectSketchDistanceTool);
+    sketchRadiusAction_ = modelingMenu->addAction("Radius");
+    sketchRadiusAction_->setEnabled(false);
+    connect(sketchRadiusAction_, &QAction::triggered, this, &MainWindow::selectSketchRadiusTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -446,6 +460,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
         viewer_->enterSketchMode(frame.origin, frame.xDirection,
             frame.yDirection, frame.normal);
+        viewer_->setSketchConstraintMarkers(*sketch);
         sketchLineAction_->setEnabled(true);
         sketchCircleAction_->setEnabled(true);
         sketchArcAction_->setEnabled(true);
@@ -455,6 +470,8 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchCoincidentAction_->setEnabled(true);
         sketchHorizontalAction_->setEnabled(true);
         sketchVerticalAction_->setEnabled(true);
+        sketchDistanceAction_->setEnabled(true);
+        sketchRadiusAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         updateActionState();
         statusBar()->showMessage("Sketch mode: select a drawing tool");
@@ -480,6 +497,8 @@ void MainWindow::finishSketch()
     sketchCoincidentAction_->setEnabled(false);
     sketchHorizontalAction_->setEnabled(false);
     sketchVerticalAction_->setEnabled(false);
+    sketchDistanceAction_->setEnabled(false);
+    sketchRadiusAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
     statusBar()->showMessage("Ready");
@@ -561,6 +580,22 @@ void MainWindow::selectSketchVerticalTool()
     statusBar()->showMessage("Vertical: click a Line");
 }
 
+void MainWindow::selectSketchDistanceTool()
+{
+    sketchTool_ = SketchTool::Distance;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Distance: click a Line");
+}
+
+void MainWindow::selectSketchRadiusTool()
+{
+    sketchTool_ = SketchTool::Radius;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Radius: click a Circle or Arc");
+}
+
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
@@ -590,6 +625,39 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
         const auto result = modeling_.addSketchCoincident(
             activeSketchId_, *constraintFirstPoint_, *pointRef);
         constraintFirstPoint_.reset();
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
+    if (sketchTool_ == SketchTool::Distance || sketchTool_ == SketchTool::Radius) {
+        const auto target = sketchTool_ == SketchTool::Distance
+            ? cad::operations::SketchConstraintSolver::lineAt(sketch->entities(), point, hitTolerance)
+            : cad::operations::SketchConstraintSolver::circleOrArcAt(sketch->entities(), point, hitTolerance);
+        if (!target) {
+            statusBar()->showMessage(sketchTool_ == SketchTool::Distance
+                ? "Select a Line" : "Select a Circle or Arc", 2000);
+            return;
+        }
+        bool ok = false;
+        const double value = QInputDialog::getDouble(this,
+            sketchTool_ == SketchTool::Distance ? "Distance constraint" : "Radius constraint",
+            "Value:", 10.0, 0.001, 1.0e6, 3, &ok);
+        if (!ok) return;
+        std::optional<std::string> existingConstraint;
+        for (const auto& constraint : sketch->constraints()) {
+            if (sketchTool_ == SketchTool::Distance) {
+                if (const auto* item = std::get_if<cad::parametric::DistanceConstraint>(&constraint);
+                    item && item->entityId == *target) existingConstraint = item->id;
+            } else if (const auto* item = std::get_if<cad::parametric::RadiusConstraint>(&constraint);
+                       item && item->entityId == *target) existingConstraint = item->id;
+        }
+        const auto result = existingConstraint
+            ? (sketchTool_ == SketchTool::Distance
+                ? modeling_.updateSketchDistance(activeSketchId_, *existingConstraint, value)
+                : modeling_.updateSketchRadius(activeSketchId_, *existingConstraint, value))
+            : (sketchTool_ == SketchTool::Distance
+                ? modeling_.addSketchDistance(activeSketchId_, *target, value)
+                : modeling_.addSketchRadius(activeSketchId_, *target, value));
         if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
         else refreshModelView(false);
         return;

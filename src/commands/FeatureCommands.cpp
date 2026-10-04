@@ -117,6 +117,32 @@ void AddSketchConstraintCommand::apply(
 void AddSketchConstraintCommand::redo() { apply(afterEntities_, afterConstraints_); }
 void AddSketchConstraintCommand::undo() { apply(beforeEntities_, beforeConstraints_); }
 
+UpdateSketchConstraintCommand::UpdateSketchConstraintCommand(
+    parametric::Body& body, std::shared_ptr<parametric::SketchFeature> sketch,
+    std::vector<parametric::SketchEntity> beforeEntities,
+    std::vector<parametric::SketchEntity> afterEntities,
+    std::vector<parametric::SketchConstraint> beforeConstraints,
+    std::vector<parametric::SketchConstraint> afterConstraints)
+    : QUndoCommand("Update Sketch Constraint"), body_(body), sketch_(std::move(sketch)),
+      beforeEntities_(std::move(beforeEntities)), afterEntities_(std::move(afterEntities)),
+      beforeConstraints_(std::move(beforeConstraints)), afterConstraints_(std::move(afterConstraints))
+{
+    if (!sketch_ || body_.findFeature(sketch_->id()) != sketch_)
+        throw std::invalid_argument("Constraint update requires an active sketch");
+}
+
+void UpdateSketchConstraintCommand::apply(
+    const std::vector<parametric::SketchEntity>& entities,
+    const std::vector<parametric::SketchConstraint>& constraints)
+{
+    sketch_->replaceEntities(0, sketch_->entityCount(), entities);
+    sketch_->replaceConstraints(constraints);
+    body_.markDirtyFrom(sketch_->id());
+}
+
+void UpdateSketchConstraintCommand::redo() { apply(afterEntities_, afterConstraints_); }
+void UpdateSketchConstraintCommand::undo() { apply(beforeEntities_, beforeConstraints_); }
+
 void AddSketchEntityCommand::redo()
 {
     sketch_->addEntity(entity_);

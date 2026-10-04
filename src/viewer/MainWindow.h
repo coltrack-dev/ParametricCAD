@@ -56,6 +56,8 @@ private:
     void selectSketchCoincidentTool();
     void selectSketchHorizontalTool();
     void selectSketchVerticalTool();
+    void selectSketchDistanceTool();
+    void selectSketchRadiusTool();
     void enterSketchEditing(const std::string& sketchId);
     void handleSketchPoint(const gp_Pnt2d& point, double hitTolerance);
     void createFace();
@@ -91,9 +93,11 @@ private:
     QAction* sketchCoincidentAction_{nullptr};
     QAction* sketchHorizontalAction_{nullptr};
     QAction* sketchVerticalAction_{nullptr};
+    QAction* sketchDistanceAction_{nullptr};
+    QAction* sketchRadiusAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
     enum class SketchTool { None, Line, Circle, Arc, Rectangle, Trim, Extend,
-                            Coincident, Horizontal, Vertical };
+                            Coincident, Horizontal, Vertical, Distance, Radius };
     SketchTool sketchTool_{SketchTool::None};
     std::string activeSketchId_;
     std::optional<gp_Pnt2d> sketchFirstPoint_;

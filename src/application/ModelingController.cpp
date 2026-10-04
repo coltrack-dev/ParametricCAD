@@ -201,6 +201,18 @@ ModelingResult ModelingController::extendSketchEntity(const std::string& sketchI
     const auto plan = cad::operations::SketchExtendService::extend(
         *sketch, click, endpointTolerance);
     if (!plan.changed) return {false, {}, plan.error};
+    const auto targetId = std::visit([](const auto& entity) { return entity.id; }, plan.originalEntity);
+    for (const auto& constraint : sketch->constraints()) {
+        const bool dimensional = std::visit([&](const auto& item) {
+            using T = std::decay_t<decltype(item)>;
+            if constexpr (std::is_same_v<T, cad::parametric::DistanceConstraint>
+                || std::is_same_v<T, cad::parametric::RadiusConstraint>)
+                return item.entityId == targetId;
+            return false;
+        }, constraint);
+        if (dimensional)
+            return {false, {}, "Extend of an entity with a dimensional constraint is not supported"};
+    }
     auto beforeEntities = sketch->entities();
     auto afterEntities = beforeEntities;
     afterEntities[plan.entityIndex] = plan.extendedEntity;
@@ -241,6 +253,12 @@ ModelingResult pushConstraint(
     const std::shared_ptr<cad::parametric::SketchFeature>& sketch,
     cad::parametric::SketchConstraint constraint)
 {
+    std::visit([](auto& value) {
+        if (value.id.empty()) {
+            value.id = "constraint-"
+                + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        }
+    }, constraint);
     auto beforeEntities = sketch->entities();
     auto beforeConstraints = sketch->constraints();
     auto afterConstraints = beforeConstraints;
@@ -304,6 +322,90 @@ ModelingResult ModelingController::addSketchCoincident(
     return pushConstraint(body_, undoStack_, sketch,
         cad::parametric::CoincidentConstraint{a, b});
 }
+
+ModelingResult ModelingController::addSketchDistance(
+    const std::string& sketchId, const std::string& lineId, const double value,
+    const bool anchorStart)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !hasEntity(*sketch, lineId))
+        return {false, {}, "Sketch Line does not exist"};
+    const auto line = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+        [&lineId](const auto& entity) {
+            return std::visit([&](const auto& item) {
+                using T = std::decay_t<decltype(item)>;
+                return std::is_same_v<T, cad::parametric::SketchLine> && item.id == lineId;
+            }, entity);
+        });
+    if (line == sketch->entities().end() || !std::holds_alternative<cad::parametric::SketchLine>(*line))
+        return {false, {}, "Distance constraint requires a Line"};
+    if (!std::isfinite(value) || value <= 1.0e-7)
+        return {false, {}, "Distance constraint value must be finite and positive"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::DistanceConstraint{lineId, value, anchorStart, {}});
+}
+
+ModelingResult ModelingController::addSketchRadius(
+    const std::string& sketchId, const std::string& entityId, const double value)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !hasEntity(*sketch, entityId))
+        return {false, {}, "Sketch Circle or Arc does not exist"};
+    const auto entity = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+        [&entityId](const auto& candidate) {
+            return std::visit([&](const auto& item) {
+                using T = std::decay_t<decltype(item)>;
+                return (std::is_same_v<T, cad::parametric::SketchCircle>
+                    || std::is_same_v<T, cad::parametric::SketchArc>) && item.id == entityId;
+            }, candidate);
+        });
+    if (entity == sketch->entities().end())
+        return {false, {}, "Radius constraint requires a Circle or Arc"};
+    if (!std::isfinite(value) || value <= 1.0e-7)
+        return {false, {}, "Radius constraint value must be finite and positive"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::RadiusConstraint{entityId, value, {}});
+}
+
+namespace {
+ModelingResult updateDimensionalConstraint(
+    cad::parametric::Body& body, QUndoStack& stack, const std::string& sketchId,
+    const std::string& constraintId, const double value, const bool radius)
+{
+    const auto sketch = sketchFor(body, sketchId);
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    if (!std::isfinite(value) || value <= 1.0e-7)
+        return {false, {}, radius ? "Radius constraint value must be finite and positive"
+                                   : "Distance constraint value must be finite and positive"};
+    auto before = sketch->constraints();
+    auto after = before;
+    bool found = false;
+    for (auto& constraint : after) {
+        if (radius) {
+            if (auto* item = std::get_if<cad::parametric::RadiusConstraint>(&constraint);
+                item && item->id == constraintId) { item->value = value; found = true; }
+        } else if (auto* item = std::get_if<cad::parametric::DistanceConstraint>(&constraint);
+                   item && item->id == constraintId) { item->value = value; found = true; }
+    }
+    if (!found) return {false, {}, "Dimensional constraint does not exist"};
+    const auto solved = cad::operations::SketchConstraintSolver::solve(sketch->entities(), after);
+    if (solved.status != cad::operations::SolveStatus::Solved)
+        return {false, {}, solved.error};
+    try {
+        stack.push(new cad::commands::UpdateSketchConstraintCommand(
+            body, sketch, sketch->entities(), solved.entities, before, after));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) { return failure(error); }
+}
+}
+
+ModelingResult ModelingController::updateSketchDistance(
+    const std::string& sketchId, const std::string& constraintId, const double value)
+{ return updateDimensionalConstraint(body_, undoStack_, sketchId, constraintId, value, false); }
+
+ModelingResult ModelingController::updateSketchRadius(
+    const std::string& sketchId, const std::string& constraintId, const double value)
+{ return updateDimensionalConstraint(body_, undoStack_, sketchId, constraintId, value, true); }
 
 ModelingResult ModelingController::createPrimitive(const PrimitiveKind kind)
 {
