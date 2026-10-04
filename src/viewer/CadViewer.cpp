@@ -710,6 +710,24 @@ void CadViewer::setSketchConstraintMarkers(
                     (line->start.Y() + line->end.Y()) * 0.5 + 3.0); valid = true;
             }
             text = "A " + std::to_string(item->radians * 180.0 / 3.14159265358979323846);
+        } else if (const auto* item = std::get_if<cad::parametric::ParallelConstraint>(&constraint)) {
+            const auto* first = find(item->firstLineId); const auto* second = find(item->secondLineId);
+            const auto* lineA = first ? std::get_if<cad::parametric::SketchLine>(first) : nullptr;
+            const auto* lineB = second ? std::get_if<cad::parametric::SketchLine>(second) : nullptr;
+            if (lineA && lineB) {
+                position = gp_Pnt2d((lineA->start.X() + lineA->end.X() + lineB->start.X() + lineB->end.X()) * 0.25,
+                    (lineA->start.Y() + lineA->end.Y() + lineB->start.Y() + lineB->end.Y()) * 0.25); valid = true;
+            }
+            text = "∥";
+        } else if (const auto* item = std::get_if<cad::parametric::PerpendicularConstraint>(&constraint)) {
+            const auto* first = find(item->firstLineId); const auto* second = find(item->secondLineId);
+            const auto* lineA = first ? std::get_if<cad::parametric::SketchLine>(first) : nullptr;
+            const auto* lineB = second ? std::get_if<cad::parametric::SketchLine>(second) : nullptr;
+            if (lineA && lineB) {
+                position = gp_Pnt2d((lineA->start.X() + lineA->end.X() + lineB->start.X() + lineB->end.X()) * 0.25,
+                    (lineA->start.Y() + lineA->end.Y() + lineB->start.Y() + lineB->end.Y()) * 0.25); valid = true;
+            }
+            text = "⟂";
         }
         if (!valid) continue;
         const auto constraintId = std::visit([](const auto& value) { return value.id; }, constraint);
@@ -750,6 +768,12 @@ void CadViewer::setSketchConstraintHighlight(
             } else if constexpr (std::is_same_v<T, cad::parametric::HorizontalDistanceConstraint>
                 || std::is_same_v<T, cad::parametric::VerticalDistanceConstraint>) {
                 for (const auto& id : {item.first.entityId, item.second.entityId}) {
+                    for (const auto& entity : sketch.entities())
+                        if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
+                }
+            } else if constexpr (std::is_same_v<T, cad::parametric::ParallelConstraint>
+                || std::is_same_v<T, cad::parametric::PerpendicularConstraint>) {
+                for (const auto& id : {item.firstLineId, item.secondLineId}) {
                     for (const auto& entity : sketch.entities())
                         if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
                 }

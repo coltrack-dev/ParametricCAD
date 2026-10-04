@@ -63,7 +63,7 @@ using SketchEntity = std::variant<SketchLine, SketchCircle, SketchArc>;
 
 enum class SketchConstraintType {
     Coincident, Horizontal, Vertical, Distance, Radius,
-    HorizontalDistance, VerticalDistance, Angle
+    HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular
 };
 enum class SketchPointRole { LineStart, LineEnd, ArcStart, ArcEnd, CircleCenter, ArcCenter };
 
@@ -133,9 +133,26 @@ struct AngleConstraint
     SketchConstraintId id;
 };
 
+struct ParallelConstraint
+{
+    SketchEntityId firstLineId;
+    SketchEntityId secondLineId;
+    bool anchorStart{true};
+    SketchConstraintId id;
+};
+
+struct PerpendicularConstraint
+{
+    SketchEntityId firstLineId;
+    SketchEntityId secondLineId;
+    bool anchorStart{true};
+    SketchConstraintId id;
+};
+
 using SketchConstraint = std::variant<CoincidentConstraint,
     HorizontalConstraint, VerticalConstraint, DistanceConstraint, RadiusConstraint,
-    HorizontalDistanceConstraint, VerticalDistanceConstraint, AngleConstraint>;
+    HorizontalDistanceConstraint, VerticalDistanceConstraint, AngleConstraint,
+    ParallelConstraint, PerpendicularConstraint>;
 
 class SketchFeature final : public ParametricFeature
 {

@@ -64,6 +64,14 @@ public:
     ModelingResult addSketchAngle(const std::string& sketchId,
                                   const std::string& lineId, double radians,
                                   bool anchorStart = true);
+    ModelingResult addSketchParallel(const std::string& sketchId,
+                                     const std::string& firstLineId,
+                                     const std::string& secondLineId,
+                                     bool anchorStart = true);
+    ModelingResult addSketchPerpendicular(const std::string& sketchId,
+                                          const std::string& firstLineId,
+                                          const std::string& secondLineId,
+                                          bool anchorStart = true);
     ModelingResult updateSketchDistance(const std::string& sketchId,
                                         const std::string& constraintId, double value);
     ModelingResult updateSketchRadius(const std::string& sketchId,

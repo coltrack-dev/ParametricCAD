@@ -212,6 +212,9 @@ ModelingResult ModelingController::extendSketchEntity(const std::string& sketchI
             else if constexpr (std::is_same_v<T, cad::parametric::HorizontalDistanceConstraint>
                 || std::is_same_v<T, cad::parametric::VerticalDistanceConstraint>)
                 return item.first.entityId == targetId || item.second.entityId == targetId;
+            else if constexpr (std::is_same_v<T, cad::parametric::ParallelConstraint>
+                || std::is_same_v<T, cad::parametric::PerpendicularConstraint>)
+                return item.firstLineId == targetId || item.secondLineId == targetId;
             return false;
         }, constraint);
         if (dimensional)
@@ -413,6 +416,41 @@ ModelingResult ModelingController::addSketchAngle(
     return pushConstraint(body_, undoStack_, sketch,
         cad::parametric::AngleConstraint{lineId, radians, anchorStart, {}});
 }
+
+ModelingResult addLineRelationConstraint(
+    cad::parametric::Body& body, QUndoStack& stack, const std::string& sketchId,
+    const std::string& firstLineId, const std::string& secondLineId,
+    const bool anchorStart, const bool perpendicular)
+{
+    const auto sketch = sketchFor(body, sketchId);
+    if (!sketch || !hasEntity(*sketch, firstLineId) || !hasEntity(*sketch, secondLineId))
+        return {false, {}, "Line relation references missing entity"};
+    if (firstLineId == secondLineId) return {false, {}, "Line relation requires two different Lines"};
+    const auto isLine = [&sketch](const std::string& id) {
+        return std::any_of(sketch->entities().begin(), sketch->entities().end(),
+            [&id](const auto& entity) {
+                return std::visit([&](const auto& item) {
+                    using T = std::decay_t<decltype(item)>;
+                    return std::is_same_v<T, cad::parametric::SketchLine> && item.id == id;
+                }, entity);
+            });
+    };
+    if (!isLine(firstLineId) || !isLine(secondLineId))
+        return {false, {}, "Parallel and Perpendicular require Lines"};
+    return pushConstraint(body, stack, sketch, perpendicular
+        ? cad::parametric::SketchConstraint{cad::parametric::PerpendicularConstraint{firstLineId, secondLineId, anchorStart, {}}}
+        : cad::parametric::SketchConstraint{cad::parametric::ParallelConstraint{firstLineId, secondLineId, anchorStart, {}}});
+}
+
+ModelingResult ModelingController::addSketchParallel(
+    const std::string& sketchId, const std::string& firstLineId,
+    const std::string& secondLineId, const bool anchorStart)
+{ return addLineRelationConstraint(body_, undoStack_, sketchId, firstLineId, secondLineId, anchorStart, false); }
+
+ModelingResult ModelingController::addSketchPerpendicular(
+    const std::string& sketchId, const std::string& firstLineId,
+    const std::string& secondLineId, const bool anchorStart)
+{ return addLineRelationConstraint(body_, undoStack_, sketchId, firstLineId, secondLineId, anchorStart, true); }
 
 namespace {
 ModelingResult updateDimensionalConstraint(

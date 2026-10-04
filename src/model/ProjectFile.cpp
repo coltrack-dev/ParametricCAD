@@ -176,6 +176,14 @@ std::vector<SketchConstraint> sketchConstraints(const QJsonObject& object)
             result.push_back(AngleConstraint{string(constraint, "entityId"),
                 number(constraint, "valueRadians"), boolean(constraint, "anchorStart"),
                 constraint.value("id").toString().toStdString()});
+        } else if (type == "Parallel") {
+            result.push_back(ParallelConstraint{string(constraint, "firstLineId"),
+                string(constraint, "secondLineId"), boolean(constraint, "anchorStart"),
+                constraint.value("id").toString().toStdString()});
+        } else if (type == "Perpendicular") {
+            result.push_back(PerpendicularConstraint{string(constraint, "firstLineId"),
+                string(constraint, "secondLineId"), boolean(constraint, "anchorStart"),
+                constraint.value("id").toString().toStdString()});
         } else {
             throw std::invalid_argument("Unsupported Sketch constraint type");
         }

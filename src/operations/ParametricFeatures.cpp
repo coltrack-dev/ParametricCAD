@@ -451,13 +451,25 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             value.insert("secondEntityId", QString::fromStdString(verticalDistance->second.entityId));
             value.insert("secondRole", QString::fromStdString(pointRoleName(verticalDistance->second.role)));
             value.insert("value", verticalDistance->value);
-        } else {
-            const auto& angle = std::get<AngleConstraint>(constraint);
+        } else if (const auto* angle = std::get_if<AngleConstraint>(&constraint)) {
             value.insert("type", "Angle");
-            value.insert("id", QString::fromStdString(angle.id));
-            value.insert("entityId", QString::fromStdString(angle.entityId));
-            value.insert("valueRadians", angle.radians);
-            value.insert("anchorStart", angle.anchorStart);
+            value.insert("id", QString::fromStdString(angle->id));
+            value.insert("entityId", QString::fromStdString(angle->entityId));
+            value.insert("valueRadians", angle->radians);
+            value.insert("anchorStart", angle->anchorStart);
+        } else if (const auto* parallel = std::get_if<ParallelConstraint>(&constraint)) {
+            value.insert("type", "Parallel");
+            value.insert("id", QString::fromStdString(parallel->id));
+            value.insert("firstLineId", QString::fromStdString(parallel->firstLineId));
+            value.insert("secondLineId", QString::fromStdString(parallel->secondLineId));
+            value.insert("anchorStart", parallel->anchorStart);
+        } else {
+            const auto& perpendicular = std::get<PerpendicularConstraint>(constraint);
+            value.insert("type", "Perpendicular");
+            value.insert("id", QString::fromStdString(perpendicular.id));
+            value.insert("firstLineId", QString::fromStdString(perpendicular.firstLineId));
+            value.insert("secondLineId", QString::fromStdString(perpendicular.secondLineId));
+            value.insert("anchorStart", perpendicular.anchorStart);
         }
         constraints.append(value);
     }
@@ -531,6 +543,10 @@ bool SketchFeature::hasConstraintsForEntity(const SketchEntityId& entityId) cons
             if (verticalDistance->first.entityId == entityId || verticalDistance->second.entityId == entityId) return true;
         } else if (const auto* angle = std::get_if<AngleConstraint>(&constraint)) {
             if (angle->entityId == entityId) return true;
+        } else if (const auto* parallel = std::get_if<ParallelConstraint>(&constraint)) {
+            if (parallel->firstLineId == entityId || parallel->secondLineId == entityId) return true;
+        } else if (const auto* perpendicular = std::get_if<PerpendicularConstraint>(&constraint)) {
+            if (perpendicular->firstLineId == entityId || perpendicular->secondLineId == entityId) return true;
         }
     }
     return false;

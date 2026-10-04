@@ -120,7 +120,9 @@ MainWindow::MainWindow(QWidget* parent)
                 || sketchTool_ == SketchTool::Radius
                 || sketchTool_ == SketchTool::HorizontalDistance
                 || sketchTool_ == SketchTool::VerticalDistance
-                || sketchTool_ == SketchTool::Angle) selectSketchLineTool();
+                || sketchTool_ == SketchTool::Angle
+                || sketchTool_ == SketchTool::Parallel
+                || sketchTool_ == SketchTool::Perpendicular) selectSketchLineTool();
             constraintFirstPoint_.reset();
         });
     viewer_->setSketchConstraintMarkerClickedHandler(
@@ -265,6 +267,12 @@ void MainWindow::refreshConstraintManager()
                 .arg(QString::fromStdString(value->entityId))
                 .arg(value->radians * 180.0 / 3.14159265358979323846, 0, 'f', 2);
             item.editable = true;
+        } else if (const auto* value = std::get_if<cad::parametric::ParallelConstraint>(&constraint)) {
+            item.label = QString("Parallel  %1 ∥ %2")
+                .arg(QString::fromStdString(value->firstLineId), QString::fromStdString(value->secondLineId));
+        } else if (const auto* value = std::get_if<cad::parametric::PerpendicularConstraint>(&constraint)) {
+            item.label = QString("Perpendicular  %1 ⟂ %2")
+                .arg(QString::fromStdString(value->firstLineId), QString::fromStdString(value->secondLineId));
         }
         item.label += status;
         items.push_back(std::move(item));
@@ -521,6 +529,12 @@ void MainWindow::createActions()
     sketchAngleAction_ = modelingMenu->addAction("Angle");
     sketchAngleAction_->setEnabled(false);
     connect(sketchAngleAction_, &QAction::triggered, this, &MainWindow::selectSketchAngleTool);
+    sketchParallelAction_ = modelingMenu->addAction("Parallel");
+    sketchParallelAction_->setEnabled(false);
+    connect(sketchParallelAction_, &QAction::triggered, this, &MainWindow::selectSketchParallelTool);
+    sketchPerpendicularAction_ = modelingMenu->addAction("Perpendicular");
+    sketchPerpendicularAction_->setEnabled(false);
+    connect(sketchPerpendicularAction_, &QAction::triggered, this, &MainWindow::selectSketchPerpendicularTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -639,6 +653,8 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchHorizontalDistanceAction_->setEnabled(true);
         sketchVerticalDistanceAction_->setEnabled(true);
         sketchAngleAction_->setEnabled(true);
+        sketchParallelAction_->setEnabled(true);
+        sketchPerpendicularAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         refreshConstraintManager();
         updateActionState();
@@ -671,6 +687,8 @@ void MainWindow::finishSketch()
     sketchHorizontalDistanceAction_->setEnabled(false);
     sketchVerticalDistanceAction_->setEnabled(false);
     sketchAngleAction_->setEnabled(false);
+    sketchParallelAction_->setEnabled(false);
+    sketchPerpendicularAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
     statusBar()->showMessage("Ready");
@@ -793,6 +811,22 @@ void MainWindow::selectSketchAngleTool()
     statusBar()->showMessage("Angle: click a Line");
 }
 
+void MainWindow::selectSketchParallelTool()
+{
+    sketchTool_ = SketchTool::Parallel;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Parallel: click two Lines");
+}
+
+void MainWindow::selectSketchPerpendicularTool()
+{
+    sketchTool_ = SketchTool::Perpendicular;
+    constraintFirstPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    statusBar()->showMessage("Perpendicular: click two Lines");
+}
+
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
@@ -859,6 +893,24 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
         if (!ok) return;
         const auto result = modeling_.addSketchAngle(activeSketchId_, *lineId,
             degrees * 3.14159265358979323846 / 180.0);
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
+    if (sketchTool_ == SketchTool::Parallel || sketchTool_ == SketchTool::Perpendicular) {
+        const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
+            sketch->entities(), point, hitTolerance);
+        if (!lineId) { statusBar()->showMessage("Select a Line", 2000); return; }
+        if (!constraintFirstPoint_) {
+            constraintFirstPoint_ = cad::parametric::SketchPointRef{
+                *lineId, cad::parametric::SketchPointRole::LineStart};
+            statusBar()->showMessage("Select second Line");
+            return;
+        }
+        const auto result = sketchTool_ == SketchTool::Parallel
+            ? modeling_.addSketchParallel(activeSketchId_, constraintFirstPoint_->entityId, *lineId)
+            : modeling_.addSketchPerpendicular(activeSketchId_, constraintFirstPoint_->entityId, *lineId);
+        constraintFirstPoint_.reset();
         if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
         else refreshModelView(false);
         return;

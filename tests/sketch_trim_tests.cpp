@@ -359,6 +359,71 @@ void positionalAndAngleConstraints()
     assert(loaded && loaded->constraintCount() == 2);
 }
 
+void parallelAndPerpendicularConstraints()
+{
+    cad::application::ModelingController controller;
+    const auto created = controller.createSketch();
+    assert(created.success);
+    assert(controller.addSketchLine(created.id, {0, 0}, {20, 0}).success);
+    assert(controller.addSketchLine(created.id, {0, 10}, {8, 14}).success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(controller.body().findFeature(created.id));
+    const auto firstId = std::get<SketchLine>(sketch->entities()[0]).id;
+    const auto secondId = std::get<SketchLine>(sketch->entities()[1]).id;
+    const double secondLength = std::get<SketchLine>(sketch->entities()[1]).start.Distance(
+        std::get<SketchLine>(sketch->entities()[1]).end);
+    assert(controller.addSketchParallel(created.id, firstId, secondId).success);
+    const auto& parallelLine = std::get<SketchLine>(sketch->entities()[1]);
+    assert(std::abs(parallelLine.start.Distance(parallelLine.end) - secondLength) < 1.0e-7);
+    assert(std::abs(parallelLine.end.Y() - parallelLine.start.Y()) < 1.0e-7);
+    const auto parallelId = std::get<cad::parametric::ParallelConstraint>(sketch->constraints().back()).id;
+    controller.undo();
+    assert(sketch->constraintCount() == 0);
+    controller.redo();
+    assert(sketch->constraintCount() == 1);
+    assert(controller.removeSketchConstraint(created.id, parallelId).success);
+
+    cad::application::ModelingController perpendicular;
+    const auto perpendicularSketch = perpendicular.createSketch();
+    assert(perpendicularSketch.success);
+    assert(perpendicular.addSketchLine(perpendicularSketch.id, {0, 0}, {20, 0}).success);
+    assert(perpendicular.addSketchLine(perpendicularSketch.id, {0, 10}, {8, 14}).success);
+    auto perpendicularFeature = std::dynamic_pointer_cast<SketchFeature>(
+        perpendicular.body().findFeature(perpendicularSketch.id));
+    const auto pFirst = std::get<SketchLine>(perpendicularFeature->entities()[0]).id;
+    const auto pSecond = std::get<SketchLine>(perpendicularFeature->entities()[1]).id;
+    const double pLength = std::get<SketchLine>(perpendicularFeature->entities()[1]).start.Distance(
+        std::get<SketchLine>(perpendicularFeature->entities()[1]).end);
+    assert(perpendicular.addSketchPerpendicular(perpendicularSketch.id, pFirst, pSecond).success);
+    const auto& perpendicularLine = std::get<SketchLine>(perpendicularFeature->entities()[1]);
+    assert(std::abs(perpendicularLine.start.Distance(perpendicularLine.end) - pLength) < 1.0e-7);
+    assert(std::abs(perpendicularLine.end.X() - perpendicularLine.start.X()) < 1.0e-7);
+
+    cad::application::ModelingController conflict;
+    const auto conflictSketch = conflict.createSketch();
+    assert(conflictSketch.success);
+    assert(conflict.addSketchLine(conflictSketch.id, {0, 0}, {10, 0}).success);
+    assert(conflict.addSketchLine(conflictSketch.id, {0, 1}, {1, 1}).success);
+    auto conflictFeature = std::dynamic_pointer_cast<SketchFeature>(
+        conflict.body().findFeature(conflictSketch.id));
+    const auto cFirst = std::get<SketchLine>(conflictFeature->entities()[0]).id;
+    const auto cSecond = std::get<SketchLine>(conflictFeature->entities()[1]).id;
+    assert(conflict.addSketchParallel(conflictSketch.id, cFirst, cSecond).success);
+    assert(!conflict.addSketchPerpendicular(conflictSketch.id, cFirst, cSecond).success);
+
+    QTemporaryDir directory;
+    assert(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("line-relations.pcad");
+    assert(ProjectFile::save(path, perpendicular.document(), perpendicular.body(), error));
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    assert(ProjectFile::load(path, loadedDocument, loadedBody, error));
+    const auto loaded = std::dynamic_pointer_cast<SketchFeature>(
+        loadedBody.findFeature(perpendicularSketch.id));
+    assert(loaded && loaded->constraintCount() == 1
+        && std::holds_alternative<cad::parametric::PerpendicularConstraint>(loaded->constraints().front()));
+}
+
 void arcTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
@@ -497,6 +562,7 @@ int main()
     constraintsSolveUndoAndPersist();
     dimensionalConstraintsSolveUndoAndPersist();
     positionalAndAngleConstraints();
+    parallelAndPerpendicularConstraints();
     arcTrim();
     circleTrim();
     intersectionMatrix();

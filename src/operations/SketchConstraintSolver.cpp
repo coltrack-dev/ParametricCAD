@@ -90,6 +90,38 @@ std::string pointKey(const cad::parametric::SketchPointRef& ref)
     return ref.entityId + ":" + std::to_string(static_cast<int>(ref.role));
 }
 
+cad::parametric::SketchLine* lineById(
+    std::vector<cad::parametric::SketchEntity>& entities, const std::string& id)
+{
+    auto* entity = findEntity(entities, id);
+    return entity ? std::get_if<cad::parametric::SketchLine>(entity) : nullptr;
+}
+
+bool applyLineOrientation(cad::parametric::SketchLine& dependent,
+                          const cad::parametric::SketchLine& reference,
+                          const bool perpendicular, const bool anchorStart,
+                          const double tolerance, bool& changed)
+{
+    const gp_Pnt2d anchor = anchorStart ? dependent.start : dependent.end;
+    const gp_Pnt2d moving = anchorStart ? dependent.end : dependent.start;
+    const double length = anchor.Distance(moving);
+    const double referenceLength = reference.start.Distance(reference.end);
+    if (length <= tolerance || referenceLength <= tolerance) return false;
+    gp_Vec2d direction(reference.start, reference.end);
+    direction.Normalize();
+    if (perpendicular) direction = gp_Vec2d(-direction.Y(), direction.X());
+    gp_Vec2d current(anchor, moving);
+    if (current.Dot(direction) < 0.0) direction.Reverse();
+    const gp_Pnt2d solved(anchor.X() + length * direction.X(),
+        anchor.Y() + length * direction.Y());
+    if (anchorStart) {
+        if (!samePoint(dependent.end, solved)) { dependent.end = solved; changed = true; }
+    } else if (!samePoint(dependent.start, solved)) {
+        dependent.start = solved; changed = true;
+    }
+    return true;
+}
+
 } // namespace
 
 SketchSolveResult SketchConstraintSolver::solve(
@@ -108,6 +140,30 @@ SketchSolveResult SketchConstraintSolver::solve(
                 result.status = SolveStatus::Failed;
                 result.error = "Coincident currently supports Line endpoints only";
                 return result;
+            }
+        }
+    }
+    for (const auto& constraint : constraints) {
+        const auto* parallel = std::get_if<cad::parametric::ParallelConstraint>(&constraint);
+        const auto* perpendicular = std::get_if<cad::parametric::PerpendicularConstraint>(&constraint);
+        if (!parallel && !perpendicular) continue;
+        const auto& first = parallel ? parallel->firstLineId : perpendicular->firstLineId;
+        const auto& second = parallel ? parallel->secondLineId : perpendicular->secondLineId;
+        if (first == second) {
+            result.status = SolveStatus::Failed;
+            result.error = "Parallel or Perpendicular constraint requires two different Lines";
+            return result;
+        }
+        for (const auto& other : constraints) {
+            if (parallel && std::get_if<cad::parametric::PerpendicularConstraint>(&other)
+                && std::get<cad::parametric::PerpendicularConstraint>(other).firstLineId == first
+                && std::get<cad::parametric::PerpendicularConstraint>(other).secondLineId == second) {
+                result.status = SolveStatus::Failed; result.error = "Parallel and Perpendicular constraints conflict"; return result;
+            }
+            if (perpendicular && std::get_if<cad::parametric::ParallelConstraint>(&other)
+                && std::get<cad::parametric::ParallelConstraint>(other).firstLineId == first
+                && std::get<cad::parametric::ParallelConstraint>(other).secondLineId == second) {
+                result.status = SolveStatus::Failed; result.error = "Parallel and Perpendicular constraints conflict"; return result;
             }
         }
     }
@@ -307,6 +363,20 @@ SketchSolveResult SketchConstraintSolver::solve(
                 if (angle->anchorStart) {
                     if (!samePoint(line->end, solved)) { line->end = solved; changed = true; }
                 } else if (!samePoint(line->start, solved)) { line->start = solved; changed = true; }
+            } else if (const auto* parallel = std::get_if<cad::parametric::ParallelConstraint>(&constraint)) {
+                auto* first = lineById(result.entities, parallel->firstLineId);
+                auto* second = lineById(result.entities, parallel->secondLineId);
+                if (!first || !second) { result.status = SolveStatus::Failed; result.error = "Parallel constraint requires two Lines"; return result; }
+                if (!applyLineOrientation(*second, *first, false, parallel->anchorStart, tolerance, changed)) {
+                    result.status = SolveStatus::Failed; result.error = "Cannot solve Parallel constraint for zero-length Line"; return result;
+                }
+            } else if (const auto* perpendicular = std::get_if<cad::parametric::PerpendicularConstraint>(&constraint)) {
+                auto* first = lineById(result.entities, perpendicular->firstLineId);
+                auto* second = lineById(result.entities, perpendicular->secondLineId);
+                if (!first || !second) { result.status = SolveStatus::Failed; result.error = "Perpendicular constraint requires two Lines"; return result; }
+                if (!applyLineOrientation(*second, *first, true, perpendicular->anchorStart, tolerance, changed)) {
+                    result.status = SolveStatus::Failed; result.error = "Cannot solve Perpendicular constraint for zero-length Line"; return result;
+                }
             } else {
                 const auto& radius = std::get<cad::parametric::RadiusConstraint>(constraint);
                 auto* entity = findEntity(result.entities, radius.entityId);
