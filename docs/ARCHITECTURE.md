@@ -179,13 +179,15 @@ current selected shape, parent presentation, and a current-presentation
 subshape index when applicable. The index is not a persistent topology ID and
 must not be reused after recompute or presentation replacement.
 
-`CadViewer::SelectionState` is a passive snapshot of the already completed
-OCCT selection/detection. OCCT remains the source of truth; the state does not
-perform picking, activate selection modes, or own tool behavior. `MainWindow`
-keeps `selectedObjectIds_` as an application/UI compatibility projection used
-by actions and model-operation inputs. The
-`FeatureEditorPanel` keeps only Qt tree selection and uses signal blocking for
-programmatic viewer-to-tree synchronization.
+`CadViewer::SelectionState` is the normalized committed selection state after
+OCCT selection/detection has completed. OCCT remains the picking mechanism, but
+its selected-owner iteration order is not semantic identity and must not be
+used as the source for interactive tools. `MainWindow` keeps
+`selectedObjectIds_` as an application/UI compatibility projection used by
+actions and model-operation inputs. The `FeatureEditorPanel` keeps only Qt
+tree selection and uses signal blocking for programmatic viewer-to-tree
+synchronization. Both tree selection and direct viewer selection converge on
+the same `SelectionState`.
 
 `TopoDS_Shape` identity is transient: feature rebuilds may replace every
 subshape. Persistent active topology selection therefore uses
@@ -201,16 +203,36 @@ persistent-naming strategy, not a guaranteed final persistent naming solution.
 Interaction priority remains local to `CadViewer`: active transform capture
 and independent `TransformGizmo` handle picking are processed before model
 selection, followed by Push/Pull capture, camera navigation, and ordinary
-selection. `TransformGizmo` does not use model selection picking. `SnapManager`
-keeps its cached geometry/candidate path separate from selection and is not
-called through `SelectionState` during transform mouse movement. X-Ray
-detected-entity cycling remains a `CadViewer` policy through
-`HilightNextDetected()`.
+selection. `TransformGizmo` does not use model selection picking. For
+interactive transforms, `SelectionState::primary` is the sole source of the
+transform target. The invariant is:
+
+```text
+SelectionState::primary
+    == TransformGizmo target
+    == beginTransform() feature
+    == SnapManager source feature
+```
+
+When selection changes from A to B, the gizmo is detached from A, its pivot
+and placement are rebuilt for B, and the next transform captures B. Clearing
+selection hides the gizmo. A tree selection change during an active transform
+cancels the drag before the new selection is applied, so a visible B cannot
+retain A as its transform source. X-Ray detected-entity cycling remains a
+`CadViewer` policy through `HilightNextDetected()`.
+
+Viewer/OCCT selection order must never be used as semantic model identity.
+Interactive tools that require one selected object must consume the normalized
+application selection state and use `SelectionState::primary`; they must not
+independently walk OCCT selected owners, reuse a stale selected-object helper,
+or substitute hover/detected geometry for committed selection.
 
 ### Snap architecture
 
-`SnapManager` builds snap references and candidate pairs at transform start,
-using the cached model reference set. Endpoint and midpoint references carry a
+`SnapManager` does not choose the transform source. `beginTransform()` captures
+source references from the feature selected through `SelectionState::primary`,
+then passes those references to `SnapManager`, which builds candidate pairs at
+transform start using the cached model reference set. Endpoint and midpoint references carry a
 `TopologyReference`; intersection references carry both contributing edge
 references. Endpoint points are deduplicated with tolerance, while distinct
 edges remain distinct so their intersections are not lost. Midpoints use the
@@ -224,6 +246,27 @@ Endpoint, intersection, and midpoint candidates have descending priority and
 are displayed with distinct snap-marker colors. Transform correction remains
 owned by the transform interaction and is composed with the raw preview delta,
 so the committed command receives the same placement shown during preview.
+The snap source, preview source, and committed feature are therefore always
+the same selected feature; stale references from a previous selection are not
+valid.
+
+### Selection/transform regression coverage
+
+The regression fixed on `HEAD c28170d` used the first object returned by OCCT
+selected-object iteration (`validatedSelectedObjectHit()`) instead of
+`SelectionState::primary`. This could leave the gizmo attached to the previous
+feature and caused the next transform to build snap source references for that
+feature. Snapping itself and its correction composition were correct; the
+wrong source entered the pipeline before `SnapManager`.
+
+The state/model regression tests cover:
+
+- selection switching A -> B -> empty updates the primary feature state;
+- a transform source is associated with A, then B, and never with stale A
+  after switching to B.
+
+At this revision, the project builds successfully, all 11 CTest tests pass,
+and `git diff --check` passes.
 
 Controller behavior is testable without starting the Qt GUI. The headless
 controller tests cover stable-ID selection, Sketch → Face → Extrude creation,

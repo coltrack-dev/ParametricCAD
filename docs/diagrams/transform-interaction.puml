@@ -8,6 +8,7 @@ autonumber
 
 actor User
 participant CadViewer as Viewer
+participant SelectionState as Selection
 participant TransformGizmo as Gizmo
 participant TransformMath as Math
 participant SnapManager as Snap
@@ -17,15 +18,27 @@ participant TransformFeatureCommand as Command
 participant Body
 
 User -> Viewer : activate Move / Rotate
-Viewer -> Gizmo : show at selected bounding-box center
+User -> Viewer : select feature A (tree or viewport)
+Viewer -> Selection : normalize committed selection
+Selection --> Viewer : primary = A
+Viewer -> Gizmo : show at A bounding-box center
 User -> Viewer : press axis or rotation ring
-Viewer -> Viewer : capture feature ID and original placement
+Viewer -> Viewer : capture primary A and original placement
+Viewer -> Snap : collect source references for A
+
+alt selection changes during an active transform
+    User -> Viewer : select feature B
+    Viewer -> Viewer : cancel active drag
+    Viewer -> Selection : normalize committed selection
+    Selection --> Viewer : primary = B
+    Viewer -> Gizmo : detach A and show at B
+end
 
 loop mouse move
     User -> Viewer : move cursor
     Viewer -> Math : build camera ray and calculate delta
     Math --> Viewer : world translation / rotation
-    Viewer -> Snap : evaluate compatible candidates
+    Viewer -> Snap : evaluate candidates for source A
     Snap --> Viewer : best candidate with hysteresis
     Viewer -> Gizmo : highlight handle / snap target
     Viewer -> Viewer : update temporary AIS preview from original transform
