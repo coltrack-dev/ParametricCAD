@@ -16,7 +16,15 @@ visualization and selection, and `FeatureEditorPanel` edits parameters. `.pcad`
 stores parameters and supported dependencies, rather than only `TopoDS_Shape`.
 
 See [AGENTS.md](AGENTS.md), [parametric architecture](docs/PARAMETRIC_FEATURES.md),
-[.pcad format](docs/PCAD_FORMAT.md), and [roadmap](docs/ROADMAP.md).
+[.pcad format](docs/PCAD_FORMAT.md), [performance notes](docs/PERFORMANCE.md),
+and [roadmap](docs/ROADMAP.md).
+
+## Demo and performance fixture
+
+`examples/house.pcad` is a large timber-frame house demo. It is also used as a
+viewer stress test, placement/rotation example and large-project loading fixture.
+The extended house fixture and `project_file_tests` exercise the same loading and
+rigid-placement paths at several hundred features.
 
 ## Current Features
 

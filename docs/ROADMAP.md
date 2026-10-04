@@ -134,11 +134,20 @@ Further Boolean work is deferred until Phase 2 is reliable.
   candidates with endpoint-first priority and transform-time hysteresis.
 - Feature-tree visibility supports persistent Hide/Show, temporary Isolate and
   Show All without changing feature history or recompute semantics.
+- Large-project Open uses time-budgeted recompute and presentation continuations,
+  bulk AIS updates, deferred selection activation and deferred snap-cache
+  invalidation.
+- Redundant per-feature viewer updates are suppressed during project Open.
+- Large-project regression coverage exists in `project_file_tests`, including a
+  489-Box fixture and a load check for `examples/house.pcad`.
+- Rigid placement save/load regression coverage accepts rounded rotation matrices;
+  the test exercises a 35-degree rotated placement.
 
 **In progress**
 
 - Improved tree/properties panel, including upcoming construction features.
-- Incremental viewer updates are implemented; topology selection preservation needs further work.
+- Topology selection preservation needs further work for ambiguous or missing
+  geometry signatures.
 
 **Planned**
 

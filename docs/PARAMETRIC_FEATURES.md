@@ -519,6 +519,104 @@ Possible responsibilities:
 
 It should not own the parametric feature model.
 
+## Large Project Loading / Bulk Loading
+
+### Problem and stress test
+
+Opening a large timber-frame house project exposed a UI responsiveness problem:
+hundreds of mostly simple `Box` features caused the Qt window to remain busy long
+enough for Ubuntu to report that the application was not responding. Simple boxes
+are useful here because they keep the model semantics straightforward while still
+exercising feature creation, recompute, AIS presentation, selection activation and
+cache invalidation at a realistic object count.
+
+The repository contains `examples/house.pcad` as the main house demo. Its exact
+feature count may change; the current automated check reports 214 body features.
+The larger generated/extended house regression fixture uses 489 Box features.
+
+### Previous and current loading paths
+
+The previous Open path loaded and recomputed the complete temporary project, then
+called the normal `ModelPresenter::refresh()` path. That path recomputed the Body
+again and synchronized every feature through `CadViewer`. In addition, creating an
+AIS object could repeatedly activate selection modes and update the OCCT viewer.
+Snap-reference invalidation also happened during individual presentation changes.
+`FitAll()` itself was not called for every feature, but the surrounding full
+presentation work was still too coarse for a large project.
+
+The current Open path is:
+
+```text
+MainWindow
+    -> ProjectController / ProjectFile
+    -> temporary validated Body
+    -> time-budgeted GUI recompute
+    -> atomic active project replacement
+    -> time-budgeted bulk CadViewer synchronization
+    -> final visibility/selection synchronization
+    -> one FitAll()
+```
+
+`ProjectFile::load(..., recompute = false)` reads, parses, validates and creates a
+temporary Body first. The GUI then recomputes that Body one feature at a time using
+`Body::beginIncrementalRecompute()`, `recomputeFeature()` and
+`finishIncrementalRecompute()`. Each GUI continuation uses approximately a 30 ms
+time budget and schedules the next continuation with `QTimer::singleShot(0, ...)`.
+The active project is replaced only after this recompute succeeds.
+
+Presentation is also time-budgeted. Each continuation opens `CadViewer` bulk mode,
+updates as many feature presentations as fit in the budget, and closes bulk mode.
+During bulk mode:
+
+- `Display()` and `Redisplay()` do not request an immediate viewer update;
+- `display()` does not activate selection mode for each new AIS object;
+- snap-reference and related screen caches are invalidated once at the end of the
+  bulk scope instead of being rebuilt after every feature;
+- selection synchronization and `UpdateCurrentViewer()` are deferred to the batch
+  boundary.
+
+`ModelPresenter::refresh()` remains the normal full synchronization path for
+ordinary edits. Open uses the same `CadViewer` bulk primitives directly, rather
+than invoking that full refresh in one call. At the end of the presentation batches,
+the viewer retains the valid feature
+objects, applies persistent/derived visibility, restores the selection state, and
+performs one final `FitAll()`.
+
+Open progress and diagnostics are updated by timers. The loader records parse,
+deserialization, recompute, cleanup/replacement, presentation, final
+synchronization and `FitAll()` timings, plus event-loop heartbeat intervals,
+maximum observed GUI stall and the number of scheduled continuations.
+
+### Project Open threading model
+
+Open is not entirely single-threaded, and it is not entirely multithreaded. The
+current implementation uses a worker only for the non-presentation part that is
+explicitly requested through `ProjectController::loadProject(..., false)`:
+
+| Stage | Current thread |
+| --- | --- |
+| File read | Worker thread during `QtConcurrent::run` |
+| JSON parsing | Worker thread |
+| JSON/schema/field/reference validation | Worker thread |
+| Parametric feature construction and temporary Body assembly | Worker thread |
+| Feature recompute / OpenCASCADE shape construction | GUI thread, time-budgeted |
+| AIS object construction and `AIS_InteractiveContext` calls | GUI thread |
+| Selection activation/restoration | GUI thread |
+| Snap-reference/cache invalidation | GUI thread |
+| `V3d_View` update, `UpdateCurrentViewer()` and `FitAll()` | GUI thread |
+| QWidget/progress UI | GUI thread |
+
+The worker does not call AIS, `V3d_View` or QWidget APIs and does not recompute
+feature geometry. This is not a claim that arbitrary OCCT model operations are
+thread-safe. Viewer objects and Qt widgets remain GUI-thread-only, and the current
+implementation deliberately keeps recompute and all visualization work there.
+
+The temporary Body and its validation results are discarded on failure. The active
+Document/Body is replaced only after successful recompute, preserving atomic Open
+semantics. A successful Open clears the existing undo stack through
+`ModelingController::replaceProject()`; visibility and placements come from the
+validated loaded feature definitions.
+
 ---
 
 ## 16. Updating geometry

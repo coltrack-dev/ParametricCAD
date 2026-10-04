@@ -9,6 +9,7 @@ package "Qt UI" {
     component MainWindow
     component FeatureEditorPanel
     component CadViewer
+    component ModelPresenter
     component TransformGizmo
 }
 
@@ -50,6 +51,9 @@ MainWindow --> ModelingController : modeling actions
 MainWindow --> ProjectController : open / save / new
 MainWindow --> FeatureEditorPanel : selection and descriptors
 MainWindow --> CadViewer : presentation coordination
+MainWindow --> ModelPresenter : bulk Open synchronization
+ModelPresenter --> CadViewer : batched feature presentation
+ModelPresenter --> Body : recompute / feature state
 
 FeatureEditorPanel ..> FeatureEditingService : uses contract
 ModelingController ..|> FeatureEditingService

@@ -10,6 +10,13 @@ with existing v1 files. An optional `visible` boolean stores persistent user
 visibility; missing `visible` defaults to `true`. Temporary Isolate state,
 transient previews and undo history are not serialized.
 
+Placement has rigid-transformation semantics: the 3x3 part represents rotation
+and the final column represents translation. Ordinary floating-point values from
+`sin()`/`cos()` are valid, so rotations such as 35 or 42 degrees must not be
+classified as scaling merely because serialized coefficients are rounded. The
+loader validates the matrix as a rigid rotation with a tolerance for normal
+serialization noise. Scale and shear are not part of `.pcad` placement semantics.
+
 ## Implemented format (version 1)
 
 `src/model/ProjectFile.cpp` currently reads and writes UTF-8 JSON with this root:
