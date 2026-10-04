@@ -20,6 +20,9 @@ add_executable(push_pull_drag_tests
     ../src/viewer/PushPullDrag.cpp
     ../src/viewer/TransformMath.cpp
     ../src/viewer/SnapManager.cpp
+    ../src/model/TopologicalReference.cpp
+    ../src/model/Body.cpp
+    ../src/model/ParametricFeature.cpp
     ../src/viewer/TransformGizmoPicking.cpp
 )
 target_include_directories(push_pull_drag_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)

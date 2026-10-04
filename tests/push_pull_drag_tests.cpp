@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <gp_Circ.hxx>
 #include <QElapsedTimer>
 #include <iostream>
 
@@ -224,6 +226,87 @@ int main()
     auto centerCandidate = snapManager.findCandidate(
         {sourceCenter}, {targetCenter}, std::nullopt);
     assert(centerCandidate && centerCandidate->kind == SnapKind::CenterToCenter);
+
+    // Topology-aware endpoint/midpoint references are generated once from the
+    // cached model geometry and deduplicated before candidate pairing.
+    const auto boxSnapReferences = snapManager.collectReferences(
+        QStringLiteral("box-target"), targetBox);
+    const auto boxCandidates = snapManager.buildCandidates({sourceVertex}, boxSnapReferences);
+    const auto endpointCount = std::count_if(boxCandidates.begin(), boxCandidates.end(),
+        [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Endpoint; });
+    const auto midpointCount = std::count_if(boxCandidates.begin(), boxCandidates.end(),
+        [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Midpoint; });
+    assert(endpointCount == 8);
+    assert(midpointCount == 12);
+
+    const auto arc = BRepBuilderAPI_MakeEdge(
+        gp_Circ(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), 5.0),
+        0.0, 1.5707963267948966).Edge();
+    const auto arcReferences = snapManager.collectReferences(QStringLiteral("arc"), arc);
+    const auto arcMidpoint = std::find_if(arcReferences.begin(), arcReferences.end(),
+        [](const auto& reference) { return reference.type == SnapReferenceType::Midpoint; });
+    assert(arcMidpoint != arcReferences.end());
+    assert(arcMidpoint->point.Distance(gp_Pnt(5.0 / std::sqrt(2.0),
+                                                5.0 / std::sqrt(2.0), 0.0)) < 1.0e-7);
+
+    const auto crossingA = BRepBuilderAPI_MakeEdge(
+        gp_Pnt(-5.0, 0.0, 0.0), gp_Pnt(5.0, 0.0, 0.0)).Edge();
+    const auto crossingB = BRepBuilderAPI_MakeEdge(
+        gp_Pnt(0.0, -5.0, 0.0), gp_Pnt(0.0, 5.0, 0.0)).Edge();
+    auto crossingReferences = snapManager.collectReferences(QStringLiteral("crossing-a"), crossingA);
+    const auto crossingBReferences = snapManager.collectReferences(QStringLiteral("crossing-b"), crossingB);
+    crossingReferences.insert(crossingReferences.end(), crossingBReferences.begin(), crossingBReferences.end());
+    const auto intersectionCandidates = snapManager.buildCandidates({sourceVertex}, crossingReferences);
+    const auto intersection = std::find_if(intersectionCandidates.begin(), intersectionCandidates.end(),
+        [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Intersection; });
+    assert(intersection != intersectionCandidates.end());
+    assert(intersection->target.point.Distance(gp_Pnt(0.0, 0.0, 0.0)) < 1.0e-7);
+
+    const auto disjointA = BRepBuilderAPI_MakeEdge(
+        gp_Pnt(0.0, 0.0, 0.0), gp_Pnt(1.0, 0.0, 0.0)).Edge();
+    const auto disjointB = BRepBuilderAPI_MakeEdge(
+        gp_Pnt(2.0, 1.0, 0.0), gp_Pnt(2.0, 2.0, 0.0)).Edge();
+    auto disjointReferences = snapManager.collectReferences(QStringLiteral("disjoint-a"), disjointA);
+    const auto disjointBReferences = snapManager.collectReferences(QStringLiteral("disjoint-b"), disjointB);
+    disjointReferences.insert(disjointReferences.end(), disjointBReferences.begin(), disjointBReferences.end());
+    const auto disjointCandidates = snapManager.buildCandidates({sourceVertex}, disjointReferences);
+    assert(std::none_of(disjointCandidates.begin(), disjointCandidates.end(),
+        [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Intersection; }));
+
+    SnapReference endpointSource = sourceVertex;
+    endpointSource.ownerId = QStringLiteral("moving-endpoint");
+    endpointSource.type = SnapReferenceType::Endpoint;
+    endpointSource.point = gp_Pnt(0.0, 0.0, 0.0);
+    endpointSource.screenPoint = QPointF(100.0, 100.0);
+    SnapReference endpointTarget = endpointSource;
+    endpointTarget.ownerId = QStringLiteral("target-endpoint");
+    endpointTarget.screenPoint = QPointF(104.0, 100.0);
+    endpointTarget.topology.reset();
+    endpointTarget.geometry.reset();
+    endpointTarget.shape.Nullify();
+    SnapReference midpointTarget = endpointTarget;
+    midpointTarget.type = SnapReferenceType::Midpoint;
+    midpointTarget.subshapeId = QStringLiteral("midpoint");
+    midpointTarget.screenPoint = QPointF(101.0, 100.0);
+    const auto priority = snapManager.findCandidate(
+        {endpointSource}, {midpointTarget, endpointTarget}, std::nullopt);
+    assert(priority && priority->kind == SnapKind::Endpoint);
+
+    gp_Trsf rawTranslation;
+    rawTranslation.SetTranslation(gp_Vec(3.0, 0.0, 0.0));
+    auto transformedEndpoint = endpointTarget;
+    transformedEndpoint.point = gp_Pnt(10.0, 0.0, 0.0);
+    transformedEndpoint.screenPoint = QPointF(103.0, 100.0);
+    const auto exactCandidates = snapManager.buildCandidates(
+        {endpointSource}, {transformedEndpoint});
+    auto exact = snapManager.findCandidate(
+        exactCandidates, rawTranslation, {}, std::nullopt);
+    assert(exact);
+    gp_Trsf committed = exact->correction;
+    committed.Multiply(rawTranslation);
+    gp_Pnt committedPoint = endpointSource.point;
+    committedPoint.Transform(committed);
+    assert(committedPoint.Distance(transformedEndpoint.point) < 1.0e-9);
 
     return 0;
 }

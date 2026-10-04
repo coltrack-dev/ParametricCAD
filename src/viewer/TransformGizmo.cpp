@@ -58,6 +58,7 @@ void TransformGizmo::clearPresentations()
         snapTargetPresentation_.Nullify();
     }
     snapTargetPoint_.reset();
+    snapTargetKind_ = SnapMarkerKind::Other;
 }
 
 void TransformGizmo::show(const gp_Pnt& pivot, const Handle(V3d_View)& view)
@@ -208,15 +209,17 @@ void TransformGizmo::setSnapActive(const bool active)
 
 void TransformGizmo::setSnapTarget(
     const std::optional<gp_Pnt>& point,
-    const Handle(V3d_View)& view
+    const Handle(V3d_View)& view,
+    const SnapMarkerKind kind
 )
 {
-    if (point && snapTargetPoint_
+    if (point && snapTargetPoint_ && snapTargetKind_ == kind
         && snapTargetPoint_->Distance(*point) <= 1.0e-7) return;
     if (!point && !snapTargetPresentation_.IsNull()) {
         context_->Remove(snapTargetPresentation_, Standard_False);
         snapTargetPresentation_.Nullify();
         snapTargetPoint_.reset();
+        snapTargetKind_ = SnapMarkerKind::Other;
         return;
     }
     if (point && !snapTargetPresentation_.IsNull() && snapTargetPoint_) {
@@ -224,7 +227,15 @@ void TransformGizmo::setSnapTarget(
         translation.SetTranslation(gp_Vec(*snapTargetPoint_, *point));
         context_->SetLocation(
             snapTargetPresentation_, TopLoc_Location(translation));
+        snapTargetPresentation_->SetColor(kind == SnapMarkerKind::Endpoint
+            ? Quantity_Color(Quantity_NOC_YELLOW)
+            : kind == SnapMarkerKind::Midpoint
+                ? Quantity_Color(Quantity_NOC_CYAN1)
+                : kind == SnapMarkerKind::Intersection
+                    ? Quantity_Color(Quantity_NOC_MAGENTA1)
+                    : Quantity_Color(Quantity_NOC_YELLOW));
         snapTargetPoint_ = point;
+        snapTargetKind_ = kind;
         return;
     }
     if (!snapTargetPresentation_.IsNull()) {
@@ -235,10 +246,17 @@ void TransformGizmo::setSnapTarget(
         const double radius = std::max(0.5, size_ * 0.07);
         snapTargetPresentation_ = new AIS_Shape(
             BRepPrimAPI_MakeSphere(*point, radius).Shape());
-        snapTargetPresentation_->SetColor(Quantity_Color(Quantity_NOC_YELLOW));
+        snapTargetPresentation_->SetColor(kind == SnapMarkerKind::Endpoint
+            ? Quantity_Color(Quantity_NOC_YELLOW)
+            : kind == SnapMarkerKind::Midpoint
+                ? Quantity_Color(Quantity_NOC_CYAN1)
+                : kind == SnapMarkerKind::Intersection
+                    ? Quantity_Color(Quantity_NOC_MAGENTA1)
+                    : Quantity_Color(Quantity_NOC_YELLOW));
         context_->Display(snapTargetPresentation_, Standard_False);
         context_->Deactivate(snapTargetPresentation_);
         snapTargetPoint_ = point;
+        snapTargetKind_ = kind;
     }
     Q_UNUSED(view);
 }

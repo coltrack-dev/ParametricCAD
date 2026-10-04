@@ -25,6 +25,14 @@ enum class TransformHandle
     Center
 };
 
+enum class SnapMarkerKind
+{
+    Other,
+    Endpoint,
+    Midpoint,
+    Intersection
+};
+
 class TransformGizmo final
 {
 public:
@@ -36,7 +44,10 @@ public:
     TransformHandle hitTest(const QPoint& position, const Handle(V3d_View)& view) const;
     void setHovered(TransformHandle handle);
     void setSnapActive(bool active);
-    void setSnapTarget(const std::optional<gp_Pnt>& point, const Handle(V3d_View)& view);
+    void setSnapTarget(
+        const std::optional<gp_Pnt>& point,
+        const Handle(V3d_View)& view,
+        SnapMarkerKind kind = SnapMarkerKind::Other);
     void deactivateSelection();
 
     const gp_Pnt& pivot() const noexcept;
@@ -63,6 +74,7 @@ private:
     bool snapActive_{false};
     Handle(AIS_Shape) snapTargetPresentation_;
     std::optional<gp_Pnt> snapTargetPoint_;
+    SnapMarkerKind snapTargetKind_{SnapMarkerKind::Other};
 };
 
 } // namespace cad::viewer

@@ -9,8 +9,11 @@
 #include <BRep_Tool.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <Geom_Circle.hxx>
+#include <GeomAPI_ExtremaCurveCurve.hxx>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QLoggingCategory>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 
@@ -23,10 +26,17 @@
 
 namespace cad::viewer {
 
+Q_LOGGING_CATEGORY(pcadSnapLog, "parametric.snap")
+
 namespace
 {
 constexpr double TieTolerance = 1.0e-6;
 constexpr double ReferenceDedupTolerance = 1.0e-6;
+constexpr double IntersectionTolerance = 1.0e-7;
+constexpr double IntersectionScreenRadius = 96.0;
+
+std::size_t gLastNearbyEdgePairCount = 0;
+std::size_t gLastIntersectionCandidateCount = 0;
 
 QString referenceKey(const SnapReference& reference)
 {
@@ -50,7 +60,12 @@ QString referenceKey(const SnapReference& reference)
     // Synthetic references used by callers/tests may not carry geometry. Keep
     // those distinct; only references backed by actual model geometry are
     // eligible for world-space deduplication.
-    if (!reference.geometry && reference.shape.IsNull()) {
+    const bool pointReference = reference.type == SnapReferenceType::Vertex
+        || reference.type == SnapReferenceType::Endpoint
+        || reference.type == SnapReferenceType::Midpoint
+        || reference.type == SnapReferenceType::Intersection
+        || reference.type == SnapReferenceType::CircleCenter;
+    if (!pointReference || (!reference.geometry && reference.shape.IsNull())) {
         key += ":synthetic:" + reference.ownerId + ':' + reference.subshapeId;
     }
     return key;
@@ -104,6 +119,16 @@ std::vector<std::size_t> SnapScreenIndex::nearby(
     return result;
 }
 
+std::size_t SnapManager::lastNearbyEdgePairCount() noexcept
+{
+    return gLastNearbyEdgePairCount;
+}
+
+std::size_t SnapManager::lastIntersectionCandidateCount() noexcept
+{
+    return gLastIntersectionCandidateCount;
+}
+
 namespace
 {
 
@@ -120,6 +145,9 @@ std::optional<gp_Ax3> faceFrame(const TopoDS_Face& face, const gp_Pnt& point)
 std::optional<gp_Pnt> closestPoint(const gp_Pnt& source, const SnapReference& target)
 {
     if (target.type == SnapReferenceType::Vertex
+        || target.type == SnapReferenceType::Endpoint
+        || target.type == SnapReferenceType::Midpoint
+        || target.type == SnapReferenceType::Intersection
         || target.type == SnapReferenceType::CircleCenter) return target.point;
     const TopoDS_Shape* targetShape = nullptr;
     if (!target.shape.IsNull()) targetShape = &target.shape;
@@ -133,6 +161,22 @@ std::optional<gp_Pnt> closestPoint(const gp_Pnt& source, const SnapReference& ta
 
 std::optional<SnapKind> compatible(const SnapReference& source, const SnapReference& target)
 {
+    const auto pointReference = [](const SnapReferenceType type) {
+        return type == SnapReferenceType::Vertex
+            || type == SnapReferenceType::Endpoint
+            || type == SnapReferenceType::Midpoint
+            || type == SnapReferenceType::Intersection
+            || type == SnapReferenceType::CircleCenter;
+    };
+    if (pointReference(source.type) && pointReference(target.type)) {
+        if (target.type == SnapReferenceType::Endpoint) return SnapKind::Endpoint;
+        if (target.type == SnapReferenceType::Intersection) return SnapKind::Intersection;
+        if (target.type == SnapReferenceType::Midpoint) return SnapKind::Midpoint;
+        if (source.type == SnapReferenceType::CircleCenter
+            && target.type == SnapReferenceType::CircleCenter)
+            return SnapKind::CenterToCenter;
+        return SnapKind::VertexToVertex;
+    }
     if (source.type == SnapReferenceType::Vertex) {
         if (target.type == SnapReferenceType::Vertex) return SnapKind::VertexToVertex;
         if (target.type == SnapReferenceType::Edge) return SnapKind::VertexToEdge;
@@ -152,6 +196,9 @@ std::optional<SnapKind> compatible(const SnapReference& source, const SnapRefere
 int specificity(const SnapKind kind)
 {
     switch (kind) {
+    case SnapKind::Endpoint: return 6;
+    case SnapKind::Intersection: return 5;
+    case SnapKind::Midpoint: return 4;
     // Point snaps are the most precise result. Axis/edge snaps win over a
     // face-plane result only when screen distances are effectively equal.
     case SnapKind::VertexToVertex:
@@ -162,6 +209,90 @@ int specificity(const SnapKind kind)
     case SnapKind::FaceToFace: return 1;
     }
     return 0;
+}
+
+std::optional<TopoDS_Edge> edgeShape(const SnapReference& reference)
+{
+    const TopoDS_Shape* shape = !reference.shape.IsNull()
+        ? &reference.shape
+        : reference.geometry ? reference.geometry.get() : nullptr;
+    if (!shape || shape->IsNull() || shape->ShapeType() != TopAbs_EDGE) return std::nullopt;
+    return TopoDS::Edge(*shape);
+}
+
+std::optional<cad::topology::TopologicalReference> makeTopologyReference(
+    const QString& ownerId, const TopoDS_Shape& ownerShape, const TopoDS_Shape& subshape)
+{
+    try {
+        return cad::topology::TopologicalSignatureBuilder::createReference(
+            ownerId.toStdString(), ownerShape, subshape);
+    } catch (const Standard_Failure&) {
+        return std::nullopt;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+std::vector<SnapReference> buildIntersectionReferences(
+    const std::vector<SnapReference>& edges)
+{
+    std::vector<SnapReference> result;
+    std::set<QString> points;
+    gLastNearbyEdgePairCount = 0;
+    gLastIntersectionCandidateCount = 0;
+    for (std::size_t first = 0; first < edges.size(); ++first) {
+        const auto edgeA = edgeShape(edges[first]);
+        if (!edgeA) continue;
+        Standard_Real firstA = 0.0;
+        Standard_Real lastA = 0.0;
+        const auto curveA = BRep_Tool::Curve(*edgeA, firstA, lastA);
+        if (curveA.IsNull()) continue;
+        for (std::size_t second = first + 1; second < edges.size(); ++second) {
+            const auto edgeB = edgeShape(edges[second]);
+            if (!edgeB) continue;
+            if (std::hypot(edges[first].screenPoint.x() - edges[second].screenPoint.x(),
+                          edges[first].screenPoint.y() - edges[second].screenPoint.y())
+                > IntersectionScreenRadius) continue;
+            ++gLastNearbyEdgePairCount;
+            Standard_Real firstB = 0.0;
+            Standard_Real lastB = 0.0;
+            const auto curveB = BRep_Tool::Curve(*edgeB, firstB, lastB);
+            if (curveB.IsNull()) continue;
+            try {
+                const GeomAPI_ExtremaCurveCurve extrema(
+                    curveA, curveB, firstA, lastA, firstB, lastB);
+                for (int index = 1; index <= extrema.NbExtrema(); ++index) {
+                    if (extrema.Distance(index) > IntersectionTolerance) continue;
+                    gp_Pnt pointA;
+                    gp_Pnt pointB;
+                    extrema.Points(index, pointA, pointB);
+                    SnapReference reference;
+                    reference.ownerId = edges[first].ownerId == edges[second].ownerId
+                        ? edges[first].ownerId
+                        : edges[first].ownerId + "+" + edges[second].ownerId;
+                    reference.subshapeId = QStringLiteral("intersection:%1:%2:%3")
+                        .arg(edges[first].subshapeId, edges[second].subshapeId)
+                        .arg(index);
+                    reference.type = SnapReferenceType::Intersection;
+                    reference.point = gp_Pnt(
+                        (pointA.X() + pointB.X()) * 0.5,
+                        (pointA.Y() + pointB.Y()) * 0.5,
+                        (pointA.Z() + pointB.Z()) * 0.5);
+                    if (edges[first].topology) reference.topology = edges[first].topology;
+                    if (edges[second].topology)
+                        reference.relatedTopology.push_back(*edges[second].topology);
+                    const QString key = referenceKey(reference);
+                    if (points.insert(key).second) {
+                        result.push_back(std::move(reference));
+                        ++gLastIntersectionCandidateCount;
+                    }
+                }
+            } catch (const Standard_Failure&) {
+                continue;
+            }
+        }
+    }
+    return result;
 }
 
 gp_Trsf correctionFor(
@@ -218,51 +349,80 @@ std::vector<SnapReference> SnapManager::collectReferences(
 )
 {
     std::vector<SnapReference> result;
-    QElapsedTimer vertexTimer;
-    vertexTimer.start();
     int index = 0;
     for (TopExp_Explorer explorer(shape, TopAbs_VERTEX); explorer.More(); explorer.Next()) {
         ++index;
         const auto vertex = TopoDS::Vertex(explorer.Current());
-        result.push_back({ownerId, QStringLiteral("vertex:%1").arg(index),
-                          SnapReferenceType::Vertex, vertex, BRep_Tool::Pnt(vertex),
-                          std::nullopt, std::nullopt, {}, {}});
+        SnapReference reference;
+        reference.ownerId = ownerId;
+        reference.subshapeId = QStringLiteral("vertex:%1").arg(index);
+        reference.type = SnapReferenceType::Vertex;
+        reference.shape = vertex;
+        reference.point = BRep_Tool::Pnt(vertex);
+        reference.topology = makeTopologyReference(ownerId, shape, vertex);
+        result.push_back(std::move(reference));
     }
-    if (vertexTimer.elapsed() > 2) {
-        qWarning() << "SnapManager vertex extraction took"
-                   << vertexTimer.elapsed() << "ms";
-    }
-    QElapsedTimer edgeTimer;
-    edgeTimer.start();
     index = 0;
     for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
         ++index;
         const auto edge = TopoDS::Edge(explorer.Current());
-        gp_Pnt midpoint;
         Standard_Real first = 0.0;
         Standard_Real last = 0.0;
         const auto curve = BRep_Tool::Curve(edge, first, last);
-        if (!curve.IsNull()) {
-            midpoint = curve->Value(first + (last - first) * 0.5);
+        const auto topology = makeTopologyReference(ownerId, shape, edge);
+        SnapReference edgeReference;
+        edgeReference.ownerId = ownerId;
+        edgeReference.subshapeId = QStringLiteral("edge:%1").arg(index);
+        edgeReference.type = SnapReferenceType::Edge;
+        edgeReference.shape = edge;
+        edgeReference.topology = topology;
+        if (!curve.IsNull()) edgeReference.point = curve->Value(first + (last - first) * 0.5);
+        result.push_back(edgeReference);
+
+        const auto firstVertex = TopExp::FirstVertex(edge, Standard_True);
+        const auto lastVertex = TopExp::LastVertex(edge, Standard_True);
+        if (!firstVertex.IsNull() && !lastVertex.IsNull()) {
+            SnapReference start;
+            start.ownerId = ownerId;
+            start.subshapeId = QStringLiteral("edge:%1:start").arg(index);
+            start.type = SnapReferenceType::Endpoint;
+            start.shape = firstVertex;
+            start.point = BRep_Tool::Pnt(firstVertex);
+            start.topology = makeTopologyReference(ownerId, shape, firstVertex);
+            result.push_back(std::move(start));
+            SnapReference end;
+            end.ownerId = ownerId;
+            end.subshapeId = QStringLiteral("edge:%1:end").arg(index);
+            end.type = SnapReferenceType::Endpoint;
+            end.shape = lastVertex;
+            end.point = BRep_Tool::Pnt(lastVertex);
+            end.topology = makeTopologyReference(ownerId, shape, lastVertex);
+            result.push_back(std::move(end));
         }
-        result.push_back({ownerId, QStringLiteral("edge:%1").arg(index),
-                          SnapReferenceType::Edge, edge, midpoint, std::nullopt,
-                          std::nullopt, {}, {}});
+        if (!curve.IsNull()) {
+            SnapReference midpoint;
+            midpoint.ownerId = ownerId;
+            midpoint.subshapeId = QStringLiteral("edge:%1:midpoint").arg(index);
+            midpoint.type = SnapReferenceType::Midpoint;
+            midpoint.shape = edge;
+            midpoint.point = curve->Value(first + (last - first) * 0.5);
+            midpoint.topology = topology;
+            result.push_back(std::move(midpoint));
+        }
         const auto circle = Handle(Geom_Circle)::DownCast(curve);
         if (!circle.IsNull()) {
             const gp_Circ data = circle->Circ();
-            result.push_back({ownerId, QStringLiteral("edge:%1:center").arg(index),
-                              SnapReferenceType::CircleCenter, edge, data.Location(),
-                              std::nullopt,
-                              gp_Ax1(data.Location(), data.Axis().Direction()), {}, {}});
+            SnapReference center;
+            center.ownerId = ownerId;
+            center.subshapeId = QStringLiteral("edge:%1:center").arg(index);
+            center.type = SnapReferenceType::CircleCenter;
+            center.shape = edge;
+            center.point = data.Location();
+            center.axis = gp_Ax1(data.Location(), data.Axis().Direction());
+            center.topology = topology;
+            result.push_back(std::move(center));
         }
     }
-    if (edgeTimer.elapsed() > 2) {
-        qWarning() << "SnapManager edge extraction/OCCT geometry access took"
-                   << edgeTimer.elapsed() << "ms";
-    }
-    QElapsedTimer faceTimer;
-    faceTimer.start();
     index = 0;
     for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
         ++index;
@@ -277,24 +437,36 @@ std::vector<SnapReference> SnapManager::collectReferences(
         // entering the generic FaceToFace candidate pipeline and falling back
         // to an ambiguous point translation.
         if (frame) {
-            result.push_back({ownerId, QStringLiteral("face:%1").arg(index),
-                              SnapReferenceType::Face, face, point, frame,
-                              std::nullopt, {}, {}});
+            SnapReference reference;
+            reference.ownerId = ownerId;
+            reference.subshapeId = QStringLiteral("face:%1").arg(index);
+            reference.type = SnapReferenceType::Face;
+            reference.shape = face;
+            reference.point = point;
+            reference.frame = frame;
+            reference.topology = makeTopologyReference(ownerId, shape, face);
+            result.push_back(std::move(reference));
         }
         BRepAdaptor_Surface surface(face, Standard_True);
         if (surface.GetType() == GeomAbs_Cylinder) {
             const gp_Ax1 axis = surface.Cylinder().Axis();
-            result.push_back({ownerId, QStringLiteral("face:%1:center").arg(index),
-                              SnapReferenceType::CircleCenter, face, axis.Location(),
-                              std::nullopt, axis, {}, {}});
-            result.push_back({ownerId, QStringLiteral("face:%1:axis").arg(index),
-                              SnapReferenceType::Axis, face, axis.Location(),
-                              std::nullopt, axis, {}, {}});
+            SnapReference center;
+            center.ownerId = ownerId;
+            center.subshapeId = QStringLiteral("face:%1:center").arg(index);
+            center.type = SnapReferenceType::CircleCenter;
+            center.shape = face;
+            center.point = axis.Location();
+            center.axis = axis;
+            result.push_back(std::move(center));
+            SnapReference axisReference;
+            axisReference.ownerId = ownerId;
+            axisReference.subshapeId = QStringLiteral("face:%1:axis").arg(index);
+            axisReference.type = SnapReferenceType::Axis;
+            axisReference.shape = face;
+            axisReference.point = axis.Location();
+            axisReference.axis = axis;
+            result.push_back(std::move(axisReference));
         }
-    }
-    if (faceTimer.elapsed() > 2) {
-        qWarning() << "SnapManager face extraction/frame construction took"
-                   << faceTimer.elapsed() << "ms";
     }
     for (auto& reference : result) {
         if (!reference.shape.IsNull()) {
@@ -356,13 +528,37 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
             uniqueTargets.push_back(target);
         }
     }
+    std::vector<SnapReference> edgeTargets;
+    for (const auto& target : uniqueTargets) {
+        if (target.type == SnapReferenceType::Edge) edgeTargets.push_back(target);
+    }
+    for (auto& intersection : buildIntersectionReferences(edgeTargets)) {
+        if (targetKeys.insert(referenceKey(intersection)).second)
+            uniqueTargets.push_back(std::move(intersection));
+    }
+    std::map<SnapReferenceType, std::size_t> referenceCounts;
+    for (const auto& target : uniqueTargets) ++referenceCounts[target.type];
+    qCDebug(pcadSnapLog) << "SnapManager references by type"
+             << "endpoint" << referenceCounts[SnapReferenceType::Endpoint]
+             << "midpoint" << referenceCounts[SnapReferenceType::Midpoint]
+             << "intersection" << referenceCounts[SnapReferenceType::Intersection]
+             << "edge pairs" << gLastNearbyEdgePairCount
+             << "intersection candidates" << gLastIntersectionCandidateCount;
     std::size_t sourceIndex = 0;
     for (const auto& source : uniqueSources) {
         for (const auto& target : uniqueTargets) {
             // A feature must never snap to its own references. In the viewer
             // this is normally filtered while building the target cache, but
             // keeping the invariant here also protects direct/test callers.
-            if (!source.ownerId.isEmpty() && source.ownerId == target.ownerId) {
+            const auto referencesOwner = [&source](const auto& reference) {
+                return reference && QString::fromStdString(reference->featureId) == source.ownerId;
+            };
+            if ((!source.ownerId.isEmpty() && source.ownerId == target.ownerId)
+                || referencesOwner(target.topology)
+                || std::any_of(target.relatedTopology.begin(), target.relatedTopology.end(),
+                    [&source](const auto& reference) {
+                        return QString::fromStdString(reference.featureId) == source.ownerId;
+                    })) {
                 continue;
             }
             const auto kind = compatible(source, target);
@@ -498,9 +694,9 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
                 result = std::move(candidate);
                 break;
             }
-            if (!result || distance + TieTolerance < result->screenDistance
-                || (std::abs(distance - result->screenDistance) <= TieTolerance
-                    && candidate.specificity > result->specificity)) {
+            if (!result || candidate.specificity > result->specificity
+                || (candidate.specificity == result->specificity
+                    && distance + TieTolerance < result->screenDistance)) {
                 result = std::move(candidate);
             }
     }
@@ -538,6 +734,13 @@ std::optional<SnapCandidate> SnapManager::findCandidate(
         }
         result->correction = correctionFor(
             source, result->target, source.point, result->targetPoint);
+        static int lastLoggedKind = -1;
+        if (lastLoggedKind != static_cast<int>(result->kind)) {
+            qCDebug(pcadSnapLog) << "SnapManager selected snap type"
+                                  << static_cast<int>(result->kind)
+                                  << "distance" << result->screenDistance;
+            lastLoggedKind = static_cast<int>(result->kind);
+        }
         if (correctionTimer.elapsed() > 2) {
             qWarning() << "SnapManager candidate correction phase took"
                        << correctionTimer.elapsed() << "ms";

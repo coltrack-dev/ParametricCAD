@@ -207,6 +207,24 @@ called through `SelectionState` during transform mouse movement. X-Ray
 detected-entity cycling remains a `CadViewer` policy through
 `HilightNextDetected()`.
 
+### Snap architecture
+
+`SnapManager` builds snap references and candidate pairs at transform start,
+using the cached model reference set. Endpoint and midpoint references carry a
+`TopologyReference`; intersection references carry both contributing edge
+references. Endpoint points are deduplicated with tolerance, while distinct
+edges remain distinct so their intersections are not lost. Midpoints use the
+trimmed curve parameter domain rather than a bounding-box center.
+
+Line/curve intersection discovery is performed only while building the cached
+candidate set and is restricted by projected edge proximity. Mouse-move
+processing uses the existing screen-space index, hysteresis, and cached
+projections; it does not traverse model topology or rebuild AIS geometry.
+Endpoint, intersection, and midpoint candidates have descending priority and
+are displayed with distinct snap-marker colors. Transform correction remains
+owned by the transform interaction and is composed with the raw preview delta,
+so the committed command receives the same placement shown during preview.
+
 Controller behavior is testable without starting the Qt GUI. The headless
 controller tests cover stable-ID selection, Sketch → Face → Extrude creation,
 Boolean Cut creation, property validation and property undo/redo, project

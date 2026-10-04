@@ -130,6 +130,8 @@ Further Boolean work is deferred until Phase 2 is reliable.
 - Parameter refresh no longer calls Fit All; load and explicit Fit still do.
 - Face/edge/vertex selection is restored across feature rebuilds when a unique
   geometry-signature match exists; missing or ambiguous topology is dropped.
+- SnapManager supports cached endpoint, midpoint, and bounded edge-intersection
+  candidates with endpoint-first priority and transform-time hysteresis.
 
 **In progress**
 
@@ -141,6 +143,8 @@ Further Boolean work is deferred until Phase 2 is reliable.
 - Context menus and feature icons.
 - Per-feature visibility toggle and isolate/hide objects.
 - Improve topology naming beyond the current geometry-signature fallback.
+- Extend snap intersection coverage and marker styling as additional curve
+  types become reliable.
 
 ## Audit findings and TODOs
 

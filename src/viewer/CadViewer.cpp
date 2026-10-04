@@ -917,6 +917,18 @@ void CadViewer::beginTransform(
         transformTargetReferences_.insert(
             transformTargetReferences_.end(), references.begin(), references.end());
     }
+    Standard_Integer windowWidth = 0;
+    Standard_Integer windowHeight = 0;
+    view_->Window()->Size(windowWidth, windowHeight);
+    for (auto& reference : transformTargetReferences_) {
+        const QString key = reference.ownerId + ':' + reference.subshapeId;
+        auto projection = snapScreenProjectionCache_.find(key);
+        if (projection == snapScreenProjectionCache_.end()) {
+            projection = snapScreenProjectionCache_.emplace(
+                key, projectWorldPoint(view_, reference.point, windowWidth, windowHeight)).first;
+        }
+        reference.screenPoint = projection->second;
+    }
     auto cachedCandidates = snapCandidateCache_.find(transformFeatureId_);
     if (cachedCandidates != snapCandidateCache_.end()) {
         transformSnapCandidates_ = cachedCandidates->second;
@@ -926,9 +938,6 @@ void CadViewer::beginTransform(
                 transformSourceReferences_, transformTargetReferences_));
         snapCandidateCache_.emplace(transformFeatureId_, transformSnapCandidates_);
     }
-    Standard_Integer windowWidth = 0;
-    Standard_Integer windowHeight = 0;
-    view_->Window()->Size(windowWidth, windowHeight);
     for (auto& candidate : *transformSnapCandidates_) {
         const QString key = candidate.target.ownerId + ':' + candidate.target.subshapeId;
         auto projection = snapScreenProjectionCache_.find(key);
@@ -1024,7 +1033,14 @@ void CadViewer::updateTransformSnap(
         pivot.Transform(delta);
         if (transformGizmo_) transformGizmo_->setSnapActive(true);
         if (transformGizmo_) {
-            transformGizmo_->setSnapTarget(activeSnap_->targetPoint, view_);
+            const auto markerKind = activeSnap_->kind == SnapKind::Endpoint
+                ? cad::viewer::SnapMarkerKind::Endpoint
+                : activeSnap_->kind == SnapKind::Midpoint
+                    ? cad::viewer::SnapMarkerKind::Midpoint
+                    : activeSnap_->kind == SnapKind::Intersection
+                        ? cad::viewer::SnapMarkerKind::Intersection
+                        : cad::viewer::SnapMarkerKind::Other;
+            transformGizmo_->setSnapTarget(activeSnap_->targetPoint, view_, markerKind);
         }
     } else if (transformGizmo_) {
         transformGizmo_->setSnapActive(false);

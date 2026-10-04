@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model/TopologicalReference.h"
+
 #include <QPointF>
 #include <QString>
 #include <TopoDS_Shape.hxx>
@@ -19,6 +21,9 @@ namespace cad::viewer {
 
 enum class SnapKind
 {
+    Endpoint,
+    Intersection,
+    Midpoint,
     VertexToVertex,
     VertexToEdge,
     VertexToFace,
@@ -30,6 +35,9 @@ enum class SnapKind
 enum class SnapReferenceType
 {
     Vertex,
+    Endpoint,
+    Midpoint,
+    Intersection,
     Edge,
     Face,
     CircleCenter,
@@ -49,6 +57,8 @@ struct SnapReference
     // Shared geometry is used by candidate pairs so a large pattern does not
     // copy a TopoDS_Shape into every source/target combination.
     std::shared_ptr<const TopoDS_Shape> geometry;
+    std::optional<cad::topology::TopologicalReference> topology;
+    std::vector<cad::topology::TopologicalReference> relatedTopology;
 };
 
 struct SnapCandidate
@@ -88,6 +98,9 @@ public:
         const QString& ownerId,
         const TopoDS_Shape& shape
     );
+
+    static std::size_t lastNearbyEdgePairCount() noexcept;
+    static std::size_t lastIntersectionCandidateCount() noexcept;
 
     static std::vector<SnapReference> transformReferences(
         const std::vector<SnapReference>& references,
