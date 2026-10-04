@@ -9,6 +9,18 @@ ProjectController::ProjectController(ModelingController& modeling)
 {
 }
 
+ProjectLoadResult ProjectController::loadProject(
+    const QString& path, ProjectLoadProgress progress, bool recompute)
+{
+    ProjectLoadResult result;
+    if (!ProjectFile::load(path, result.document, result.body, result.error,
+                           std::move(progress), &result.metrics, recompute)) {
+        result.document = {};
+        result.body = {};
+    }
+    return result;
+}
+
 bool ProjectController::save(const QString& path, QString& error)
 {
     if (!modeling_.body().recompute()) {
@@ -24,10 +36,12 @@ bool ProjectController::save(const QString& path, QString& error)
 
 bool ProjectController::open(const QString& path, QString& error)
 {
-    Document document;
-    cad::parametric::Body body;
-    if (!ProjectFile::load(path, document, body, error)) return false;
-    modeling_.replaceProject(std::move(document), std::move(body));
+    auto result = loadProject(path);
+    if (!result.success()) {
+        error = result.error;
+        return false;
+    }
+    modeling_.replaceProject(std::move(result.document), std::move(result.body));
     return true;
 }
 

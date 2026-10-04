@@ -26,6 +26,9 @@ public:
     const TopoDS_Shape& shape() const noexcept;
 
     bool recompute();
+    void beginIncrementalRecompute();
+    bool recomputeFeature(std::size_t index);
+    bool finishIncrementalRecompute();
     void markDirtyFrom(const std::string& featureId);
 
     const std::string& lastError() const noexcept;

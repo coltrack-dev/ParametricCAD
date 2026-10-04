@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QTemporaryDir>
+#include <QDir>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <cmath>
@@ -202,6 +203,57 @@ int main()
         check(file.write(valid) == valid.size(), "restore canonical JSON");
         file.close();
         check(ProjectFile::load(path, loaded, loadedBody, error), "reload canonical model");
+
+        const auto largePath = directory.filePath("large-box-project.pcad");
+        QJsonArray largeBody;
+        constexpr int largeFeatureCount = 489;
+        for (int index = 0; index < largeFeatureCount; ++index) {
+            largeBody.append(QJsonObject{
+                {"id", QString("large-box-%1").arg(index)},
+                {"name", QString("Box %1").arg(index)},
+                {"type", "Box"},
+                {"width", 10.0},
+                {"depth", 20.0},
+                {"height", 30.0},
+                {"placement", QJsonArray{1.0, 0.0, 0.0, index * 40.0,
+                    0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0}},
+                {"visible", true}
+            });
+        }
+        file.setFileName(largePath);
+        check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write large project");
+        const auto largeData = QJsonDocument(QJsonObject{
+            {"format", "ParametricCAD"}, {"version", 1},
+            {"features", QJsonArray{}}, {"body", largeBody}
+        }).toJson();
+        check(file.write(largeData) == largeData.size(), "write large project data");
+        file.close();
+        Document largeDocument;
+        Body largeLoadedBody;
+        ProjectLoadMetrics largeMetrics;
+        int lastProgress = -1;
+        const auto largeLoaded = ProjectFile::load(largePath, largeDocument, largeLoadedBody, error,
+            [&lastProgress](const int current, const int total) {
+                check(total == largeFeatureCount, "large project progress total");
+                check(current >= lastProgress, "large project progress order");
+                lastProgress = current;
+            }, &largeMetrics);
+        check(largeLoaded, "load large project");
+        check(lastProgress == largeFeatureCount
+                  && largeMetrics.featureCount == largeFeatureCount
+                  && largeLoadedBody.features().size() == largeFeatureCount,
+              "large project regression");
+        const auto housePath = QDir::current().filePath("../../examples/house.pcad");
+        if (QFile::exists(housePath)) {
+            Document houseDocument;
+            Body houseBody;
+            ProjectLoadMetrics houseMetrics;
+            check(ProjectFile::load(housePath, houseDocument, houseBody, error,
+                {}, &houseMetrics), "load house project");
+            check(houseMetrics.featureCount == static_cast<int>(houseBody.features().size()),
+                "house project feature count");
+        }
+        file.setFileName(path);
 
         bad = root;
         auto history = bad.value("body").toArray();

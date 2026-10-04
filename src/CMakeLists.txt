@@ -98,6 +98,7 @@ target_link_libraries(ParametricCAD
         Qt6::Widgets
         Qt6::OpenGL
         Qt6::OpenGLWidgets
+        Qt6::Concurrent
 
         # OCCT Foundation
         TKernel

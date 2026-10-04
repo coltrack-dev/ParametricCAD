@@ -8,6 +8,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QDebug>
 #include <QFocusEvent>
 #include <QActionGroup>
@@ -984,6 +985,10 @@ void CadViewer::beginTransform(
 void CadViewer::invalidateSnapReferenceCache(const char* reason)
 {
     Q_UNUSED(reason);
+    if (bulkUpdateDepth_ > 0) {
+        bulkCachesInvalidated_ = true;
+        return;
+    }
     snapReferenceCache_.clear();
     snapCandidateCache_.clear();
     transformSnapCandidates_.reset();
@@ -1242,7 +1247,7 @@ void CadViewer::initializeOcc()
     view_->MustBeResized();
 
     initialized_ = true;
-    applySelectionMode();
+    if (bulkUpdateDepth_ == 0) applySelectionMode();
 }
 
 void CadViewer::bindWindow()
@@ -1344,7 +1349,7 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
 
     context_->Display(
         interactiveShape,
-        Standard_True
+        bulkUpdateDepth_ == 0 ? Standard_True : Standard_False
     );
     displayedShapes_.push_back(interactiveShape);
     if (!featureId.isEmpty()) {
@@ -1353,10 +1358,50 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
     invalidateSnapReferenceCache("MODEL_CHANGED: feature added");
     selectionState_.hovered.reset();
 
-    applySelectionMode();
+    if (bulkUpdateDepth_ == 0) applySelectionMode();
     if (fitView) {
         fitAll();
     }
+}
+
+void CadViewer::beginBulkUpdate()
+{
+    ++bulkUpdateDepth_;
+}
+
+void CadViewer::endBulkUpdate()
+{
+    if (bulkUpdateDepth_ == 0) return;
+    --bulkUpdateDepth_;
+    if (bulkUpdateDepth_ == 0 && initialized_ && !context_.IsNull()) {
+        if (bulkCachesInvalidated_) {
+            snapReferenceCache_.clear();
+            snapCandidateCache_.clear();
+            transformSnapCandidates_.reset();
+            snapScreenIndex_.reset();
+            snapScreenProjectionCache_.clear();
+            bulkCachesInvalidated_ = false;
+        }
+        QElapsedTimer timer;
+        timer.start();
+        applySelectionMode();
+        lastBulkViewerUpdateMilliseconds_ = timer.elapsed();
+    }
+}
+
+std::int64_t CadViewer::lastBulkViewerUpdateMilliseconds() const noexcept
+{
+    return lastBulkViewerUpdateMilliseconds_;
+}
+
+std::int64_t CadViewer::lastViewerUpdateMilliseconds() const noexcept
+{
+    return lastViewerUpdateMilliseconds_;
+}
+
+std::int64_t CadViewer::lastSelectionActivationMilliseconds() const noexcept
+{
+    return lastSelectionActivationMilliseconds_;
 }
 
 void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureId)
@@ -1371,7 +1416,7 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     configureSketchPresentation(object, featureId);
     if (object->Shape().IsEqual(shape)) {
         if (featureId.startsWith("sketch-")) {
-            context_->Redisplay(object, Standard_True);
+            context_->Redisplay(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
         }
         return;
     }
@@ -1381,8 +1426,8 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     invalidateSnapReferenceCache("MODEL_CHANGED: feature shape updated");
     selectionState_.hovered.reset();
     object->SetShape(shape);
-    context_->Redisplay(object, Standard_True);
-    syncSelectionStateFromOcct();
+    context_->Redisplay(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
+    if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
 }
 
 void CadViewer::setHiddenFeatures(const QStringList& featureIds)
@@ -1407,9 +1452,9 @@ void CadViewer::setHiddenFeatures(const QStringList& featureIds)
         invalidateSnapReferenceCache("MODEL_CHANGED: visibility changed");
         resetDetectedCycle();
         selectionState_.hovered.reset();
-        syncSelectionStateFromOcct();
+        if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
         updateTransformGizmo();
-        context_->UpdateCurrentViewer();
+        if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
     }
 }
 
@@ -1432,8 +1477,8 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         invalidateSnapReferenceCache("MODEL_CHANGED: features retained");
         resetDetectedCycle();
         selectionState_.hovered.reset();
-        syncSelectionStateFromOcct();
-        context_->UpdateCurrentViewer();
+        if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
+        if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
     }
 }
 
@@ -1552,7 +1597,7 @@ void CadViewer::restoreSelection(
             context_->AddOrRemoveSelected(object->second, Standard_False);
         }
     }
-    context_->UpdateCurrentViewer();
+    if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
     syncSelectionStateFromOcct();
     updateTransformGizmo();
 }
@@ -1580,6 +1625,8 @@ void CadViewer::applySelectionMode()
         return;
     }
 
+    QElapsedTimer timer;
+    timer.start();
     context_->Deactivate();
 
     Standard_Integer mode = 0;
@@ -1603,7 +1650,11 @@ void CadViewer::applySelectionMode()
     if (transformGizmo_) {
         transformGizmo_->deactivateSelection();
     }
+    QElapsedTimer updateTimer;
+    updateTimer.start();
     context_->UpdateCurrentViewer();
+    lastViewerUpdateMilliseconds_ = updateTimer.elapsed();
+    lastSelectionActivationMilliseconds_ = timer.elapsed();
 }
 
 void CadViewer::resetDetectedCycle()

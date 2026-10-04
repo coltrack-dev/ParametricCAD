@@ -14,7 +14,7 @@ set(CMAKE_AUTORCC ON)
 
 option(PARAMETRIC_CAD_BUILD_TESTS "Build unit tests" ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Concurrent)
 
 # Open CASCADE package naming differs between distributions.
 # The official/config package normally exposes OpenCASCADE_* variables.

@@ -70,6 +70,11 @@ public:
     explicit CadViewer(QWidget* parent = nullptr);
 
     void display(const TopoDS_Shape& shape, const QString& featureId = {}, bool fitView = true);
+    void beginBulkUpdate();
+    void endBulkUpdate();
+    std::int64_t lastBulkViewerUpdateMilliseconds() const noexcept;
+    std::int64_t lastViewerUpdateMilliseconds() const noexcept;
+    std::int64_t lastSelectionActivationMilliseconds() const noexcept;
     void updateFeature(const TopoDS_Shape& shape, const QString& featureId);
     void selectFeatures(const QStringList& featureIds);
     void setHiddenFeatures(const QStringList& featureIds);
@@ -207,6 +212,11 @@ private:
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
+    int bulkUpdateDepth_{0};
+    bool bulkCachesInvalidated_{false};
+    std::int64_t lastBulkViewerUpdateMilliseconds_{0};
+    std::int64_t lastViewerUpdateMilliseconds_{0};
+    std::int64_t lastSelectionActivationMilliseconds_{0};
 
     bool pushPullArmed_{false};
     bool pushPullActive_{false};

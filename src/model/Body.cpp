@@ -89,28 +89,45 @@ const TopoDS_Shape& Body::shape() const noexcept
 
 bool Body::recompute()
 {
+    beginIncrementalRecompute();
+    for (std::size_t index = 0; index < features_.size(); ++index) {
+        if (!recomputeFeature(index)) return false;
+    }
+    return finishIncrementalRecompute();
+}
+
+void Body::beginIncrementalRecompute()
+{
     lastError_.clear();
     resultShape_.Nullify();
+}
 
-    for (const FeaturePtr& feature : features_) {
-        if (feature->isDirty() && !feature->recompute()) {
-            lastError_ =
-                "Feature '" + feature->name() + "' failed: " + feature->error();
-            return false;
-        }
+bool Body::recomputeFeature(const std::size_t index)
+{
+    if (index >= features_.size()) return true;
+    const FeaturePtr& feature = features_[index];
 
-        if (feature->state() == FeatureState::Failed) {
-            lastError_ =
-                "Feature '" + feature->name() + "' is in failed state: "
-                + feature->error();
-            return false;
-        }
-
-        if (!feature->shape().IsNull()) {
-            resultShape_ = feature->shape();
-        }
+    if (feature->isDirty() && !feature->recompute()) {
+        lastError_ =
+            "Feature '" + feature->name() + "' failed: " + feature->error();
+        return false;
     }
 
+    if (feature->state() == FeatureState::Failed) {
+        lastError_ =
+            "Feature '" + feature->name() + "' is in failed state: "
+            + feature->error();
+        return false;
+    }
+
+    if (!feature->shape().IsNull()) {
+        resultShape_ = feature->shape();
+    }
+    return true;
+}
+
+bool Body::finishIncrementalRecompute()
+{
     return !resultShape_.IsNull() || features_.empty();
 }
 

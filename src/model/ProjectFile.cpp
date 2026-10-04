@@ -11,6 +11,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QDebug>
+#include <QElapsedTimer>
 #include <QSaveFile>
 #include <Standard_Failure.hxx>
 #include <gp_Mat.hxx>
@@ -475,10 +477,17 @@ bool ProjectFile::save(const QString& path, const Document& document,
 }
 
 bool ProjectFile::load(const QString& path, Document& document,
-                       cad::parametric::Body& body, QString& error)
+                       cad::parametric::Body& body, QString& error,
+                       ProjectLoadProgress progress, ProjectLoadMetrics* metrics,
+                       bool recompute)
 {
     error.clear();
+    if (metrics) *metrics = {};
+    QElapsedTimer totalTimer;
+    totalTimer.start();
     try {
+        QElapsedTimer stageTimer;
+        stageTimer.start();
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) { error = file.errorString(); return false; }
         const auto data = file.readAll();
@@ -489,8 +498,15 @@ bool ProjectFile::load(const QString& path, Document& document,
         const auto root = json.object();
         require(string(root,"format") == "ParametricCAD" && number(root,"version") == 1, "Unsupported project format or version");
         require(root.value("features").isArray() && root.value("body").isArray(), "Missing feature arrays");
+        if (metrics) metrics->parseMilliseconds = stageTimer.elapsed();
+
         Body loadedBody;
         const auto legacyFeatures = root.value("features").toArray();
+        const auto bodyFeatures = root.value("body").toArray();
+        const int totalFeatures = legacyFeatures.size() + bodyFeatures.size();
+        if (metrics) metrics->featureCount = totalFeatures;
+        if (progress) progress(0, totalFeatures);
+        stageTimer.restart();
         const std::unordered_map<std::string, std::function<ParametricFeature::Ptr(const QJsonObject&, const std::string&)>> legacyFactories{
             {"Box", [](const QJsonObject& o, const std::string& id) {
                 return std::make_shared<BoxParametricFeature>(id, number(o,"width"), number(o,"depth"), number(o,"height"));
@@ -508,17 +524,34 @@ bool ProjectFile::load(const QString& path, Document& document,
             require(factory != legacyFactories.end(), "Unsupported document feature type");
             loadedBody.addFeature(factory->second(o, "legacy-" + QString::fromStdString(type).toLower().toStdString()
                 + "-" + std::to_string(index)));
+            if (progress) progress(index + 1, totalFeatures);
         }
-        for (const auto& value : root.value("body").toArray()) {
+        for (int index = 0; index < bodyFeatures.size(); ++index) {
+            const auto& value = bodyFeatures.at(index);
             require(value.isObject(), "Invalid body feature entry");
             loadedBody.addFeature(decode(value.toObject(), loadedBody));
+            if (progress) progress(legacyFeatures.size() + index + 1, totalFeatures);
         }
-        if (!loadedBody.recompute()) throw std::runtime_error(loadedBody.lastError());
+        if (metrics) metrics->deserializeMilliseconds = stageTimer.elapsed();
+        stageTimer.restart();
+        if (recompute && !loadedBody.recompute()) throw std::runtime_error(loadedBody.lastError());
+        if (metrics && recompute) {
+            metrics->recomputeMilliseconds = stageTimer.elapsed();
+            metrics->totalMilliseconds = totalTimer.elapsed();
+            qInfo().noquote() << QString("Project load: parse: %1 ms, deserialize: %2 ms, "
+                "recompute: %3 ms, total: %4 ms, features: %5")
+                .arg(metrics->parseMilliseconds)
+                .arg(metrics->deserializeMilliseconds)
+                .arg(metrics->recomputeMilliseconds)
+                .arg(metrics->totalMilliseconds)
+                .arg(metrics->featureCount);
+        }
         Document loaded;
         document = std::move(loaded);
         body = std::move(loadedBody);
         return true;
     } catch (const Standard_Failure& e) { error = QString::fromUtf8(e.GetMessageString()); }
       catch (const std::exception& e) { error = QString::fromUtf8(e.what()); }
+    if (metrics) metrics->totalMilliseconds = totalTimer.elapsed();
     return false;
 }

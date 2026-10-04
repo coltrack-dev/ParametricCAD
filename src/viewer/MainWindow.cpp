@@ -2,6 +2,7 @@
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
 #include "viewer/ModelPresenter.h"
+#include "model/FeatureVisibility.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
 #include "operations/SketchConstraintSolver.h"
@@ -15,15 +16,21 @@
 #include <QInputDialog>
 #include <QStandardPaths>
 #include <QDockWidget>
+#include <QElapsedTimer>
+#include <QProgressDialog>
+#include <QTimer>
+#include <QDebug>
 #include <QMenu>
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QToolBar>
+#include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 
 namespace
 {
 constexpr int ModelPanelWidth = 320;
+constexpr qint64 ProjectLoadTimeBudgetMs = 30;
 
 std::string pointRoleText(const cad::parametric::SketchPointRole role)
 {
@@ -148,6 +155,12 @@ MainWindow::MainWindow(QWidget* parent)
         featureEditorPanel_->scheduleRefresh();
     });
     connect(&modeling_.undoStack(), &QUndoStack::cleanChanged, this, [this](bool) { updateTitle(); });
+    connect(&projectLoadProgressTimer_, &QTimer::timeout,
+        this, &MainWindow::updateProjectLoadProgress);
+    connect(&projectLoadHeartbeatTimer_, &QTimer::timeout,
+        this, &MainWindow::sampleProjectLoadEventLoop);
+    connect(&projectLoadWatcher_, &QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>>::finished,
+        this, &MainWindow::finishProjectLoad);
     statusBar()->showMessage("Ready");
 }
 
@@ -1261,6 +1274,7 @@ bool MainWindow::saveDocumentAs()
 
 void MainWindow::newDocument()
 {
+    if (projectLoading_) return;
     if (!confirmReplacement()) return;
     project_.newProject();
     presenter_->clear();
@@ -1272,24 +1286,247 @@ void MainWindow::newDocument()
 
 void MainWindow::openDocument()
 {
+    if (projectLoading_) return;
     const auto path = QFileDialog::getOpenFileName(this, "Open project", currentFile_, "ParametricCAD (*.pcad)");
     if (path.isEmpty()) return;
     if (!confirmReplacement()) return;
-    QString error;
-    if (!project_.open(path, error)) {
-        QMessageBox::critical(this, "Open failed", path + "\n" + error);
+    startProjectLoad(path);
+}
+
+void MainWindow::startProjectLoad(const QString& path)
+{
+    projectLoading_ = true;
+    pendingProjectPath_ = path;
+    projectLoadLoaded_ = std::make_shared<std::atomic<int>>(0);
+    projectLoadTotal_ = std::make_shared<std::atomic<int>>(0);
+
+    projectLoadDialog_ = new QProgressDialog("Loading project...", nullptr, 0, 0, this);
+    projectLoadDialog_->setWindowTitle("Open project");
+    projectLoadDialog_->setWindowModality(Qt::NonModal);
+    projectLoadDialog_->setAutoClose(false);
+    projectLoadDialog_->setAutoReset(false);
+    projectLoadDialog_->setMinimumDuration(0);
+    projectLoadDialog_->show();
+    projectLoadProgressTimer_.start(100);
+    projectLoadEventLoopClock_.start();
+    projectLoadTotalTimer_.start();
+    projectLoadMaxGuiStallMilliseconds_ = 0;
+    projectLoadYieldCount_ = 0;
+    projectLoadHeartbeatTimer_.start(10);
+    statusBar()->showMessage("Loading project...");
+
+    const auto loaded = projectLoadLoaded_;
+    const auto total = projectLoadTotal_;
+    projectLoadWatcher_.setFuture(QtConcurrent::run(
+        [path, loaded, total]() {
+            auto result = std::make_shared<cad::application::ProjectLoadResult>(
+                cad::application::ProjectController::loadProject(
+                path,
+                [loaded, total](const int current, const int count) {
+                    total->store(count, std::memory_order_relaxed);
+                    loaded->store(current, std::memory_order_relaxed);
+                },
+                false));
+            return result;
+        }));
+}
+
+void MainWindow::updateProjectLoadProgress()
+{
+    if (!projectLoading_ || !projectLoadDialog_) return;
+    const int total = projectLoadTotal_->load(std::memory_order_relaxed);
+    const int loaded = projectLoadLoaded_->load(std::memory_order_relaxed);
+    if (total > 0) {
+        projectLoadDialog_->setRange(0, total);
+        projectLoadDialog_->setValue(loaded);
+        projectLoadDialog_->setLabelText(
+            QString("Loading project... %1 / %2").arg(loaded).arg(total));
+    }
+}
+
+void MainWindow::finishProjectLoad()
+{
+    projectLoadProgressTimer_.stop();
+    updateProjectLoadProgress();
+
+    projectLoadResult_ = projectLoadWatcher_.result();
+    if (!projectLoadResult_->success()) {
+        abortProjectLoad(projectLoadResult_->error);
         return;
     }
-    currentFile_ = path;
+
+    projectLoadResult_->body.beginIncrementalRecompute();
+    projectLoadRecomputeIndex_ = 0;
+    projectLoadRecomputeTimer_.start();
+    QTimer::singleShot(0, this, &MainWindow::processProjectLoadRecomputeChunk);
+}
+
+void MainWindow::processProjectLoadRecomputeChunk()
+{
+    if (!projectLoadResult_) return;
+    const auto& body = projectLoadResult_->body;
+    const auto startIndex = projectLoadRecomputeIndex_;
+    QElapsedTimer chunkTimer;
+    chunkTimer.start();
+    while (projectLoadRecomputeIndex_ < body.features().size()
+        && (projectLoadRecomputeIndex_ == startIndex
+            || chunkTimer.elapsed() < ProjectLoadTimeBudgetMs)) {
+        if (!projectLoadResult_->body.recomputeFeature(projectLoadRecomputeIndex_)) {
+            abortProjectLoad(QString::fromStdString(projectLoadResult_->body.lastError()));
+            return;
+        }
+        ++projectLoadRecomputeIndex_;
+    }
+    const auto chunkFeatures = projectLoadRecomputeIndex_ - startIndex;
+    qInfo().noquote() << QString("Project load chunk: features: %1, recompute: %2 ms, "
+        "total: %3 ms")
+        .arg(chunkFeatures).arg(chunkTimer.elapsed()).arg(chunkTimer.elapsed());
+    projectLoadLoaded_->store(static_cast<int>(projectLoadRecomputeIndex_), std::memory_order_relaxed);
+    ++projectLoadYieldCount_;
+
+    if (projectLoadRecomputeIndex_ < body.features().size()) {
+        QTimer::singleShot(0, this, &MainWindow::processProjectLoadRecomputeChunk);
+        return;
+    }
+    if (!projectLoadResult_->body.finishIncrementalRecompute()) {
+        abortProjectLoad(QString::fromStdString(projectLoadResult_->body.lastError()));
+        return;
+    }
+
+    projectLoadResult_->metrics.recomputeMilliseconds = projectLoadRecomputeTimer_.elapsed();
+    projectLoadMetrics_ = projectLoadResult_->metrics;
+    QElapsedTimer cleanupTimer;
+    cleanupTimer.start();
+    modeling_.replaceProject(std::move(projectLoadResult_->document),
+        std::move(projectLoadResult_->body));
+    currentFile_ = pendingProjectPath_;
     presenter_->clear();
     applySelection({});
-    refreshModelView(true);
+    projectLoadMetrics_.cleanupMilliseconds = cleanupTimer.elapsed();
+    projectLoadPresentationIndex_ = 0;
+    projectLoadPresentationTimer_.start();
+    QTimer::singleShot(0, this, &MainWindow::processProjectLoadPresentationChunk);
+}
+
+void MainWindow::processProjectLoadPresentationChunk()
+{
+    auto& body = modeling_.body();
+    const auto startIndex = projectLoadPresentationIndex_;
+    QElapsedTimer chunkTimer;
+    chunkTimer.start();
+    viewer_->beginBulkUpdate();
+    while (projectLoadPresentationIndex_ < body.features().size()
+        && (projectLoadPresentationIndex_ == startIndex
+            || chunkTimer.elapsed() < ProjectLoadTimeBudgetMs)) {
+        const auto& feature = body.features()[projectLoadPresentationIndex_];
+        if (feature->state() == cad::parametric::FeatureState::UpToDate
+            && !feature->shape().IsNull()) {
+            viewer_->updateFeature(feature->shape(),
+                QString::fromStdString(feature->id()));
+        }
+        ++projectLoadPresentationIndex_;
+    }
+    viewer_->endBulkUpdate();
+    const auto presentationTime = chunkTimer.elapsed();
+    qInfo().noquote() << QString("Project load chunk: features: %1, presentation: %2 ms, "
+        "AIS update: %3 ms, selection activation: %4 ms, total: %5 ms")
+        .arg(projectLoadPresentationIndex_ - startIndex)
+        .arg(presentationTime)
+        .arg(viewer_->lastViewerUpdateMilliseconds())
+        .arg(viewer_->lastSelectionActivationMilliseconds())
+        .arg(presentationTime);
+    ++projectLoadYieldCount_;
+    projectLoadLoaded_->store(static_cast<int>(projectLoadPresentationIndex_), std::memory_order_relaxed);
+
+    if (projectLoadPresentationIndex_ < body.features().size()) {
+        QTimer::singleShot(0, this, &MainWindow::processProjectLoadPresentationChunk);
+        return;
+    }
+
+    QStringList presentedIds;
+    for (const auto& feature : body.features()) {
+        if (feature->state() == cad::parametric::FeatureState::UpToDate
+            && !feature->shape().IsNull()) {
+            presentedIds.append(QString::fromStdString(feature->id()));
+        }
+    }
+    const auto hidden = cad::parametric::hiddenFeatureIds(body, {});
+    QStringList hiddenIds;
+    for (const auto& id : hidden) hiddenIds.append(QString::fromStdString(id));
+    QElapsedTimer finalSyncTimer;
+    finalSyncTimer.start();
+    viewer_->beginBulkUpdate();
+    viewer_->retainFeatures(presentedIds);
+    viewer_->setHiddenFeatures(hiddenIds);
+    viewer_->restoreSelection(body, {}, {});
+    viewer_->endBulkUpdate();
+    const auto finalSync = finalSyncTimer.elapsed();
+    QElapsedTimer fitTimer;
+    fitTimer.start();
+    viewer_->fitAll();
+    const auto fitTime = fitTimer.elapsed();
+    projectLoadResult_.reset();
     updateTitle();
-    statusBar()->showMessage("Opened: " + path, 3000);
+    qInfo().noquote() << QString(
+        "Project load: parse: %1 ms, deserialize: %2 ms, recompute: %3 ms, "
+        "cleanup/replacement: %4 ms, presentation: %5 ms, final synchronization: %6 ms, "
+        "selection activation: %7 ms, FitAll: %8 ms, max GUI stall: %9 ms, "
+        "yields: %10, total: %11 ms, features: %12")
+        .arg(projectLoadMetrics_.parseMilliseconds)
+        .arg(projectLoadMetrics_.deserializeMilliseconds)
+        .arg(projectLoadMetrics_.recomputeMilliseconds)
+        .arg(projectLoadMetrics_.cleanupMilliseconds)
+        .arg(projectLoadPresentationTimer_.elapsed())
+        .arg(finalSync).arg(viewer_->lastSelectionActivationMilliseconds())
+        .arg(fitTime).arg(projectLoadMaxGuiStallMilliseconds_)
+        .arg(projectLoadYieldCount_)
+        .arg(projectLoadTotalTimer_.elapsed()).arg(body.features().size());
+    statusBar()->showMessage("Opened: " + currentFile_, 3000);
+
+    if (projectLoadDialog_) {
+        projectLoadDialog_->close();
+        projectLoadDialog_->deleteLater();
+        projectLoadDialog_ = nullptr;
+    }
+    projectLoadLoaded_.reset();
+    projectLoadTotal_.reset();
+    pendingProjectPath_.clear();
+    projectLoadHeartbeatTimer_.stop();
+    projectLoading_ = false;
+}
+
+void MainWindow::sampleProjectLoadEventLoop()
+{
+    if (!projectLoading_) return;
+    const auto interval = projectLoadEventLoopClock_.restart();
+    projectLoadMaxGuiStallMilliseconds_ = std::max(
+        projectLoadMaxGuiStallMilliseconds_, static_cast<std::int64_t>(interval));
+}
+
+void MainWindow::abortProjectLoad(const QString& error)
+{
+    QMessageBox::critical(this, "Open failed", pendingProjectPath_ + "\n" + error);
+    projectLoadProgressTimer_.stop();
+    projectLoadHeartbeatTimer_.stop();
+    if (projectLoadDialog_) {
+        projectLoadDialog_->close();
+        projectLoadDialog_->deleteLater();
+        projectLoadDialog_ = nullptr;
+    }
+    projectLoadResult_.reset();
+    projectLoadLoaded_.reset();
+    projectLoadTotal_.reset();
+    pendingProjectPath_.clear();
+    projectLoading_ = false;
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    if (projectLoading_) {
+        statusBar()->showMessage("Please wait until project loading finishes.", 3000);
+        event->ignore();
+        return;
+    }
     if (saveDocument()) event->accept();
     else event->ignore();
 }

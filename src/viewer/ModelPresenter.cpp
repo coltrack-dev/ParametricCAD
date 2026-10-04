@@ -16,6 +16,7 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
     PresentationResult result;
     result.rebuilt = body_.recompute();
     if (!result.rebuilt) result.error = body_.lastError();
+    viewer_.beginBulkUpdate();
     for (const auto& feature : body_.features()) {
         if (feature->state() != cad::parametric::FeatureState::UpToDate
             || feature->shape().IsNull()) continue;
@@ -33,6 +34,7 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
     }
     viewer_.setHiddenFeatures(hidden);
     viewer_.restoreSelection(body_, selectedTopology, selectedObjects);
+    viewer_.endBulkUpdate();
     return result;
 }
 

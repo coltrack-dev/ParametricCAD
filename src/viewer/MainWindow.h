@@ -1,9 +1,14 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QFutureWatcher>
+#include <QElapsedTimer>
+#include <QProgressDialog>
+#include <QTimer>
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <gp_Pnt2d.hxx>
@@ -24,6 +29,13 @@ private:
     void closeEvent(QCloseEvent* event) override;
     void newDocument();
     void openDocument();
+    void startProjectLoad(const QString& path);
+    void updateProjectLoadProgress();
+    void finishProjectLoad();
+    void processProjectLoadRecomputeChunk();
+    void processProjectLoadPresentationChunk();
+    void sampleProjectLoadEventLoop();
+    void abortProjectLoad(const QString& error);
     bool saveDocument();
     bool confirmReplacement();
     bool saveDocumentAs();
@@ -135,4 +147,22 @@ private:
     CadViewer* viewer_{nullptr};
     FeatureEditorPanel* featureEditorPanel_{nullptr};
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;
+    QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>> projectLoadWatcher_;
+    QTimer projectLoadProgressTimer_;
+    QTimer projectLoadHeartbeatTimer_;
+    QProgressDialog* projectLoadDialog_{nullptr};
+    std::shared_ptr<std::atomic<int>> projectLoadLoaded_;
+    std::shared_ptr<std::atomic<int>> projectLoadTotal_;
+    QString pendingProjectPath_;
+    bool projectLoading_{false};
+    std::shared_ptr<cad::application::ProjectLoadResult> projectLoadResult_;
+    ProjectLoadMetrics projectLoadMetrics_;
+    std::size_t projectLoadRecomputeIndex_{0};
+    std::size_t projectLoadPresentationIndex_{0};
+    QElapsedTimer projectLoadRecomputeTimer_;
+    QElapsedTimer projectLoadPresentationTimer_;
+    QElapsedTimer projectLoadEventLoopClock_;
+    QElapsedTimer projectLoadTotalTimer_;
+    std::int64_t projectLoadMaxGuiStallMilliseconds_{0};
+    std::int64_t projectLoadYieldCount_{0};
 };
