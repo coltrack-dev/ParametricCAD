@@ -469,14 +469,25 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             value.insert("firstLineId", QString::fromStdString(perpendicular->firstLineId));
             value.insert("secondLineId", QString::fromStdString(perpendicular->secondLineId));
             value.insert("anchorStart", perpendicular->anchorStart);
-        } else {
-            const auto& angleBetween = std::get<AngleBetweenLinesConstraint>(constraint);
+        } else if (const auto* angleBetween = std::get_if<AngleBetweenLinesConstraint>(&constraint)) {
             value.insert("type", "AngleBetweenLines");
-            value.insert("id", QString::fromStdString(angleBetween.id));
-            value.insert("referenceLineId", QString::fromStdString(angleBetween.referenceLineId));
-            value.insert("dependentLineId", QString::fromStdString(angleBetween.dependentLineId));
-            value.insert("angleRadians", angleBetween.angleRadians);
-            value.insert("anchorStart", angleBetween.anchorStart);
+            value.insert("id", QString::fromStdString(angleBetween->id));
+            value.insert("referenceLineId", QString::fromStdString(angleBetween->referenceLineId));
+            value.insert("dependentLineId", QString::fromStdString(angleBetween->dependentLineId));
+            value.insert("angleRadians", angleBetween->angleRadians);
+            value.insert("anchorStart", angleBetween->anchorStart);
+        } else if (const auto* tangent = std::get_if<TangentConstraint>(&constraint)) {
+            value.insert("type", "Tangent");
+            value.insert("id", QString::fromStdString(tangent->id));
+            value.insert("firstEntityId", QString::fromStdString(tangent->firstEntityId));
+            value.insert("secondEntityId", QString::fromStdString(tangent->secondEntityId));
+        } else if (const auto* equal = std::get_if<EqualConstraint>(&constraint)) {
+            value.insert("type", "Equal");
+            value.insert("id", QString::fromStdString(equal->id));
+            value.insert("referenceEntityId", QString::fromStdString(equal->referenceEntityId));
+            value.insert("dependentEntityId", QString::fromStdString(equal->dependentEntityId));
+        } else {
+            throw std::logic_error("Unsupported Sketch constraint variant");
         }
         constraints.append(value);
     }
@@ -556,6 +567,10 @@ bool SketchFeature::hasConstraintsForEntity(const SketchEntityId& entityId) cons
             if (perpendicular->firstLineId == entityId || perpendicular->secondLineId == entityId) return true;
         } else if (const auto* angleBetween = std::get_if<AngleBetweenLinesConstraint>(&constraint)) {
             if (angleBetween->referenceLineId == entityId || angleBetween->dependentLineId == entityId) return true;
+        } else if (const auto* tangent = std::get_if<TangentConstraint>(&constraint)) {
+            if (tangent->firstEntityId == entityId || tangent->secondEntityId == entityId) return true;
+        } else if (const auto* equal = std::get_if<EqualConstraint>(&constraint)) {
+            if (equal->referenceEntityId == entityId || equal->dependentEntityId == entityId) return true;
         }
     }
     return false;

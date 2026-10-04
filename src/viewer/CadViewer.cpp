@@ -737,6 +737,29 @@ void CadViewer::setSketchConstraintMarkers(
                     (lineA->start.Y() + lineA->end.Y() + lineB->start.Y() + lineB->end.Y()) * 0.25); valid = true;
             }
             text = "A " + std::to_string(item->angleRadians * 180.0 / 3.14159265358979323846);
+        } else if (const auto* item = std::get_if<cad::parametric::TangentConstraint>(&constraint)) {
+            const auto* first = find(item->firstEntityId); const auto* second = find(item->secondEntityId);
+            const auto pointFor = [](const auto* entity) {
+                return std::visit([](const auto& value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, cad::parametric::SketchLine>)
+                        return gp_Pnt2d((value.start.X() + value.end.X()) * 0.5, (value.start.Y() + value.end.Y()) * 0.5);
+                    else return value.center;
+                }, *entity);
+            };
+            if (first && second) { position = pointFor(first); valid = true; }
+            text = "T";
+        } else if (const auto* item = std::get_if<cad::parametric::EqualConstraint>(&constraint)) {
+            const auto* first = find(item->referenceEntityId); const auto* second = find(item->dependentEntityId);
+            if (first && second) {
+                position = std::visit([](const auto& value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, cad::parametric::SketchLine>)
+                        return gp_Pnt2d((value.start.X() + value.end.X()) * 0.5, (value.start.Y() + value.end.Y()) * 0.5);
+                    else return value.center;
+                }, *first); valid = true;
+            }
+            text = "=";
         }
         if (!valid) continue;
         const auto constraintId = std::visit([](const auto& value) { return value.id; }, constraint);
@@ -788,6 +811,16 @@ void CadViewer::setSketchConstraintHighlight(
                 }
             } else if constexpr (std::is_same_v<T, cad::parametric::AngleBetweenLinesConstraint>) {
                 for (const auto& id : {item.referenceLineId, item.dependentLineId}) {
+                    for (const auto& entity : sketch.entities())
+                        if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
+                }
+            } else if constexpr (std::is_same_v<T, cad::parametric::TangentConstraint>) {
+                for (const auto& id : {item.firstEntityId, item.secondEntityId}) {
+                    for (const auto& entity : sketch.entities())
+                        if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
+                }
+            } else if constexpr (std::is_same_v<T, cad::parametric::EqualConstraint>) {
+                for (const auto& id : {item.referenceEntityId, item.dependentEntityId}) {
                     for (const auto& entity : sketch.entities())
                         if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
                 }

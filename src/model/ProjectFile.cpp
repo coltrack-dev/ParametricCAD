@@ -188,6 +188,12 @@ std::vector<SketchConstraint> sketchConstraints(const QJsonObject& object)
             result.push_back(AngleBetweenLinesConstraint{string(constraint, "referenceLineId"),
                 string(constraint, "dependentLineId"), number(constraint, "angleRadians"),
                 boolean(constraint, "anchorStart"), constraint.value("id").toString().toStdString()});
+        } else if (type == "Tangent") {
+            result.push_back(TangentConstraint{string(constraint, "firstEntityId"),
+                string(constraint, "secondEntityId"), constraint.value("id").toString().toStdString()});
+        } else if (type == "Equal") {
+            result.push_back(EqualConstraint{string(constraint, "referenceEntityId"),
+                string(constraint, "dependentEntityId"), constraint.value("id").toString().toStdString()});
         } else {
             throw std::invalid_argument("Unsupported Sketch constraint type");
         }

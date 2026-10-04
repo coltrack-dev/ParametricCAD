@@ -123,7 +123,8 @@ MainWindow::MainWindow(QWidget* parent)
                 || sketchTool_ == SketchTool::Angle
                 || sketchTool_ == SketchTool::Parallel
                 || sketchTool_ == SketchTool::Perpendicular
-                || sketchTool_ == SketchTool::AngleBetweenLines) selectSketchLineTool();
+                || sketchTool_ == SketchTool::AngleBetweenLines
+                || sketchTool_ == SketchTool::Tangent || sketchTool_ == SketchTool::Equal) selectSketchLineTool();
             constraintFirstPoint_.reset();
         });
     viewer_->setSketchConstraintMarkerClickedHandler(
@@ -230,6 +231,21 @@ void MainWindow::refreshConstraintManager()
     std::vector<SketchConstraintListItem> items;
     const auto solved = cad::operations::SketchConstraintSolver::solve(
         sketch->entities(), sketch->constraints());
+    int dof = 0;
+    for (const auto& entity : sketch->entities()) dof += std::visit([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, cad::parametric::SketchLine>) return 4;
+        if constexpr (std::is_same_v<T, cad::parametric::SketchCircle>) return 3;
+        return 5;
+    }, entity);
+    dof -= static_cast<int>(sketch->constraints().size());
+    dof = std::max(0, dof);
+    const QString sketchStatus = solved.status == cad::operations::SolveStatus::Solved
+        ? (dof == 0 ? QString("Fully constrained") : QString("Under-constrained"))
+        : QString("Conflicting");
+    statusBar()->showMessage(QString("Constraints: %1 | Status: %2 | DOF: %3%4")
+        .arg(sketch->constraintCount()).arg(sketchStatus).arg(dof)
+        .arg(solved.status == cad::operations::SolveStatus::Solved ? QString() : QString(" — %1").arg(QString::fromStdString(solved.error))));
     const QString status = solved.status == cad::operations::SolveStatus::Solved
         ? QString() : QString(" [conflict: %1]").arg(QString::fromStdString(solved.error));
     for (const auto& constraint : sketch->constraints()) {
@@ -280,6 +296,10 @@ void MainWindow::refreshConstraintManager()
                      QString::fromStdString(value->dependentLineId))
                 .arg(value->angleRadians * 180.0 / 3.14159265358979323846, 0, 'f', 2);
             item.editable = true;
+        } else if (const auto* value = std::get_if<cad::parametric::TangentConstraint>(&constraint)) {
+            item.label = QString("Tangent  %1 ↔ %2").arg(QString::fromStdString(value->firstEntityId), QString::fromStdString(value->secondEntityId));
+        } else if (const auto* value = std::get_if<cad::parametric::EqualConstraint>(&constraint)) {
+            item.label = QString("Equal  %1 = %2").arg(QString::fromStdString(value->referenceEntityId), QString::fromStdString(value->dependentEntityId));
         }
         item.label += status;
         items.push_back(std::move(item));
@@ -547,6 +567,12 @@ void MainWindow::createActions()
     sketchAngleBetweenLinesAction_ = modelingMenu->addAction("Angle Between Lines");
     sketchAngleBetweenLinesAction_->setEnabled(false);
     connect(sketchAngleBetweenLinesAction_, &QAction::triggered, this, &MainWindow::selectSketchAngleBetweenLinesTool);
+    sketchTangentAction_ = modelingMenu->addAction("Tangent");
+    sketchTangentAction_->setEnabled(false);
+    connect(sketchTangentAction_, &QAction::triggered, this, &MainWindow::selectSketchTangentTool);
+    sketchEqualAction_ = modelingMenu->addAction("Equal");
+    sketchEqualAction_->setEnabled(false);
+    connect(sketchEqualAction_, &QAction::triggered, this, &MainWindow::selectSketchEqualTool);
     finishSketchAction_ = modelingMenu->addAction("Finish Sketch");
     finishSketchAction_->setEnabled(false);
     connect(finishSketchAction_, &QAction::triggered, this, &MainWindow::finishSketch);
@@ -668,6 +694,8 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchParallelAction_->setEnabled(true);
         sketchPerpendicularAction_->setEnabled(true);
         sketchAngleBetweenLinesAction_->setEnabled(true);
+        sketchTangentAction_->setEnabled(true);
+        sketchEqualAction_->setEnabled(true);
         finishSketchAction_->setEnabled(true);
         refreshConstraintManager();
         updateActionState();
@@ -703,6 +731,8 @@ void MainWindow::finishSketch()
     sketchParallelAction_->setEnabled(false);
     sketchPerpendicularAction_->setEnabled(false);
     sketchAngleBetweenLinesAction_->setEnabled(false);
+    sketchTangentAction_->setEnabled(false);
+    sketchEqualAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
     statusBar()->showMessage("Ready");
@@ -843,10 +873,24 @@ void MainWindow::selectSketchPerpendicularTool()
 
 void MainWindow::selectSketchAngleBetweenLinesTool()
 {
-    sketchTool_ = SketchTool::AngleBetweenLines;
+    sketchTool_ = SketchTool::Tangent;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
     statusBar()->showMessage("Angle Between Lines: click reference and dependent Lines");
+}
+
+void MainWindow::selectSketchTangentTool()
+{
+    sketchTool_ = SketchTool::Equal;
+    constraintFirstPoint_.reset();
+    statusBar()->showMessage("Tangent: click Line, then Circle or Arc");
+}
+
+void MainWindow::selectSketchEqualTool()
+{
+    sketchTool_ = SketchTool::AngleBetweenLines;
+    constraintFirstPoint_.reset();
+    statusBar()->showMessage("Equal: click two compatible entities");
 }
 
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
@@ -954,6 +998,28 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
         const auto result = modeling_.addSketchAngleBetweenLines(activeSketchId_,
             constraintFirstPoint_->entityId, *lineId,
             degrees * 3.14159265358979323846 / 180.0);
+        constraintFirstPoint_.reset();
+        if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        else refreshModelView(false);
+        return;
+    }
+    if (sketchTool_ == SketchTool::Tangent || sketchTool_ == SketchTool::Equal) {
+        std::optional<std::string> target;
+        if (sketchTool_ == SketchTool::Tangent && !constraintFirstPoint_)
+            target = cad::operations::SketchConstraintSolver::lineAt(sketch->entities(), point, hitTolerance);
+        else if (sketchTool_ == SketchTool::Tangent)
+            target = cad::operations::SketchConstraintSolver::circleOrArcAt(sketch->entities(), point, hitTolerance);
+        else
+            target = cad::operations::SketchConstraintSolver::lineAt(sketch->entities(), point, hitTolerance);
+        if (!target) { statusBar()->showMessage("Select a compatible sketch entity", 2000); return; }
+        if (!constraintFirstPoint_) {
+            constraintFirstPoint_ = cad::parametric::SketchPointRef{*target, cad::parametric::SketchPointRole::LineStart};
+            statusBar()->showMessage("Select second compatible entity");
+            return;
+        }
+        const auto result = sketchTool_ == SketchTool::Tangent
+            ? modeling_.addSketchTangent(activeSketchId_, constraintFirstPoint_->entityId, *target)
+            : modeling_.addSketchEqual(activeSketchId_, constraintFirstPoint_->entityId, *target);
         constraintFirstPoint_.reset();
         if (!result.success) statusBar()->showMessage(QString::fromStdString(result.error), 3000);
         else refreshModelView(false);

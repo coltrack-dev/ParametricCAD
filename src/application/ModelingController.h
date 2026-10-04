@@ -88,6 +88,10 @@ public:
                                      const std::string& constraintId, double radians);
     ModelingResult updateSketchAngleBetweenLines(const std::string& sketchId,
                                                  const std::string& constraintId, double radians);
+    ModelingResult addSketchTangent(const std::string& sketchId,
+                                    const std::string& firstEntityId, const std::string& secondEntityId);
+    ModelingResult addSketchEqual(const std::string& sketchId,
+                                  const std::string& referenceEntityId, const std::string& dependentEntityId);
     ModelingResult removeSketchConstraint(const std::string& sketchId,
                                           const std::string& constraintId);
     ModelingResult createPrimitive(PrimitiveKind kind) override;

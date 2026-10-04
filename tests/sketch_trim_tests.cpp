@@ -481,6 +481,38 @@ void angleBetweenLinesConstraints()
         && std::holds_alternative<AngleBetweenLinesConstraint>(loaded->constraints().front()));
 }
 
+void tangentAndEqualConstraints()
+{
+    cad::application::ModelingController controller;
+    const auto sketchResult = controller.createSketch();
+    assert(sketchResult.success);
+    assert(controller.addSketchLine(sketchResult.id, {0, 6}, {10, 6}).success);
+    assert(controller.addSketchCircle(sketchResult.id, {0, 0}, 5.0).success);
+    auto sketch = std::dynamic_pointer_cast<SketchFeature>(controller.body().findFeature(sketchResult.id));
+    const auto lineId = std::get<SketchLine>(sketch->entities()[0]).id;
+    const auto circleId = std::get<SketchCircle>(sketch->entities()[1]).id;
+    assert(controller.addSketchTangent(sketchResult.id, lineId, circleId).success);
+    const auto& tangentLine = std::get<SketchLine>(sketch->entities()[0]);
+    const gp_Vec2d tangentDirection(tangentLine.start, tangentLine.end);
+    const gp_Vec2d toCenter(tangentLine.start, {0, 0});
+    assert(std::abs(std::abs(tangentDirection.Crossed(toCenter)) / tangentDirection.Magnitude() - 5.0) < 1.0e-6);
+    assert(controller.addSketchEqual(sketchResult.id, circleId, circleId).success == false);
+
+    cad::application::ModelingController equal;
+    const auto equalSketch = equal.createSketch();
+    assert(equalSketch.success);
+    assert(equal.addSketchCircle(equalSketch.id, {0, 0}, 5.0).success);
+    assert(equal.addSketchCircle(equalSketch.id, {20, 0}, 10.0).success);
+    auto equalFeature = std::dynamic_pointer_cast<SketchFeature>(equal.body().findFeature(equalSketch.id));
+    const auto first = std::get<SketchCircle>(equalFeature->entities()[0]).id;
+    const auto second = std::get<SketchCircle>(equalFeature->entities()[1]).id;
+    assert(equal.addSketchEqual(equalSketch.id, first, second).success);
+    assert(std::abs(std::get<SketchCircle>(equalFeature->entities()[1]).radius - 5.0) < 1.0e-7);
+    equal.undo();
+    equal.redo();
+    assert(std::abs(std::get<SketchCircle>(equalFeature->entities()[1]).radius - 5.0) < 1.0e-7);
+}
+
 void arcTrim()
 {
     SketchFeature sketch("s", SketchSupportType::XY, 100.0, 100.0, {
@@ -621,6 +653,7 @@ int main()
     positionalAndAngleConstraints();
     parallelAndPerpendicularConstraints();
     angleBetweenLinesConstraints();
+    tangentAndEqualConstraints();
     arcTrim();
     circleTrim();
     intersectionMatrix();

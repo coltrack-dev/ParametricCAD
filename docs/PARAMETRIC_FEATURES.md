@@ -1050,3 +1050,21 @@ Extrude001
 ```
 
 with all parameters and dependencies intact.
+
+## Sketch constraints (MVP)
+
+Sketch constraints are stored by stable entity and constraint IDs and are solved by
+the single `SketchConstraintSolver` in local 2D coordinates. The supported relations
+include coincident, horizontal/vertical, dimensional and angular relations,
+parallel/perpendicular, `AngleBetweenLines`, `Tangent` (Line to Circle/Arc), and
+`Equal` (Line lengths or Circle/Arc radii).
+
+Tangent chooses the analytically nearest tangent orientation and rejects an Arc when
+the tangent point is outside its sweep. Equal keeps the reference entity unchanged
+and adjusts only the dependent length/radius. These relations are undoable and are
+serialized as ordinary Sketch constraints; derived tangent points and marker layout
+are not serialized.
+
+Constraint status shown while editing is an approximate DOF estimate: `Under-constrained`,
+`Fully constrained`, or `Conflicting`. It is intentionally not an exact symbolic rank
+analysis; unsupported pairs and nonlinear solver behavior remain controlled failures.

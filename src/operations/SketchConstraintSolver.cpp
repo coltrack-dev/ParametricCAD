@@ -160,6 +160,35 @@ bool applyAngleBetweenLines(cad::parametric::SketchLine& dependent,
     return true;
 }
 
+bool arcContainsAngle(const cad::parametric::SketchArc& arc, const double angle)
+{
+    double delta = arc.clockwise ? std::remainder(arc.startAngle - angle, twoPi)
+                                 : std::remainder(angle - arc.startAngle, twoPi);
+    if (delta < 0.0) delta += twoPi;
+    return delta <= std::abs(arc.signedSweep()) + tolerance;
+}
+
+bool applyTangent(cad::parametric::SketchLine& line, const gp_Pnt2d& center,
+                  const double radius, const cad::parametric::SketchArc* arc,
+                  bool& changed)
+{
+    const double length = line.start.Distance(line.end);
+    const double distance = line.start.Distance(center);
+    if (length <= tolerance || distance <= radius + tolerance) return false;
+    const double base = std::atan2(center.Y() - line.start.Y(), center.X() - line.start.X());
+    const double offset = std::asin(radius / distance);
+    const double current = std::atan2(line.end.Y() - line.start.Y(), line.end.X() - line.start.X());
+    const double first = base + offset;
+    const double second = base - offset;
+    const double target = std::abs(normalizedAngle(first - current)) <= std::abs(normalizedAngle(second - current)) ? first : second;
+    const gp_Pnt2d tangentPoint(line.start.X() + std::cos(target) * distance * std::cos(offset),
+        line.start.Y() + std::sin(target) * distance * std::cos(offset));
+    if (arc && !arcContainsAngle(*arc, std::atan2(tangentPoint.Y() - arc->center.Y(), tangentPoint.X() - arc->center.X()))) return false;
+    const gp_Pnt2d solved(line.start.X() + length * std::cos(target), line.start.Y() + length * std::sin(target));
+    if (!samePoint(line.end, solved)) { line.end = solved; changed = true; }
+    return true;
+}
+
 } // namespace
 
 SketchSolveResult SketchConstraintSolver::solve(
@@ -168,6 +197,18 @@ SketchSolveResult SketchConstraintSolver::solve(
 {
     SketchSolveResult result;
     result.entities = source;
+    for (const auto& constraint : constraints) {
+        if (const auto* equal = std::get_if<cad::parametric::EqualConstraint>(&constraint)) {
+            const auto* first = findEntity(result.entities, equal->referenceEntityId);
+            const auto* second = findEntity(result.entities, equal->dependentEntityId);
+            if (!first || !second) { result.status = SolveStatus::Failed; result.error = "Equal target entity is missing"; return result; }
+            const bool firstLine = std::holds_alternative<cad::parametric::SketchLine>(*first);
+            const bool secondLine = std::holds_alternative<cad::parametric::SketchLine>(*second);
+            const bool firstRound = std::holds_alternative<cad::parametric::SketchCircle>(*first) || std::holds_alternative<cad::parametric::SketchArc>(*first);
+            const bool secondRound = std::holds_alternative<cad::parametric::SketchCircle>(*second) || std::holds_alternative<cad::parametric::SketchArc>(*second);
+            if (!((firstLine && secondLine) || (firstRound && secondRound))) { result.status = SolveStatus::Failed; result.error = "Equal constraint requires compatible entity types"; return result; }
+        }
+    }
     for (const auto& constraint : constraints) {
         if (const auto* coincident = std::get_if<cad::parametric::CoincidentConstraint>(&constraint)) {
             const auto* a = findEntity(result.entities, coincident->a.entityId);
@@ -483,6 +524,44 @@ SketchSolveResult SketchConstraintSolver::solve(
                     result.status = SolveStatus::Failed;
                     result.error = "Cannot solve AngleBetweenLines for zero-length Line";
                     return result;
+                }
+            } else if (const auto* tangent = std::get_if<cad::parametric::TangentConstraint>(&constraint)) {
+                auto* first = findEntity(result.entities, tangent->firstEntityId);
+                auto* second = findEntity(result.entities, tangent->secondEntityId);
+                auto* line = first ? std::get_if<cad::parametric::SketchLine>(first) : nullptr;
+                const auto* circle = second ? std::get_if<cad::parametric::SketchCircle>(second) : nullptr;
+                const auto* arc = second ? std::get_if<cad::parametric::SketchArc>(second) : nullptr;
+                if (!line || (!circle && !arc)) { result.status = SolveStatus::Failed; result.error = "Tangent currently supports Line to Circle or Arc"; return result; }
+                if (!applyTangent(*line, circle ? circle->center : arc->center,
+                    circle ? circle->radius : arc->radius, arc, changed)) {
+                    result.status = SolveStatus::Failed;
+                    result.error = arc ? "Tangent cannot be satisfied on current Arc" : "Tangent cannot be satisfied";
+                    return result;
+                }
+            } else if (const auto* equal = std::get_if<cad::parametric::EqualConstraint>(&constraint)) {
+                auto* first = findEntity(result.entities, equal->referenceEntityId);
+                auto* second = findEntity(result.entities, equal->dependentEntityId);
+                if (auto* firstLine = first ? std::get_if<cad::parametric::SketchLine>(first) : nullptr) {
+                    auto* secondLine = second ? std::get_if<cad::parametric::SketchLine>(second) : nullptr;
+                    if (!secondLine) { result.status = SolveStatus::Failed; result.error = "Equal constraint requires compatible entity types"; return result; }
+                    gp_Vec2d direction(secondLine->start, secondLine->end);
+                    const double length = firstLine->start.Distance(firstLine->end);
+                    if (direction.SquareMagnitude() <= tolerance * tolerance || length <= tolerance) { result.status = SolveStatus::Failed; result.error = "Equal cannot solve zero-length Line"; return result; }
+                    direction.Normalize();
+                    const gp_Pnt2d solved(secondLine->start.X() + direction.X() * length, secondLine->start.Y() + direction.Y() * length);
+                    if (!samePoint(secondLine->end, solved)) { secondLine->end = solved; changed = true; }
+                } else {
+                    const double radius = std::visit([](const auto& item) {
+                        using T = std::decay_t<decltype(item)>;
+                        if constexpr (std::is_same_v<T, cad::parametric::SketchCircle>
+                            || std::is_same_v<T, cad::parametric::SketchArc>) return item.radius;
+                        return 0.0;
+                    }, *first);
+                    if (auto* circle = second ? std::get_if<cad::parametric::SketchCircle>(second) : nullptr) {
+                        if (std::abs(circle->radius - radius) > tolerance) { circle->radius = radius; changed = true; }
+                    } else if (auto* arc = second ? std::get_if<cad::parametric::SketchArc>(second) : nullptr) {
+                        if (std::abs(arc->radius - radius) > tolerance) { arc->radius = radius; changed = true; }
+                    }
                 }
             } else {
                 const auto& radius = std::get<cad::parametric::RadiusConstraint>(constraint);

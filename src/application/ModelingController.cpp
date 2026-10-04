@@ -217,6 +217,10 @@ ModelingResult ModelingController::extendSketchEntity(const std::string& sketchI
                 return item.firstLineId == targetId || item.secondLineId == targetId;
             else if constexpr (std::is_same_v<T, cad::parametric::AngleBetweenLinesConstraint>)
                 return item.referenceLineId == targetId || item.dependentLineId == targetId;
+            else if constexpr (std::is_same_v<T, cad::parametric::TangentConstraint>)
+                return item.firstEntityId == targetId || item.secondEntityId == targetId;
+            else if constexpr (std::is_same_v<T, cad::parametric::EqualConstraint>)
+                return item.referenceEntityId == targetId || item.dependentEntityId == targetId;
             return false;
         }, constraint);
         if (dimensional)
@@ -471,6 +475,24 @@ ModelingResult ModelingController::addSketchAngleBetweenLines(
     return pushConstraint(body_, undoStack_, sketch,
         cad::parametric::SketchConstraint{cad::parametric::AngleBetweenLinesConstraint{
             referenceLineId, dependentLineId, radians, anchorStart, {}}});
+}
+
+ModelingResult ModelingController::addSketchTangent(
+    const std::string& sketchId, const std::string& firstEntityId, const std::string& secondEntityId)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || firstEntityId == secondEntityId) return {false, {}, "Tangent requires two different entities"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::SketchConstraint{cad::parametric::TangentConstraint{firstEntityId, secondEntityId, {}}});
+}
+
+ModelingResult ModelingController::addSketchEqual(
+    const std::string& sketchId, const std::string& referenceEntityId, const std::string& dependentEntityId)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || referenceEntityId == dependentEntityId) return {false, {}, "Equal requires two different entities"};
+    return pushConstraint(body_, undoStack_, sketch,
+        cad::parametric::SketchConstraint{cad::parametric::EqualConstraint{referenceEntityId, dependentEntityId, {}}});
 }
 
 namespace {
