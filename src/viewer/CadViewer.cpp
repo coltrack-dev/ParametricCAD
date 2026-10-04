@@ -856,22 +856,18 @@ void CadViewer::updateTransformGizmo()
     if (!initialized_ || !transformMode_ || !transformGizmo_ || transformDragging_) {
         return;
     }
-    if (!selectionAdapter_) {
+    if (!selectionState_.primary) {
         transformGizmo_->hide();
         return;
     }
-    const auto selectedObjectHit = selectionAdapter_->validatedSelectedObjectHit();
-    if (!selectedObjectHit) {
+    const auto selectedObject = featureObjects_.find(selectionState_.primary->featureId);
+    if (selectedObject == featureObjects_.end()
+        || selectedObject->second.IsNull()
+        || !context_->IsDisplayed(selectedObject->second)) {
         transformGizmo_->hide();
         return;
     }
-    const auto object = Handle(AIS_Shape)::DownCast(
-        selectedObjectHit->presentation);
-    if (object.IsNull()) {
-        transformGizmo_->hide();
-        return;
-    }
-    transformGizmo_->show(shapeCenter(object->Shape()), view_);
+    transformGizmo_->show(shapeCenter(selectedObject->second->Shape()), view_);
 }
 
 void CadViewer::beginTransform(
@@ -881,14 +877,14 @@ void CadViewer::beginTransform(
 )
 {
     if (!transformGizmo_ || handle == TransformHandle::None) return;
-    if (!selectionAdapter_) return;
-    const auto selectedObjectHit = selectionAdapter_->validatedSelectedObjectHit();
-    if (!selectedObjectHit) return;
+    if (!selectionState_.primary) return;
+    const auto selectedObject = featureObjects_.find(selectionState_.primary->featureId);
+    if (selectedObject == featureObjects_.end()
+        || selectedObject->second.IsNull()
+        || !context_->IsDisplayed(selectedObject->second)) return;
 
-    transformObject_ = Handle(AIS_Shape)::DownCast(
-        selectedObjectHit->presentation);
-    if (transformObject_.IsNull()) return;
-    transformFeatureId_ = selectedObjectHit->item.featureId;
+    transformObject_ = selectedObject->second;
+    transformFeatureId_ = selectionState_.primary->featureId;
     if (transformFeatureId_.isEmpty()) return;
 
     transformHandle_ = handle;
@@ -2626,6 +2622,11 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
 void CadViewer::selectFeatures(const QStringList& featureIds)
 {
     if (!initialized_) return;
+
+    // A tree selection change must not leave an in-progress transform attached
+    // to the previous feature. The next selection is then the sole source for
+    // gizmo attachment and snap source references.
+    if (transformDragging_) cancelTransform();
 
     // Only change AIS selection. Keep presentations, camera and selection mode.
     // This is the tree-to-viewer path; do not echo a selection notification.

@@ -119,6 +119,25 @@ int main()
     assert(snapshot.items[1].kind == cad::application::SelectionKind::Edge);
     assert(snapshot.items[2].kind == cad::application::SelectionKind::Vertex);
 
+    // The primary feature follows the latest selection instead of retaining
+    // the previous gizmo target.
+    const SelectionHit objectA{
+        SelectionItem{"object-a", SelectionKind::Object, std::nullopt},
+        box,
+        presentation
+    };
+    const SelectionHit objectB{
+        SelectionItem{"object-b", SelectionKind::Object, std::nullopt},
+        box,
+        presentation
+    };
+    state.rebuildSelected({objectA});
+    assert(state.primary && state.primary->featureId == QStringLiteral("object-a"));
+    state.rebuildSelected({objectB});
+    assert(state.primary && state.primary->featureId == QStringLiteral("object-b"));
+    state.rebuildSelected({});
+    assert(!state.primary);
+
     SelectionItem invalid;
     assert(!invalid.isValid());
 

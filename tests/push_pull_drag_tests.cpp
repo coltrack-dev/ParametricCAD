@@ -138,6 +138,18 @@ int main()
     const auto released = snapManager.findCandidate(moving, targets, held);
     assert(released && released->target.subshapeId == QStringLiteral("vertex-b"));
 
+    // A transform must capture references from the feature that actually
+    // started it; changing the selected feature must not reuse the old source.
+    auto sourceA = sources.front();
+    sourceA.ownerId = QStringLiteral("object-a");
+    sourceA.screenPoint = QPointF(108.0, 100.0);
+    auto sourceB = sourceA;
+    sourceB.ownerId = QStringLiteral("object-b");
+    const auto snapA = snapManager.findCandidate({sourceA}, targets, std::nullopt);
+    const auto snapB = snapManager.findCandidate({sourceB}, targets, std::nullopt);
+    assert(snapA && snapA->source.ownerId == QStringLiteral("object-a"));
+    assert(snapB && snapB->source.ownerId == QStringLiteral("object-b"));
+
     assert(almostEqual(pointToProjectedSegmentDistance(
         QPointF(10.0, 5.0), QPointF(0.0, 0.0), QPointF(20.0, 0.0)), 5.0));
     assert(almostEqual(pointToProjectedCircleDistance(
