@@ -506,6 +506,70 @@ private slots:
         QVERIFY(manager.presets().empty());
     }
 
+    void savedViewsCaptureRestoreAndRoundTrip()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Document document;
+        Body body;
+        auto box = std::make_shared<BoxParametricFeature>("box", 2, 2, 2);
+        body.addFeature(box);
+        QVERIFY(body.recompute());
+        const auto originalShape = box->shape();
+
+        VisibilityManager manager;
+        manager.setIsolatedFeatures({"box"});
+        cad::application::SpatialVisibilityRule spatial;
+        spatial.enabled = true;
+        spatial.min = gp_Pnt(-1, -1, -1);
+        spatial.max = gp_Pnt(1, 1, 1);
+        manager.setSpatialRule(spatial);
+        cad::application::SavedView view;
+        view.name = "Roof View";
+        view.visibility = manager.captureConfiguration(body);
+        view.isolatedFeatureIds.insert("box");
+        view.spatialRule = spatial;
+        view.sectionActive = true;
+        view.sectionAxis = 1;
+        view.sectionFlipped = true;
+        view.sectionOrigin = gp_Pnt(0, 1, 0);
+        view.cameraValid = true;
+        view.cameraEye = gp_Pnt(4, 5, 6);
+        view.cameraCenter = gp_Pnt(0, 0, 0);
+        view.cameraUp = gp_Dir(0, 0, 1);
+        view.cameraScale = 3.0;
+        const auto id = manager.createSavedView(view);
+        QVERIFY(id);
+        std::string error;
+        QVERIFY(!manager.renameSavedView(*id, "", error));
+        QVERIFY(manager.renameSavedView(*id, "Roof Editing", error));
+        QVERIFY(manager.savedViews().front().sectionAxis == 1);
+
+        box->setUserVisible(false);
+        QVERIFY(manager.applySavedView(manager.savedViews().front(), body, error));
+        QVERIFY(box->userVisible());
+        QVERIFY(manager.isolationActive());
+        QVERIFY(manager.spatialRule().enabled);
+        QVERIFY(box->shape().IsSame(originalShape));
+
+        const auto path = directory.filePath("saved-views.pcad");
+        QString fileError;
+        QVERIFY2(ProjectFile::save(path, document, body, fileError, &manager),
+            qPrintable(fileError));
+        VisibilityManager loaded;
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, fileError,
+            {}, nullptr, true, &loaded), qPrintable(fileError));
+        QCOMPARE(loaded.savedViews().size(), std::size_t{1});
+        QCOMPARE(loaded.savedViews().front().name, std::string("Roof Editing"));
+        QCOMPARE(loaded.savedViews().front().sectionAxis, 1);
+        QCOMPARE(loaded.savedViews().front().cameraScale, 3.0);
+
+        QVERIFY(loaded.deleteSavedView(loaded.savedViews().front().id));
+        QVERIFY(loaded.savedViews().empty());
+    }
+
     void spatialVisibilityUsesWorldBoundsAndComposes()
     {
         Body body;

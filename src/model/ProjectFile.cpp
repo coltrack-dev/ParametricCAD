@@ -192,6 +192,145 @@ QJsonObject encodeVisibilityFilters(const cad::application::VisibilityFilterStat
     return QJsonObject{{"types", types}, {"roles", roles}, {"categories", categories}};
 }
 
+QJsonArray pointArray(const gp_Pnt& point)
+{
+    return {point.X(), point.Y(), point.Z()};
+}
+
+QJsonArray directionArray(const gp_Dir& direction)
+{
+    return {direction.X(), direction.Y(), direction.Z()};
+}
+
+gp_Pnt pointValue(const QJsonObject& object, const char* key)
+{
+    const auto values = object.value(QLatin1String(key)).toArray();
+    require(values.size() == 3, "Invalid point");
+    for (const auto& value : values)
+        require(value.isDouble() && std::isfinite(value.toDouble()), "Invalid point value");
+    return gp_Pnt(values.at(0).toDouble(), values.at(1).toDouble(), values.at(2).toDouble());
+}
+
+gp_Dir directionValue(const QJsonObject& object, const char* key)
+{
+    const auto values = object.value(QLatin1String(key)).toArray();
+    require(values.size() == 3, "Invalid direction");
+    for (const auto& value : values)
+        require(value.isDouble() && std::isfinite(value.toDouble()), "Invalid direction value");
+    return gp_Dir(values.at(0).toDouble(), values.at(1).toDouble(), values.at(2).toDouble());
+}
+
+QJsonObject encodeVisibilityConfiguration(
+    const cad::application::VisibilityConfiguration& configuration)
+{
+    QJsonArray groupModes;
+    for (const auto& [groupId, mode] : configuration.groupModes) {
+        groupModes.append(QJsonObject{{"groupId", QString::fromStdString(groupId)},
+            {"mode", visibilityModeName(mode)}});
+    }
+    QJsonArray overrides;
+    for (const auto& [featureId, visible] : configuration.featureVisibility) {
+        overrides.append(QJsonObject{{"featureId", QString::fromStdString(featureId)},
+            {"visible", visible}});
+    }
+    return QJsonObject{{"groupModes", groupModes},
+        {"filters", encodeVisibilityFilters(configuration.filters)},
+        {"featureOverrides", overrides}};
+}
+
+cad::application::VisibilityConfiguration visibilityConfiguration(
+    const QJsonObject& object)
+{
+    cad::application::VisibilityConfiguration configuration;
+    const auto groupModes = object.value("groupModes");
+    if (!groupModes.isUndefined()) {
+        require(groupModes.isArray(), "Invalid saved view group modes");
+        for (const auto& value : groupModes.toArray()) {
+            require(value.isObject(), "Invalid saved view group mode");
+            const auto item = value.toObject();
+            configuration.groupModes.emplace(string(item, "groupId"), visibilityMode(item));
+        }
+    }
+    const auto filters = object.value("filters");
+    if (!filters.isUndefined()) {
+        require(filters.isObject(), "Invalid saved view filters");
+        configuration.filters = visibilityFiltersObject(filters.toObject());
+    }
+    const auto overrides = object.value("featureOverrides");
+    if (!overrides.isUndefined()) {
+        require(overrides.isArray(), "Invalid saved view feature overrides");
+        for (const auto& value : overrides.toArray()) {
+            require(value.isObject(), "Invalid saved view feature override");
+            const auto item = value.toObject();
+            configuration.featureVisibility.emplace(
+                string(item, "featureId"), boolean(item, "visible"));
+        }
+    }
+    return configuration;
+}
+
+std::vector<cad::application::SavedView> savedViews(const QJsonObject& root)
+{
+    std::vector<cad::application::SavedView> result;
+    const auto views = root.value("views");
+    if (views.isUndefined()) return result;
+    require(views.isArray(), "Invalid saved views");
+    for (const auto& value : views.toArray()) {
+        require(value.isObject(), "Invalid saved view");
+        const auto object = value.toObject();
+        cad::application::SavedView view{
+            string(object, "id"), string(object, "name"),
+            visibilityConfiguration(object), {}, {}, {}, false, 2, false, {}, false, {}, {}, {}, 1.0};
+        const auto isolated = object.value("isolatedFeatureIds");
+        if (!isolated.isUndefined()) {
+            require(isolated.isArray(), "Invalid saved view isolation");
+            for (const auto& id : isolated.toArray()) {
+                require(id.isString(), "Invalid saved view isolated feature");
+                view.isolatedFeatureIds.insert(id.toString().toStdString());
+            }
+        }
+        const auto ghosted = object.value("ghostedSelectionIds");
+        if (!ghosted.isUndefined()) {
+            require(ghosted.isArray(), "Invalid saved view ghosting");
+            for (const auto& id : ghosted.toArray()) {
+                require(id.isString(), "Invalid saved view ghosted feature");
+                view.ghostedSelectionIds.insert(id.toString().toStdString());
+            }
+        }
+        const auto spatial = object.value("spatial");
+        if (!spatial.isUndefined()) {
+            require(spatial.isObject(), "Invalid saved view spatial state");
+            const auto item = spatial.toObject();
+            view.spatialRule.enabled = boolean(item, "enabled");
+            view.spatialRule.min = pointValue(item, "min");
+            view.spatialRule.max = pointValue(item, "max");
+            view.spatialRule.outsideMode = visibilityMode(item);
+        }
+        const auto section = object.value("section");
+        if (!section.isUndefined()) {
+            require(section.isObject(), "Invalid saved view section state");
+            const auto item = section.toObject();
+            view.sectionActive = boolean(item, "active");
+            view.sectionAxis = item.value("axis").toInt(2);
+            view.sectionFlipped = item.value("flipped").toBool(false);
+            view.sectionOrigin = pointValue(item, "origin");
+        }
+        const auto camera = object.value("camera");
+        if (!camera.isUndefined()) {
+            require(camera.isObject(), "Invalid saved view camera state");
+            const auto item = camera.toObject();
+            view.cameraValid = boolean(item, "valid");
+            view.cameraEye = pointValue(item, "eye");
+            view.cameraCenter = pointValue(item, "center");
+            view.cameraUp = directionValue(item, "up");
+            view.cameraScale = number(item, "scale");
+            require(view.cameraScale > 0.0, "Invalid saved view camera scale");
+        }
+        result.push_back(std::move(view));
+    }
+    return result;
+}
+
 std::vector<cad::application::VisibilityPreset> visibilityPresets(const QJsonObject& root)
 {
     std::vector<cad::application::VisibilityPreset> result;
@@ -694,6 +833,38 @@ bool ProjectFile::save(const QString& path, const Document& document,
             }
             if (!presets.isEmpty()) visibility.insert("presets", presets);
             root.insert("visibility", visibility);
+            QJsonArray views;
+            for (const auto& view : visibilityManager->savedViews()) {
+                QJsonArray isolated;
+                for (const auto& id : view.isolatedFeatureIds)
+                    isolated.append(QString::fromStdString(id));
+                QJsonArray ghosted;
+                for (const auto& id : view.ghostedSelectionIds)
+                    ghosted.append(QString::fromStdString(id));
+                QJsonObject object = encodeVisibilityConfiguration(view.visibility);
+                object.insert("id", QString::fromStdString(view.id));
+                object.insert("name", QString::fromStdString(view.name));
+                object.insert("isolatedFeatureIds", isolated);
+                object.insert("ghostedSelectionIds", ghosted);
+                object.insert("spatial", QJsonObject{
+                    {"enabled", view.spatialRule.enabled},
+                    {"min", pointArray(view.spatialRule.min)},
+                    {"max", pointArray(view.spatialRule.max)},
+                    {"mode", visibilityModeName(view.spatialRule.outsideMode)}});
+                object.insert("section", QJsonObject{
+                    {"active", view.sectionActive},
+                    {"axis", view.sectionAxis},
+                    {"flipped", view.sectionFlipped},
+                    {"origin", pointArray(view.sectionOrigin)}});
+                object.insert("camera", QJsonObject{
+                    {"valid", view.cameraValid},
+                    {"eye", pointArray(view.cameraEye)},
+                    {"center", pointArray(view.cameraCenter)},
+                    {"up", directionArray(view.cameraUp)},
+                    {"scale", view.cameraScale}});
+                views.append(object);
+            }
+            if (!views.isEmpty()) root.insert("views", views);
         }
         const QByteArray data = QJsonDocument(root).toJson();
         QSaveFile file(path);
@@ -736,6 +907,8 @@ bool ProjectFile::load(const QString& path, Document& document,
         require(loadedVisibility.replaceFilters(visibilityFilters(root), visibilityError),
                 visibilityError.c_str());
         require(loadedVisibility.replacePresets(visibilityPresets(root), visibilityError),
+                visibilityError.c_str());
+        require(loadedVisibility.replaceSavedViews(savedViews(root), visibilityError),
                 visibilityError.c_str());
         if (metrics) metrics->parseMilliseconds = stageTimer.elapsed();
 

@@ -558,6 +558,107 @@ void MainWindow::clearSpatialVisibility()
     refreshVisibilityView();
 }
 
+void MainWindow::saveCurrentView()
+{
+    bool ok = false;
+    const auto name = QInputDialog::getText(this, "Save Current View", "Name:",
+        QLineEdit::Normal, {}, &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+
+    cad::application::SavedView view;
+    view.name = name.toStdString();
+    view.visibility = visibilityManager_.captureConfiguration(modeling_.body());
+    const auto isolated = visibilityManager_.isolatedFeatureIds();
+    view.isolatedFeatureIds.insert(isolated.begin(), isolated.end());
+    const auto ghosted = visibilityManager_.ghostedSelectionIds();
+    view.ghostedSelectionIds.insert(ghosted.begin(), ghosted.end());
+    view.spatialRule = visibilityManager_.spatialRule();
+    const auto camera = viewer_->cameraState();
+    view.cameraValid = camera.valid;
+    view.cameraEye = camera.eye;
+    view.cameraCenter = camera.center;
+    view.cameraUp = camera.up;
+    view.cameraScale = camera.scale;
+    const auto& section = viewer_->sectionState();
+    view.sectionActive = section.active;
+    view.sectionAxis = static_cast<int>(section.axis);
+    view.sectionFlipped = section.flipped;
+    view.sectionOrigin = section.origin;
+    if (!visibilityManager_.createSavedView(std::move(view)))
+        statusBar()->showMessage("A saved view with that name already exists", 3000);
+}
+
+void MainWindow::restoreSavedView()
+{
+    const auto views = visibilityManager_.savedViews();
+    if (views.empty()) return;
+    QStringList names;
+    for (const auto& view : views) names.append(QString::fromStdString(view.name));
+    bool ok = false;
+    const auto name = QInputDialog::getItem(this, "Restore View", "View:", names,
+        0, false, &ok);
+    if (!ok) return;
+    const auto found = std::find_if(views.begin(), views.end(),
+        [&name](const auto& view) { return QString::fromStdString(view.name) == name; });
+    if (found == views.end()) return;
+    std::string error;
+    if (!visibilityManager_.applySavedView(*found, modeling_.body(), error)) {
+        statusBar()->showMessage(QString::fromStdString(error), 3000);
+        return;
+    }
+    if (found->spatialRule.enabled)
+        viewer_->setSpatialBox(found->spatialRule.min, found->spatialRule.max);
+    else
+        viewer_->clearSpatialBox();
+    if (found->sectionActive) {
+        const auto axis = found->sectionAxis == 0 ? CadViewer::SectionAxis::X
+            : found->sectionAxis == 1 ? CadViewer::SectionAxis::Y : CadViewer::SectionAxis::Z;
+        viewer_->restoreSection(axis, found->sectionOrigin, found->sectionFlipped);
+    } else {
+        viewer_->clearSection();
+    }
+    viewer_->restoreCamera({found->cameraValid, found->cameraEye, found->cameraCenter,
+        found->cameraUp, found->cameraScale});
+    applySelection({});
+    refreshVisibilityView();
+}
+
+void MainWindow::renameSavedView()
+{
+    const auto views = visibilityManager_.savedViews();
+    if (views.empty()) return;
+    QStringList names;
+    for (const auto& view : views) names.append(QString::fromStdString(view.name));
+    bool ok = false;
+    const auto current = QInputDialog::getItem(this, "Rename View", "View:", names,
+        0, false, &ok);
+    if (!ok) return;
+    const auto found = std::find_if(views.begin(), views.end(),
+        [&current](const auto& view) { return QString::fromStdString(view.name) == current; });
+    if (found == views.end()) return;
+    const auto name = QInputDialog::getText(this, "Rename View", "Name:",
+        QLineEdit::Normal, current, &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+    std::string error;
+    if (!visibilityManager_.renameSavedView(found->id, name.toStdString(), error))
+        statusBar()->showMessage(QString::fromStdString(error), 3000);
+}
+
+void MainWindow::deleteSavedView()
+{
+    const auto views = visibilityManager_.savedViews();
+    if (views.empty()) return;
+    QStringList names;
+    for (const auto& view : views) names.append(QString::fromStdString(view.name));
+    bool ok = false;
+    const auto name = QInputDialog::getItem(this, "Delete View", "View:", names,
+        0, false, &ok);
+    if (!ok) return;
+    const auto found = std::find_if(views.begin(), views.end(),
+        [&name](const auto& view) { return QString::fromStdString(view.name) == name; });
+    if (found != views.end()) visibilityManager_.deleteSavedView(found->id);
+}
+
 void MainWindow::refreshConstraintManager()
 {
     if (activeSketchId_.empty()) {
@@ -859,6 +960,15 @@ void MainWindow::createActions()
     auto* clearSectionAction = viewMenu->addAction("Clear Section");
     connect(clearSectionAction, &QAction::triggered, this,
         [this]() { viewer_->clearSection(); });
+    viewMenu->addSeparator();
+    auto* saveViewAction = viewMenu->addAction("Save Current View");
+    connect(saveViewAction, &QAction::triggered, this, &MainWindow::saveCurrentView);
+    auto* restoreViewAction = viewMenu->addAction("Restore View");
+    connect(restoreViewAction, &QAction::triggered, this, &MainWindow::restoreSavedView);
+    auto* renameViewAction = viewMenu->addAction("Rename View");
+    connect(renameViewAction, &QAction::triggered, this, &MainWindow::renameSavedView);
+    auto* deleteViewAction = viewMenu->addAction("Delete View");
+    connect(deleteViewAction, &QAction::triggered, this, &MainWindow::deleteSavedView);
 
     auto* toolBar = addToolBar("Modeling");
     toolBar->addAction(deleteAction_);

@@ -4,6 +4,7 @@
 
 #include <Bnd_Box.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Dir.hxx>
 
 #include <set>
 #include <optional>
@@ -108,6 +109,25 @@ struct VisibilityPreset
     bool operator==(const VisibilityPreset&) const = default;
 };
 
+struct SavedView
+{
+    std::string id;
+    std::string name;
+    VisibilityConfiguration visibility;
+    std::set<std::string> isolatedFeatureIds;
+    std::set<std::string> ghostedSelectionIds;
+    SpatialVisibilityRule spatialRule;
+    bool sectionActive{false};
+    int sectionAxis{2};
+    bool sectionFlipped{false};
+    gp_Pnt sectionOrigin;
+    bool cameraValid{false};
+    gp_Pnt cameraEye;
+    gp_Pnt cameraCenter;
+    gp_Dir cameraUp{0, 0, 1};
+    double cameraScale{1.0};
+};
+
 std::optional<VisibilityCategory> visibilityCategoryFor(
     const cad::parametric::ParametricFeature& feature);
 const char* visibilityCategoryId(VisibilityCategory category) noexcept;
@@ -172,6 +192,16 @@ public:
                      std::string& error);
     std::vector<VisibilityPreset> presets() const;
     bool replacePresets(std::vector<VisibilityPreset> presets, std::string& error);
+    std::vector<std::string> isolatedFeatureIds() const;
+    std::vector<std::string> ghostedSelectionIds() const;
+    std::optional<std::string> createSavedView(SavedView view);
+    bool renameSavedView(const std::string& viewId, const std::string& name,
+                         std::string& error);
+    bool deleteSavedView(const std::string& viewId);
+    std::vector<SavedView> savedViews() const;
+    bool replaceSavedViews(std::vector<SavedView> views, std::string& error);
+    bool applySavedView(const SavedView& view, cad::parametric::Body& body,
+                        std::string& error);
     VisibilityConfiguration captureConfiguration(
         const cad::parametric::Body& body) const;
     bool applyConfiguration(const VisibilityConfiguration& configuration,
@@ -209,8 +239,10 @@ private:
     std::unordered_map<std::string, VisibilityGroup> groups_;
     VisibilityFilterState filters_;
     std::unordered_map<std::string, VisibilityPreset> presets_;
+    std::unordered_map<std::string, SavedView> savedViews_;
     std::uint64_t nextPresetSequence_{1};
     std::uint64_t nextGroupSequence_{1};
+    std::uint64_t nextSavedViewSequence_{1};
     std::unordered_map<std::string, VisibilityMode> effectiveModes_;
     SpatialVisibilityRule spatialRule_;
     std::unordered_map<std::string, Bnd_Box> boundingBoxes_;

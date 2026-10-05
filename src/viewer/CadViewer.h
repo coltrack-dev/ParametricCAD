@@ -86,6 +86,15 @@ public:
         gp_Pnt origin;
     };
 
+    struct CameraState
+    {
+        bool valid{false};
+        gp_Pnt eye;
+        gp_Pnt center;
+        gp_Dir up{0, 0, 1};
+        double scale{1.0};
+    };
+
     enum class StandardView
     {
         Right,
@@ -116,6 +125,9 @@ public:
     void flipSection();
     void clearSection();
     const SectionState& sectionState() const noexcept;
+    bool restoreSection(SectionAxis axis, const gp_Pnt& origin, bool flipped);
+    CameraState cameraState() const;
+    void restoreCamera(const CameraState& state);
     cad::application::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
     void clear();

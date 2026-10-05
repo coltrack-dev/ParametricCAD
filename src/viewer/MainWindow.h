@@ -50,6 +50,10 @@ private:
         cad::application::VisibilityMode outsideMode =
             cad::application::VisibilityMode::Hidden);
     void clearSpatialVisibility();
+    void saveCurrentView();
+    void restoreSavedView();
+    void renameSavedView();
+    void deleteSavedView();
     void applySelection(const QStringList& featureIds, bool updateViewer = true);
     void applySelectionSnapshot(
         const cad::application::SelectionSnapshot& selection,

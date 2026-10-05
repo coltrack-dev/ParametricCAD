@@ -163,8 +163,10 @@ void VisibilityManager::clear()
     groups_.clear();
     clearFilters();
     presets_.clear();
+    savedViews_.clear();
     nextGroupSequence_ = 1;
     nextPresetSequence_ = 1;
+    nextSavedViewSequence_ = 1;
     effectiveModes_.clear();
     boundingBoxes_.clear();
     spatialRule_ = {};
@@ -476,6 +478,98 @@ std::vector<VisibilityPreset> VisibilityManager::presets() const
     std::sort(result.begin(), result.end(),
         [](const auto& first, const auto& second) { return first.id < second.id; });
     return result;
+}
+
+std::vector<std::string> VisibilityManager::isolatedFeatureIds() const
+{
+    return {isolatedFeatureIds_.begin(), isolatedFeatureIds_.end()};
+}
+
+std::vector<std::string> VisibilityManager::ghostedSelectionIds() const
+{
+    return {ghostedSelectionIds_.begin(), ghostedSelectionIds_.end()};
+}
+
+std::optional<std::string> VisibilityManager::createSavedView(SavedView view)
+{
+    if (view.name.empty()) return {};
+    const auto normalized = normalizedName(view.name);
+    for (const auto& [id, candidate] : savedViews_) {
+        if (normalizedName(candidate.name) == normalized) return {};
+    }
+    if (view.id.empty()) {
+        do {
+            view.id = "view-" + std::to_string(nextSavedViewSequence_++);
+        } while (savedViews_.contains(view.id));
+    } else if (savedViews_.contains(view.id)) {
+        return {};
+    }
+    const auto id = view.id;
+    savedViews_.emplace(id, std::move(view));
+    return id;
+}
+
+bool VisibilityManager::renameSavedView(
+    const std::string& viewId, const std::string& name, std::string& error)
+{
+    error.clear();
+    if (name.empty()) { error = "Saved view name cannot be empty"; return false; }
+    const auto found = savedViews_.find(viewId);
+    if (found == savedViews_.end()) return false;
+    const auto normalized = normalizedName(name);
+    for (const auto& [id, view] : savedViews_) {
+        if (id != viewId && normalizedName(view.name) == normalized) {
+            error = "A saved view with that name already exists";
+            return false;
+        }
+    }
+    found->second.name = name;
+    return true;
+}
+
+bool VisibilityManager::deleteSavedView(const std::string& viewId)
+{
+    return savedViews_.erase(viewId) != 0;
+}
+
+std::vector<SavedView> VisibilityManager::savedViews() const
+{
+    std::vector<SavedView> result;
+    result.reserve(savedViews_.size());
+    for (const auto& [id, view] : savedViews_) result.push_back(view);
+    std::sort(result.begin(), result.end(),
+        [](const auto& first, const auto& second) { return first.id < second.id; });
+    return result;
+}
+
+bool VisibilityManager::replaceSavedViews(
+    std::vector<SavedView> views, std::string& error)
+{
+    error.clear();
+    std::unordered_map<std::string, SavedView> replacement;
+    std::set<std::string> names;
+    for (auto& view : views) {
+        const auto normalized = normalizedName(view.name);
+        if (view.id.empty() || view.name.empty() || replacement.contains(view.id)
+            || !names.insert(normalized).second) {
+            error = "Invalid, duplicate, or empty saved view";
+            return false;
+        }
+        replacement.emplace(view.id, std::move(view));
+    }
+    savedViews_ = std::move(replacement);
+    nextSavedViewSequence_ = 1;
+    return true;
+}
+
+bool VisibilityManager::applySavedView(
+    const SavedView& view, cad::parametric::Body& body, std::string& error)
+{
+    if (!applyConfiguration(view.visibility, body, error)) return false;
+    setIsolatedFeatures({view.isolatedFeatureIds.begin(), view.isolatedFeatureIds.end()});
+    ghostOthers({view.ghostedSelectionIds.begin(), view.ghostedSelectionIds.end()});
+    setSpatialRule(view.spatialRule);
+    return true;
 }
 
 bool VisibilityManager::replacePresets(

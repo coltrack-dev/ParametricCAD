@@ -1709,6 +1709,52 @@ const CadViewer::SectionState& CadViewer::sectionState() const noexcept
     return sectionState_;
 }
 
+bool CadViewer::restoreSection(
+    const SectionAxis axis, const gp_Pnt& origin, const bool flipped)
+{
+    activateSection(axis);
+    if (!sectionState_.active) return false;
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    sectionBounds_.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double lower = axis == SectionAxis::X ? xmin : axis == SectionAxis::Y ? ymin : zmin;
+    const double upper = axis == SectionAxis::X ? xmax : axis == SectionAxis::Y ? ymax : zmax;
+    const double requested = axis == SectionAxis::X ? origin.X()
+        : axis == SectionAxis::Y ? origin.Y() : origin.Z();
+    sectionDragPosition_ = std::clamp(requested, lower, upper);
+    if (axis == SectionAxis::X) sectionState_.origin.SetX(sectionDragPosition_);
+    else if (axis == SectionAxis::Y) sectionState_.origin.SetY(sectionDragPosition_);
+    else sectionState_.origin.SetZ(sectionDragPosition_);
+    sectionState_.flipped = flipped;
+    updateSectionPresentation();
+    return true;
+}
+
+CadViewer::CameraState CadViewer::cameraState() const
+{
+    CameraState state;
+    if (!view_.IsNull() && !view_->Camera().IsNull()) {
+        const auto camera = view_->Camera();
+        state.valid = true;
+        state.eye = camera->Eye();
+        state.center = camera->Center();
+        state.up = camera->Up();
+        state.scale = camera->Scale();
+    }
+    return state;
+}
+
+void CadViewer::restoreCamera(const CameraState& state)
+{
+    if (!state.valid || view_.IsNull() || view_->Camera().IsNull()) return;
+    const auto camera = view_->Camera();
+    camera->SetEyeAndCenter(state.eye, state.center);
+    camera->SetUp(state.up);
+    camera->SetScale(std::max(state.scale, 1.0e-9));
+    updateOrbitStateFromCamera();
+    invalidateSnapProjectionCache("CAMERA_CHANGED: saved view restored");
+    view_->Redraw();
+}
+
 void CadViewer::updateSectionPresentation()
 {
     if (!sectionState_.active || sectionClipPlane_.IsNull() || view_.IsNull()) return;
