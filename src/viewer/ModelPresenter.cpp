@@ -8,7 +8,7 @@ cad::viewer::ModelPresenter::ModelPresenter(cad::parametric::Body& body, CadView
 {
 }
 
-cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
+cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
 {
     const auto selectedTopology = viewer_.captureTopologySelection(body_);
     const auto selection = viewer_.selectionSnapshot();
@@ -28,14 +28,24 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refresh()
         for (const auto& id : result.presentedIds) ids.append(QString::fromStdString(id));
         return ids;
     }());
+    applyVisibility();
+    viewer_.restoreSelection(body_, selectedTopology, selectedObjects);
+    viewer_.endBulkUpdate();
+    return result;
+}
+
+void cad::viewer::ModelPresenter::refreshVisibility()
+{
+    applyVisibility();
+}
+
+void cad::viewer::ModelPresenter::applyVisibility()
+{
     QStringList hidden;
     for (const auto& id : cad::parametric::hiddenFeatureIds(body_, isolatedFeatureIds_)) {
         hidden.append(QString::fromStdString(id));
     }
     viewer_.setHiddenFeatures(hidden);
-    viewer_.restoreSelection(body_, selectedTopology, selectedObjects);
-    viewer_.endBulkUpdate();
-    return result;
 }
 
 void cad::viewer::ModelPresenter::clear()

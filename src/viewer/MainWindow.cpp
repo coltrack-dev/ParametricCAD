@@ -151,7 +151,14 @@ MainWindow::MainWindow(QWidget* parent)
         });
     connect(&modeling_.undoStack(), &QUndoStack::indexChanged, this, [this]() {
         viewer_->clearSketchTrimPreview();
-        refreshModelView();
+        const int currentIndex = modeling_.undoStack().index();
+        const int changedIndex = currentIndex > lastUndoStackIndex_
+            ? currentIndex - 1 : currentIndex;
+        const bool visibilityChanged = currentIndex != lastUndoStackIndex_
+            && modeling_.isVisibilityCommandAt(changedIndex);
+        lastUndoStackIndex_ = currentIndex;
+        if (visibilityChanged) refreshVisibilityView();
+        else refreshModelView();
         featureEditorPanel_->scheduleRefresh();
     });
     connect(&modeling_.undoStack(), &QUndoStack::cleanChanged, this, [this](bool) { updateTitle(); });
@@ -214,7 +221,7 @@ void MainWindow::createParametricPanel()
             const auto result = modeling_.setFeatureVisibility(ids, false);
             if (!result.success) statusBar()->showMessage(
                 QString::fromStdString(result.error), 3000);
-            else refreshModelView(false);
+            else refreshVisibilityView();
         },
         [this](const QStringList& featureIds) {
             std::vector<std::string> ids;
@@ -222,20 +229,20 @@ void MainWindow::createParametricPanel()
             const auto result = modeling_.setFeatureVisibility(ids, true);
             if (!result.success) statusBar()->showMessage(
                 QString::fromStdString(result.error), 3000);
-            else refreshModelView(false);
+            else refreshVisibilityView();
         },
         [this](const QStringList& featureIds) {
             std::vector<std::string> ids;
             for (const auto& id : featureIds) ids.push_back(id.toStdString());
             presenter_->setIsolatedFeatures(ids);
-            refreshModelView(false);
+            refreshVisibilityView();
         },
         [this]() {
             presenter_->clearIsolation();
             const auto result = modeling_.showAllFeatures();
             if (!result.success) statusBar()->showMessage(
                 QString::fromStdString(result.error), 3000);
-            else refreshModelView(false);
+            else refreshVisibilityView();
         });
 
     connect(viewer_, &CadViewer::selectionChanged, this,
@@ -253,7 +260,7 @@ void MainWindow::createParametricPanel()
 
 void MainWindow::refreshModelView(const bool fitView)
 {
-    const auto result = presenter_->refresh();
+    const auto result = presenter_->refreshModel();
     featureEditorPanel_->setFeatures(modeling_.features());
     // ModelPresenter restores the OCCT selection, including topology
     // references. Do not select feature objects again here: that would
@@ -268,6 +275,20 @@ void MainWindow::refreshModelView(const bool fitView)
     }
     refreshConstraintManager();
     statusBar()->showMessage(result.rebuilt ? "Model updated" : QString::fromStdString(result.error), 3000);
+}
+
+void MainWindow::refreshVisibilityView()
+{
+    presenter_->refreshVisibility();
+    featureEditorPanel_->setFeatures(modeling_.features());
+    applySelectionSnapshot(viewer_->selectionSnapshot(), false);
+    featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
+    if (!activeSketchId_.empty()) {
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(activeSketchId_));
+        if (sketch) viewer_->setSketchConstraintMarkers(*sketch, selectedConstraintId_.toStdString());
+    }
+    refreshConstraintManager();
 }
 
 void MainWindow::refreshConstraintManager()

@@ -44,6 +44,7 @@ private:
     void createActions();
     void createParametricPanel();
     void refreshModelView(bool fitView = false);
+    void refreshVisibilityView();
     void applySelection(const QStringList& featureIds, bool updateViewer = true);
     void applySelectionSnapshot(
         const cad::application::SelectionSnapshot& selection,
@@ -155,6 +156,7 @@ private:
     std::shared_ptr<std::atomic<int>> projectLoadTotal_;
     QString pendingProjectPath_;
     bool projectLoading_{false};
+    int lastUndoStackIndex_{0};
     std::shared_ptr<cad::application::ProjectLoadResult> projectLoadResult_;
     ProjectLoadMetrics projectLoadMetrics_;
     std::size_t projectLoadRecomputeIndex_{0};

@@ -154,6 +154,7 @@ public:
     ) override;
     QStringList dependentNames(const std::string& featureId);
     void clearProject();
+    bool isVisibilityCommandAt(int index) const noexcept;
 
     ModelingActionState actionState(
         const std::vector<std::string>& selection

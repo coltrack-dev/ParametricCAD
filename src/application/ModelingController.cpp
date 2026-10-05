@@ -1073,6 +1073,13 @@ void ModelingController::clearProject()
     undoStack_.push(new cad::commands::ClearProjectCommand(document_, body_));
 }
 
+bool ModelingController::isVisibilityCommandAt(const int index) const noexcept
+{
+    if (index < 0 || index >= undoStack_.count()) return false;
+    return dynamic_cast<const cad::commands::SetFeatureVisibilityCommand*>(
+        undoStack_.command(index)) != nullptr;
+}
+
 ModelingActionState ModelingController::actionState(
     const std::vector<std::string>& selection
 ) const

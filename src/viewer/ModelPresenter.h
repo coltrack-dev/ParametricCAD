@@ -22,13 +22,16 @@ class ModelPresenter final
 public:
     ModelPresenter(cad::parametric::Body& body, CadViewer& viewer);
 
-    PresentationResult refresh();
+    PresentationResult refreshModel();
+    void refreshVisibility();
     void clear();
     void setIsolatedFeatures(const std::vector<std::string>& featureIds);
     void clearIsolation();
     bool isolationActive() const noexcept;
 
 private:
+    void applyVisibility();
+
     cad::parametric::Body& body_;
     CadViewer& viewer_;
     std::set<std::string> isolatedFeatureIds_;
