@@ -94,6 +94,8 @@ MainWindow::MainWindow(QWidget* parent)
             visibilityManager_.setSpatialRule(rule);
             refreshVisibilityView();
         });
+    viewer_->setSectionInteractionStatusHandler(
+        [this](const QString& message) { statusBar()->showMessage(message); });
     viewer_->setSketchPointClickedHandler(
         [this](const gp_Pnt2d& point, const double tolerance) {
             if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend)

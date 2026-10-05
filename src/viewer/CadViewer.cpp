@@ -34,6 +34,7 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -182,6 +183,32 @@ TopoDS_Shape makeSectionGrid(
             add(gp_Pnt(x, y0, position), gp_Pnt(x, y1, position));
         }
     }
+    return compound;
+}
+
+TopoDS_Shape makeSectionNormalIndicator(
+    const CadViewer::SectionAxis axis,
+    const gp_Pnt& origin,
+    const Bnd_Box& bounds,
+    const bool flipped)
+{
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double length = std::max({xmax - xmin, ymax - ymin, zmax - zmin}) * 0.35;
+    gp_Vec direction(axis == CadViewer::SectionAxis::X ? gp_Vec(1, 0, 0)
+        : axis == CadViewer::SectionAxis::Y ? gp_Vec(0, 1, 0) : gp_Vec(0, 0, 1));
+    if (flipped) direction.Reverse();
+    direction *= std::max(length, 1.0e-3);
+    const gp_Pnt tip = origin.Translated(direction);
+    gp_Vec side(axis == CadViewer::SectionAxis::X ? gp_Vec(0, 1, 0)
+        : axis == CadViewer::SectionAxis::Y ? gp_Vec(1, 0, 0) : gp_Vec(1, 0, 0));
+    side *= std::max(length * 0.12, 0.02);
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    builder.Add(compound, BRepBuilderAPI_MakeEdge(origin, tip).Edge());
+    builder.Add(compound, BRepBuilderAPI_MakeEdge(tip, tip.Translated(-direction * 0.2 + side)).Edge());
+    builder.Add(compound, BRepBuilderAPI_MakeEdge(tip, tip.Translated(-direction * 0.2 - side)).Edge());
     return compound;
 }
 
@@ -1696,12 +1723,27 @@ void CadViewer::clearSection()
         view_->RemoveClipPlane(sectionClipPlane_);
     if (!sectionPlaneObject_.IsNull() && !context_.IsNull())
         context_->Remove(sectionPlaneObject_, Standard_False);
+    if (!sectionHandleObject_.IsNull() && !context_.IsNull())
+        context_->Remove(sectionHandleObject_, Standard_False);
+    if (!sectionNormalObject_.IsNull() && !context_.IsNull())
+        context_->Remove(sectionNormalObject_, Standard_False);
     sectionClipPlane_.Nullify();
     sectionPlaneObject_.Nullify();
+    sectionHandleObject_.Nullify();
+    sectionNormalObject_.Nullify();
     sectionState_ = {};
     sectionBounds_.SetVoid();
     sectionDragging_ = false;
+    sectionHandleHovered_ = false;
+    unsetCursor();
+    setToolTip({});
     if (!view_.IsNull() && bulkUpdateDepth_ == 0) view_->Redraw();
+}
+
+void CadViewer::setSectionInteractionStatusHandler(
+    std::function<void(const QString&)> handler)
+{
+    sectionInteractionStatusHandler_ = std::move(handler);
 }
 
 const CadViewer::SectionState& CadViewer::sectionState() const noexcept
@@ -1778,16 +1820,56 @@ void CadViewer::updateSectionPresentation()
         sectionPlaneObject_->SetShape(shape);
         context_->Redisplay(sectionPlaneObject_, Standard_False);
     }
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    sectionBounds_.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double handleRadius = std::max({xmax - xmin, ymax - ymin, zmax - zmin}) * 0.045;
+    const auto handleShape = BRepPrimAPI_MakeSphere(
+        sectionState_.origin, std::max(handleRadius, 0.05)).Shape();
+    if (sectionHandleObject_.IsNull()) {
+        sectionHandleObject_ = new AIS_Shape(handleShape);
+        context_->Display(sectionHandleObject_, Standard_False);
+        context_->Deactivate(sectionHandleObject_);
+    } else {
+        sectionHandleObject_->SetShape(handleShape);
+        context_->Redisplay(sectionHandleObject_, Standard_False);
+    }
+    sectionHandleObject_->SetColor(sectionHandleHovered_
+        ? Quantity_NOC_YELLOW : Quantity_NOC_ORANGE);
+    sectionHandleObject_->SetTransparency(0.1);
+    const auto normalShape = makeSectionNormalIndicator(
+        sectionState_.axis, sectionState_.origin, sectionBounds_, sectionState_.flipped);
+    if (sectionNormalObject_.IsNull()) {
+        sectionNormalObject_ = new AIS_Shape(normalShape);
+        sectionNormalObject_->SetDisplayMode(AIS_WireFrame);
+        sectionNormalObject_->SetColor(Quantity_NOC_YELLOW);
+        sectionNormalObject_->SetWidth(3.0);
+        context_->Display(sectionNormalObject_, Standard_False);
+        context_->Deactivate(sectionNormalObject_);
+    } else {
+        sectionNormalObject_->SetShape(normalShape);
+        context_->Redisplay(sectionNormalObject_, Standard_False);
+    }
     if (bulkUpdateDepth_ == 0) view_->Redraw();
 }
 
 int CadViewer::sectionHandleAt(const QPoint& position) const
 {
     if (!sectionState_.active || view_.IsNull()) return -1;
-    const auto screen = projectWorldPoint(view_, sectionState_.origin, width(), height());
-    const auto dx = screen.x() - position.x();
-    const auto dy = screen.y() - position.y();
-    return dx * dx + dy * dy <= 24.0 * 24.0 ? 0 : -1;
+    const auto isNear = [&position](const QPointF& screen, const double radius) {
+        const auto dx = screen.x() - position.x();
+        const auto dy = screen.y() - position.y();
+        return dx * dx + dy * dy <= radius * radius;
+    };
+    if (isNear(projectWorldPoint(view_, sectionState_.origin, width(), height()), 32.0)) return 0;
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    sectionBounds_.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double length = std::max({xmax - xmin, ymax - ymin, zmax - zmin}) * 0.35;
+    gp_Vec direction(sectionState_.axis == SectionAxis::X ? gp_Vec(1, 0, 0)
+        : sectionState_.axis == SectionAxis::Y ? gp_Vec(0, 1, 0) : gp_Vec(0, 0, 1));
+    if (sectionState_.flipped) direction.Reverse();
+    direction *= std::max(length, 1.0e-3);
+    return isNear(projectWorldPoint(view_, sectionState_.origin.Translated(direction), width(), height()), 28.0)
+        ? 0 : -1;
 }
 
 void CadViewer::updateSectionDrag(const QPoint& position)
@@ -2830,7 +2912,12 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     if (initialized_ && event->button() == Qt::LeftButton && !pushPullActive_) {
         if (sectionHandleAt(lastMousePosition_) >= 0) {
             sectionDragging_ = true;
+            sectionHandleHovered_ = true;
             sectionDragStart_ = lastMousePosition_;
+            setCursor(Qt::ClosedHandCursor);
+            setToolTip("Drag to move section plane");
+            if (sectionInteractionStatusHandler_)
+                sectionInteractionStatusHandler_("Drag to move section plane");
             return;
         }
         const auto spatialHandle = spatialBoxHandleAt(lastMousePosition_);
@@ -2994,6 +3081,13 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
             return;
         }
         updateSectionDrag(currentPosition);
+        if (sectionInteractionStatusHandler_) {
+            const double offset = sectionState_.axis == SectionAxis::X
+                ? sectionState_.origin.X()
+                : sectionState_.axis == SectionAxis::Y
+                    ? sectionState_.origin.Y() : sectionState_.origin.Z();
+            sectionInteractionStatusHandler_(QString("Section offset: %1").arg(offset, 0, 'f', 3));
+        }
         lastMousePosition_ = currentPosition;
         return;
     }
@@ -3071,6 +3165,25 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         }
 
     } else if (event->buttons() == Qt::NoButton) {
+        const bool sectionHovered = sectionHandleAt(currentPosition) >= 0;
+        if (sectionHovered != sectionHandleHovered_) {
+            sectionHandleHovered_ = sectionHovered;
+            updateSectionPresentation();
+        }
+        if (sectionHovered) {
+            setCursor(Qt::OpenHandCursor);
+            setToolTip("Drag to move section plane");
+            if (sectionInteractionStatusHandler_)
+                sectionInteractionStatusHandler_("Drag to move section plane");
+            lastMousePosition_ = currentPosition;
+            return;
+        }
+        if (sectionHandleHovered_) {
+            sectionHandleHovered_ = false;
+            updateSectionPresentation();
+        }
+        unsetCursor();
+        setToolTip({});
         const auto axis = axisIndicatorHitTest(currentPosition);
         updateAxisHover(currentPosition);
         if (axis) {
@@ -3093,6 +3206,7 @@ void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 {
     if (sectionDragging_ && event->button() == Qt::LeftButton) {
         sectionDragging_ = false;
+        setCursor(Qt::OpenHandCursor);
         return;
     }
     if (spatialBoxHandle_ >= 0 && event->button() == Qt::LeftButton) {

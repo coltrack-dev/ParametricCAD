@@ -177,6 +177,8 @@ public:
     void setTransformCopyCommittedHandler(
         std::function<void(const QString&, const gp_Trsf&)> handler
     );
+    void setSectionInteractionStatusHandler(
+        std::function<void(const QString&)> handler);
 
 signals:
     void selectionChanged(const cad::application::SelectionSnapshot& selection);
@@ -286,12 +288,16 @@ private:
     std::map<QString, cad::application::VisibilityMode> featureVisibility_;
     Handle(AIS_Shape) spatialBoxObject_;
     Handle(AIS_Shape) sectionPlaneObject_;
+    Handle(AIS_Shape) sectionHandleObject_;
+    Handle(AIS_Shape) sectionNormalObject_;
     Handle(Graphic3d_ClipPlane) sectionClipPlane_;
     SectionState sectionState_;
     Bnd_Box sectionBounds_;
     bool sectionDragging_{false};
+    bool sectionHandleHovered_{false};
     QPoint sectionDragStart_;
     double sectionDragPosition_{0.0};
+    std::function<void(const QString&)> sectionInteractionStatusHandler_;
     int bulkUpdateDepth_{0};
     bool bulkCachesInvalidated_{false};
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};
