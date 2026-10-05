@@ -22,7 +22,7 @@ Parametric model
         |
 OCCT geometry and AIS presentation
         |
-ProjectFile -> .pcad JSON
+ProjectFile -> .pcad container / legacy JSON
 ```
 
 ### UI and viewer
@@ -224,11 +224,20 @@ and never recomputes the Body.
 
 ## Project persistence
 
-`ProjectFile` is the serialization boundary. Version 1 JSON stores the canonical
-Body history, parameters, stable IDs, dependency IDs, placement, persistent
-feature visibility, and optional visibility metadata. It also stores optional
-saved views under `views`. Geometry, AIS handles, camera state outside saved
-views, selection, hover, snap caches, and undo history are not serialized.
+`ProjectFile` is the serialization boundary. The logical version-1 manifest
+stores the canonical Body history, parameters, stable IDs, dependency IDs,
+placement, persistent feature visibility, and optional visibility metadata. New
+files are ZIP-compatible `.pcad` containers containing `manifest.json` and
+individual compressed raw B-Rep entries under `geometry/`. Legacy version-1
+plain JSON files, including embedded Base64 B-Rep payloads, remain readable.
+Geometry, AIS handles, camera state outside saved views, selection, hover, snap
+caches, and undo history are not serialized.
+
+Archive handling is isolated in `ProjectArchive`; `ShapePayload` provides raw
+and legacy embedded B-Rep encoding. `ImportedFeature`, `Body`, and modeling
+code do not know about ZIP entries. Saves are written to a temporary archive,
+closed and then replaced as a completed project file. Archive paths are
+validated to reject absolute and traversal entries.
 
 Load validates and assembles temporary state first. The active model and
 visibility manager are replaced only after successful parsing and validation.

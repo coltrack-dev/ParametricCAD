@@ -64,13 +64,28 @@ to be already subtracted from physical products by IfcOpenShell.
 
 ## Persistence
 
-The existing version-1 JSON `.pcad` format remains backward compatible. For an
-`ImportedFeature`, the generic persistence layer currently embeds an OCCT
-B-Rep payload in the feature record. B-Rep serialization is isolated in
-`src/model/ShapePayload.*`; `ImportedFeature` does not implement Base64 or
-stream encoding. This transitional backend can later be replaced by archive
-entries such as `geometry/<feature-id>.brep` without changing the feature or
-importer API. The original IFC is not needed to reopen the saved `.pcad`.
+New `.pcad` files are ZIP-compatible containers. `manifest.json` contains
+ImportedFeature metadata and a `shapePayload` reference; each imported shape is
+stored as raw native B-Rep in a separate compressed
+`geometry/<sha256(feature-id)>.brep` entry. `ProjectArchive` owns archive
+handling and `ShapePayload` owns B-Rep encoding, so ImportedFeature and the IFC
+adapter remain independent of storage details.
+
+Legacy version-1 plain JSON files, including embedded Base64
+`geometryPayload`, remain readable. The loader detects archives by their ZIP
+signature rather than by filename extension. The original IFC is not needed to
+reopen a saved `.pcad`.
+
+Measured Phase B.2 sizes:
+
+| Fixture | IFC | Old JSON/BRep | New container |
+|---|---:|---:|---:|
+| Duplex | 2,380,763 | 11,424,038 | 1,734,640 |
+| BuildingBIMModel | 27,475,496 | 303,980,504 | 61,702,680 |
+
+The new Building container is approximately 2.25x the IFC source and 5x
+smaller than the transitional JSON/BRep file. It remains an implementation
+storage layer; the logical Body and feature schema are unchanged.
 
 ## Diagnostics and tests
 

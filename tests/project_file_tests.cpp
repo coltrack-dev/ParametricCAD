@@ -2,6 +2,7 @@
 #include "model/Document.h"
 #include "model/Body.h"
 #include "model/ProjectFile.h"
+#include "model/ProjectArchive.h"
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
@@ -25,6 +26,25 @@ void check(bool value, const char* message)
 {
     if (!value) throw std::runtime_error(message);
 }
+
+QJsonObject readManifest(const QString& path)
+{
+    cad::persistence::ProjectArchiveReader archive(path);
+    QString error;
+    check(archive.open(error), error.toStdString().c_str());
+    QByteArray manifest;
+    check(archive.readEntry("manifest.json", manifest, error), error.toStdString().c_str());
+    return QJsonDocument::fromJson(manifest).object();
+}
+
+void writePlainJson(const QString& path, const QJsonObject& object)
+{
+    QFile file(path);
+    check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write plain JSON");
+    const auto data = QJsonDocument(object).toJson();
+    check(file.write(data) == data.size(), "write plain JSON data");
+}
+
 int main()
 {
     try {
@@ -91,11 +111,7 @@ int main()
         check(body.recompute(), "rotated placement recompute");
         const auto rotatedPath = directory.filePath("rotated-placement.pcad");
         check(ProjectFile::save(rotatedPath, document, body, error), "rotated placement save");
-        QFile roundedPlacementFile(rotatedPath);
-        check(roundedPlacementFile.open(QIODevice::ReadOnly), "read rounded placement file");
-        const auto roundedJson = QJsonDocument::fromJson(roundedPlacementFile.readAll());
-        roundedPlacementFile.close();
-        auto roundedRoot = roundedJson.object();
+        auto roundedRoot = readManifest(rotatedPath);
         auto roundedBody = roundedRoot.value("body").toArray();
         for (int index = 0; index < roundedBody.size(); ++index) {
             auto feature = roundedBody.at(index).toObject();
@@ -108,12 +124,7 @@ int main()
             roundedBody[index] = feature;
         }
         roundedRoot.insert("body", roundedBody);
-        check(roundedPlacementFile.open(QIODevice::WriteOnly | QIODevice::Truncate),
-              "write rounded placement file");
-        const auto roundedData = QJsonDocument(roundedRoot).toJson();
-        check(roundedPlacementFile.write(roundedData) == roundedData.size(),
-              "write rounded placement data");
-        roundedPlacementFile.close();
+        writePlainJson(rotatedPath, roundedRoot);
         Document rotatedDocument;
         Body rotatedBody;
         check(ProjectFile::load(rotatedPath, rotatedDocument, rotatedBody, error),
@@ -137,11 +148,9 @@ int main()
         loadedBody.markDirtyFrom(editable->id());
         check(loadedBody.recompute(), "edit after load");
         check(ProjectFile::save(path, loaded, loadedBody, error), "save edited model");
+        const auto root = readManifest(path);
+        const auto valid = QJsonDocument(root).toJson();
         QFile file(path);
-        check(file.open(QIODevice::ReadOnly), "read saved file");
-        const auto valid = file.readAll();
-        file.close();
-        const auto root = QJsonDocument::fromJson(valid).object();
         auto reject = [&](const QByteArray& bytes) {
             check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write invalid file");
             check(file.write(bytes) == bytes.size(), "write bytes");
@@ -180,8 +189,7 @@ int main()
         check(ProjectFile::save(legacyPath, loaded, loadedBody, error), "save migrated legacy file");
         file.setFileName(legacyPath);
         check(file.open(QIODevice::ReadOnly), "read migrated legacy file");
-        const auto migratedRoot = QJsonDocument::fromJson(file.readAll()).object();
-        file.close();
+        const auto migratedRoot = readManifest(legacyPath);
         check(migratedRoot.value("features").toArray().isEmpty()
                   && migratedRoot.value("body").toArray().size() == 2,
               "migrated save is canonical");

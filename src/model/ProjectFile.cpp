@@ -10,7 +10,9 @@
 #include "operations/PatternFeatures.h"
 #include "operations/ImportedFeature.h"
 #include "model/ShapePayload.h"
+#include "model/ProjectArchive.h"
 #include <QFile>
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -33,6 +35,13 @@ using namespace cad::parametric;
 std::string legacyFeatureId(const Feature& feature, const int index)
 {
     return std::string(feature.legacyIdPrefix()) + std::to_string(index);
+}
+
+QString geometryEntryPath(const std::string& featureId)
+{
+    const auto digest = QCryptographicHash::hash(
+        QByteArray::fromStdString(featureId), QCryptographicHash::Sha256).toHex();
+    return QStringLiteral("geometry/%1.brep").arg(QString::fromLatin1(digest));
 }
 
 void require(bool ok, const char* message)
@@ -828,6 +837,8 @@ bool ProjectFile::save(const QString& path, const Document& document,
 {
     error.clear();
     try {
+        cad::persistence::ProjectArchiveWriter archive;
+        if (!archive.open(path, error)) return false;
         QJsonArray features;
         QJsonArray history;
 
@@ -841,10 +852,22 @@ bool ProjectFile::save(const QString& path, const Document& document,
 
         Body preceding;
         for (const auto& feature : canonical.features()) {
-            history.append(encode(feature, preceding));
+            auto serialized = encode(feature, preceding);
+            if (std::string(feature->typeId()) == "IfcImported") {
+                const auto imported = std::dynamic_pointer_cast<ImportedFeature>(feature);
+                require(static_cast<bool>(imported), "Invalid imported feature instance");
+                const auto entry = geometryEntryPath(feature->id());
+                if (!archive.addEntry(entry,
+                                      cad::persistence::encodeBRepRaw(imported->sourceShape()),
+                                      error)) return false;
+                serialized.insert("shapePayload", QJsonObject{
+                    {"storage", "archive"}, {"path", entry}});
+            }
+            history.append(serialized);
             preceding.addFeature(feature);
         }
         QJsonObject root{{"format", "ParametricCAD"}, {"version", 1},
+            {"storage", "archive"}, {"containerVersion", 1},
             {"features", features}, {"body", history}};
         if (visibilityManager) {
             QJsonArray groups;
@@ -922,12 +945,9 @@ bool ProjectFile::save(const QString& path, const Document& document,
             }
             if (!views.isEmpty()) root.insert("views", views);
         }
-        const QByteArray data = QJsonDocument(root).toJson();
-        QSaveFile file(path);
-        if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
-            error = file.errorString(); return false;
-        }
-        return true;
+        if (!archive.addEntry(QStringLiteral("manifest.json"),
+                              QJsonDocument(root).toJson(), error)) return false;
+        return archive.close(error);
     } catch (const Standard_Failure& e) { error = QString::fromUtf8(e.GetMessageString()); }
       catch (const std::exception& e) { error = QString::fromUtf8(e.what()); }
     return false;
@@ -946,10 +966,22 @@ bool ProjectFile::load(const QString& path, Document& document,
     try {
         QElapsedTimer stageTimer;
         stageTimer.start();
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) { error = file.errorString(); return false; }
-        const auto data = file.readAll();
-        if (file.error() != QFileDevice::NoError) { error = file.errorString(); return false; }
+        std::unique_ptr<cad::persistence::ProjectArchiveReader> archive;
+        QByteArray data;
+        if (cad::persistence::isProjectArchive(path)) {
+            archive = std::make_unique<cad::persistence::ProjectArchiveReader>(path);
+            if (!archive->open(error))
+                throw std::runtime_error(error.isEmpty()
+                    ? "Could not open project archive" : error.toStdString());
+            if (!archive->readEntry(QStringLiteral("manifest.json"), data, error))
+                throw std::runtime_error(error.isEmpty()
+                    ? "Project archive has no manifest.json" : error.toStdString());
+        } else {
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly)) { error = file.errorString(); return false; }
+            data = file.readAll();
+            if (file.error() != QFileDevice::NoError) { error = file.errorString(); return false; }
+        }
         QJsonParseError parseError;
         const auto json = QJsonDocument::fromJson(data, &parseError);
         require(parseError.error == QJsonParseError::NoError && json.isObject(), "Invalid project JSON");
@@ -997,7 +1029,23 @@ bool ProjectFile::load(const QString& path, Document& document,
         for (int index = 0; index < bodyFeatures.size(); ++index) {
             const auto& value = bodyFeatures.at(index);
             require(value.isObject(), "Invalid body feature entry");
-            loadedBody.addFeature(decode(value.toObject(), loadedBody));
+            auto object = value.toObject();
+            if (archive && object.value("type").toString() == "IfcImported"
+                && !object.contains("geometryPayload")) {
+                const auto payload = object.value("shapePayload");
+                require(payload.isObject(), "Missing imported shape payload");
+                const auto payloadObject = payload.toObject();
+                require(payloadObject.value("storage").toString() == "archive"
+                            && payloadObject.value("path").isString(),
+                        "Invalid imported shape payload reference");
+                QByteArray shapeBytes;
+                if (!archive->readEntry(payloadObject.value("path").toString(),
+                                        shapeBytes, error))
+                    throw std::runtime_error(error.isEmpty()
+                        ? "Could not read imported geometry entry" : error.toStdString());
+                object.insert("geometryPayload", QString::fromLatin1(shapeBytes.toBase64()));
+            }
+            loadedBody.addFeature(decode(object, loadedBody));
             if (progress) progress(legacyFeatures.size() + index + 1, totalFeatures);
         }
         if (metrics) metrics->deserializeMilliseconds = stageTimer.elapsed();

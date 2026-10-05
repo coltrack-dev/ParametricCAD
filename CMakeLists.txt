@@ -23,6 +23,10 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Concu
 # Open CASCADE package naming differs between distributions.
 # The official/config package normally exposes OpenCASCADE_* variables.
 find_package(OpenCASCADE REQUIRED)
+find_library(PARAMETRIC_CAD_MINIZIP_LIBRARY NAMES minizip)
+if(NOT PARAMETRIC_CAD_MINIZIP_LIBRARY)
+    message(FATAL_ERROR "libminizip is required for portable .pcad containers")
+endif()
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
     if(NOT PARAMETRIC_CAD_IFCOPENSHELL_ROOT)

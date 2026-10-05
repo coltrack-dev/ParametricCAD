@@ -2,6 +2,7 @@
 #include "model/Document.h"
 #include "model/Body.h"
 #include "model/ProjectFile.h"
+#include "model/ProjectArchive.h"
 #include "application/VisibilityManager.h"
 #include "operations/BoxFeature.h"
 #include "operations/BasicFeatures.h"
@@ -312,11 +313,13 @@ private slots:
         QVERIFY(body.recompute());
         QString error;
         QVERIFY2(ProjectFile::save(path, document, body, error), qPrintable(error));
-        QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        const auto original = file.readAll();
-        file.close();
+        cad::persistence::ProjectArchiveReader archive(path);
+        QString archiveError;
+        QVERIFY(archive.open(archiveError));
+        QByteArray original;
+        QVERIFY(archive.readEntry("manifest.json", original, archiveError));
         auto root = QJsonDocument::fromJson(original).object();
+        QFile file(path);
         root.insert("version", 999);
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
         const auto invalid = QJsonDocument(root).toJson();
@@ -381,10 +384,13 @@ private slots:
         QCOMPARE(loadedManager.effectiveMode(*loadedBody.findFeature("b"), loadedBody),
                  VisibilityMode::Hidden);
 
+        cad::persistence::ProjectArchiveReader archive(path);
+        QString archiveError;
+        QVERIFY(archive.open(archiveError));
+        QByteArray manifest;
+        QVERIFY(archive.readEntry("manifest.json", manifest, archiveError));
+        auto root = QJsonDocument::fromJson(manifest).object();
         QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        auto root = QJsonDocument::fromJson(file.readAll()).object();
-        file.close();
         root.remove("visibility");
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
         const auto oldFormat = QJsonDocument(root).toJson();

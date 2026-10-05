@@ -60,6 +60,7 @@ add_library(model_test_support STATIC
     ../src/model/ProjectFile.cpp
     ../src/commands/FeatureCommands.cpp
     ../src/model/FeatureVisibility.cpp
+    ../src/model/ProjectArchive.cpp
     ../src/model/Document.cpp
     ../src/model/Feature.cpp
     ../src/model/Body.cpp
@@ -85,6 +86,7 @@ if(DEFINED OpenCASCADE_LIBRARY_DIR)
     target_link_directories(model_test_support PUBLIC ${OpenCASCADE_LIBRARY_DIR})
 endif()
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
+    ${PARAMETRIC_CAD_MINIZIP_LIBRARY}
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet TKOffset)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
@@ -105,6 +107,10 @@ target_compile_definitions(project_file_tests PRIVATE
     PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(project_file_tests PRIVATE model_test_support)
 add_test(NAME project_file_tests COMMAND project_file_tests)
+
+add_executable(project_archive_tests project_archive_tests.cpp)
+target_link_libraries(project_archive_tests PRIVATE model_test_support)
+add_test(NAME project_archive_tests COMMAND project_archive_tests)
 
 add_executable(ifc_import_tests ifc_import_tests.cpp)
 target_compile_definitions(ifc_import_tests PRIVATE

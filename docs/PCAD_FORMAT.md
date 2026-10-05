@@ -1,10 +1,11 @@
 # ParametricCAD `.pcad` format
 
-The current format is version 1 UTF-8 JSON. It stores editable parametric
-definitions and selected presentation metadata. Normal parametric features
-are rebuilt from parameters; imported IFC features additionally store a
-portable OCCT B-Rep payload. AIS handles, undo history, selection, hover, and
-active transform state are not stored.
+The logical ParametricCAD schema is version 1. New `.pcad` files use a ZIP
+compatible container with Deflate compression. The container stores a UTF-8
+`manifest.json` plus one raw native OCCT B-Rep entry per imported feature.
+Older version-1 `.pcad` files that are plain UTF-8 JSON remain readable. AIS
+handles, undo history, selection, hover, and active transform state are not
+stored.
 
 ## Root
 
@@ -12,12 +13,28 @@ active transform state are not stored.
 {
   "format": "ParametricCAD",
   "version": 1,
+  "storage": "archive",
+  "containerVersion": 1,
   "features": [],
   "body": [],
   "visibility": {},
   "views": []
 }
 ```
+
+The JSON above is the archive's `manifest.json`. A new file has the logical
+layout:
+
+```text
+model.pcad
+  manifest.json
+  geometry/
+    <sha256(feature-id)>.brep
+```
+
+`storage` and `containerVersion` describe the physical storage layer; they do
+not change the logical model schema version. Archive entry names are generated
+from ParametricCAD feature IDs and are validated on read.
 
 `visibility` and `views` are optional. Old files without them remain valid.
 New saves may omit empty optional arrays/objects.
@@ -42,8 +59,19 @@ registry.
 
 `IfcImported` records contain generic provenance fields (`sourceFormat`,
 `sourceFile`, `ifcGlobalId`, `ifcEntityType`, `ifcBuilding`, and `ifcStorey`)
-and `geometryPayload`. The payload is encoded by `src/model/ShapePayload.*`,
-not by the feature class. `sourceFile` is not a load-time dependency.
+and a `shapePayload` reference:
+
+```json
+"shapePayload": {
+  "storage": "archive",
+  "path": "geometry/<sha256(feature-id)>.brep"
+}
+```
+
+The entry contains raw native B-Rep bytes; it is not Base64 encoded. The
+legacy `geometryPayload` Base64 field is accepted only when loading old plain
+JSON files. `ShapePayload` is the encoding boundary and `sourceFile` is not a
+load-time dependency.
 
 ## Placement and visibility
 
@@ -141,7 +169,8 @@ candidates, or AIS objects. Restoring a view does not recompute the Body.
 
 ## Load and compatibility
 
-`ProjectFile::load()` validates a temporary `Document`, `Body`, and
+`ProjectFile::load()` detects an archive by its ZIP signature, otherwise parses
+the file as legacy plain JSON. It validates a temporary `Document`, `Body`, and
 `VisibilityManager` state. Only successful validation replaces the active
 project. Unknown format versions and unsupported feature types are rejected.
 Missing optional visibility/views metadata defaults to empty state. Saved view

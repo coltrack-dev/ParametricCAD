@@ -2,6 +2,7 @@
 #include "model/Document.h"
 #include "model/Body.h"
 #include "model/ProjectFile.h"
+#include "model/ProjectArchive.h"
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
@@ -167,10 +168,12 @@ private slots:
         QVERIFY(std::abs(area(loadedFace->shape()) - 120) < 1e-8);
         QVERIFY(ProjectFile::save(path, loaded, loadedBody, error));
 
+        cad::persistence::ProjectArchiveReader archive(path);
+        QString archiveError;
+        QVERIFY(archive.open(archiveError));
+        QByteArray validBytes;
+        QVERIFY(archive.readEntry("manifest.json", validBytes, archiveError));
         QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        const auto validBytes = file.readAll();
-        file.close();
         const auto root = QJsonDocument::fromJson(validBytes).object();
         const auto history = root.value("body").toArray();
         QCOMPARE(history[3].toObject().value("sourceFeatureId").toString(), QString("sketch-001"));

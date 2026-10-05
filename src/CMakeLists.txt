@@ -54,6 +54,8 @@ set(PARAMETRIC_CAD_SOURCES
     model/Body.h
     model/ShapePayload.cpp
     model/ShapePayload.h
+    model/ProjectArchive.cpp
+    model/ProjectArchive.h
     operations/BoxFeature.cpp
     operations/BoxFeature.h
     operations/CylinderFeature.cpp
@@ -119,6 +121,7 @@ target_link_libraries(ParametricCAD
         Qt6::OpenGL
         Qt6::OpenGLWidgets
         Qt6::Concurrent
+        ${PARAMETRIC_CAD_MINIZIP_LIBRARY}
 
         # OCCT Foundation
         TKernel

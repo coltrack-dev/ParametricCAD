@@ -70,8 +70,6 @@ void ImportedFeature::writeParameters(QJsonObject& object) const
     object.insert("ifcDescription", ifcDescription_);
     object.insert("ifcBuilding", ifcBuilding_);
     object.insert("ifcStorey", ifcStorey_);
-    object.insert("geometryPayload", QString::fromLatin1(
-        cad::persistence::encodeBRep(sourceShape_)));
 }
 
 } // namespace cad::parametric
