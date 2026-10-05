@@ -20,15 +20,19 @@
                 0
             ],
             "type": "Box",
+            "visible": true,
             "width": 100
         },
         {
+            "constraints": [
+            ],
             "entities": [
                 {
                     "center": [
                         -0.9608941811098575,
                         -0.12533402362302226
                     ],
+                    "id": "entity-cdeabd7f-ea70-414a-851c-b2880a9b4c50",
                     "radius": 9.021341460624177,
                     "type": "Circle"
                 }
@@ -36,13 +40,13 @@
             "frame": {
                 "normal": [
                     0,
-                    -1,
-                    0
+                    0,
+                    1
                 ],
                 "origin": [
-                    50,
                     0,
-                    15
+                    0,
+                    0
                 ],
                 "xDirection": [
                     1,
@@ -51,8 +55,8 @@
                 ],
                 "yDirection": [
                     0,
-                    0,
-                    1
+                    1,
+                    0
                 ]
             },
             "id": "sketch-755093c2-0582-40d3-933d-01d30e65ead6",
@@ -76,6 +80,8 @@
                 "kind": "Face",
                 "signature": {
                     "area": 3000,
+                    "boundingBox": [
+                    ],
                     "centroid": [
                         50,
                         0,
@@ -91,7 +97,8 @@
                 "transientIndex": 3
             },
             "supportType": "Face",
-            "type": "Sketch"
+            "type": "Sketch",
+            "visible": true
         },
         {
             "distance": -13.419599576842572,
@@ -116,7 +123,8 @@
                 0
             ],
             "sourceFeatureId": "sketch-755093c2-0582-40d3-933d-01d30e65ead6",
-            "type": "PushPull"
+            "type": "PushPull",
+            "visible": true
         },
         {
             "distance": -42.48536905906908,
@@ -141,7 +149,8 @@
                 0
             ],
             "sourceFeatureId": "box-21c695ed-4e2d-42d5-ad76-423c8a215a63",
-            "type": "PushPull"
+            "type": "PushPull",
+            "visible": true
         },
         {
             "distance": 22.324603458342107,
@@ -166,7 +175,8 @@
                 0
             ],
             "sourceFeatureId": "pushpull-b5b8274c-19a8-4600-818c-ecaff019b29f",
-            "type": "PushPull"
+            "type": "PushPull",
+            "visible": true
         }
     ],
     "features": [

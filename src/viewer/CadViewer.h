@@ -60,6 +60,12 @@ public:
         Pan
     };
 
+    enum class OrbitMode
+    {
+        Turntable,
+        Free
+    };
+
     enum class StandardView
     {
         Right,
@@ -85,6 +91,8 @@ public:
 
     void setSelectionMode(SelectionMode mode);
     SelectionMode selectionMode() const;
+    void setOrbitMode(OrbitMode mode);
+    OrbitMode orbitMode() const noexcept;
     cad::application::SelectionSnapshot selectionSnapshot() const;
     std::vector<cad::topology::TopologicalReference> captureTopologySelection(
         const cad::parametric::Body& body) const;
@@ -186,6 +194,9 @@ private:
     void updateAxisHover(const QPoint& position);
     void clearAxisHover();
     void setStandardView(StandardView view);
+    void updateOrbitStateFromCamera();
+    void applyTurntableCamera();
+    void orbitTurntable(const QPoint& currentPosition);
 
     QToolBar* toolBar_{nullptr};
     QLabel* xRayStatusLabel_{nullptr};
@@ -196,6 +207,8 @@ private:
     QAction* pushPullAction_{nullptr};
     QAction* transformAction_{nullptr};
     QAction* xRayAction_{nullptr};
+    QAction* turntableOrbitAction_{nullptr};
+    QAction* freeOrbitAction_{nullptr};
 
     Handle(V3d_Viewer) viewer_;
     Handle(V3d_View) view_;
@@ -204,6 +217,9 @@ private:
     QPoint lastMousePosition_;
     QPoint mousePressPosition_;
     InteractionMode interactionMode_{InteractionMode::None};
+    OrbitMode orbitMode_{OrbitMode::Turntable};
+    double orbitAzimuth_{0.0};
+    double orbitElevation_{0.0};
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
 

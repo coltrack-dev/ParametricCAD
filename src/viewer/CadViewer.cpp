@@ -81,6 +81,9 @@ constexpr double AxisIndicatorScale = 0.12;
 constexpr double AxisIndicatorArm = 0.65;
 constexpr double AxisIndicatorHitRadius = 0.30;
 constexpr double SketchTrimHitPixels = 8.0;
+constexpr double Pi = 3.14159265358979323846;
+constexpr double OrbitElevationLimit = 89.0 * Pi / 180.0;
+constexpr double OrbitRadiansPerPixel = 0.01;
 
 bool makeViewRay(
     const Handle(V3d_View)& view,
@@ -359,6 +362,22 @@ void CadViewer::setupToolBar()
         setXRayEnabled(checked);
     });
 
+    toolBar_->addSeparator();
+    auto* orbitActions = new QActionGroup(toolBar_);
+    orbitActions->setExclusive(true);
+    turntableOrbitAction_ = toolBar_->addAction("Locked Z");
+    turntableOrbitAction_->setCheckable(true);
+    orbitActions->addAction(turntableOrbitAction_);
+    connect(turntableOrbitAction_, &QAction::triggered, this, [this]() {
+        setOrbitMode(OrbitMode::Turntable);
+    });
+    freeOrbitAction_ = toolBar_->addAction("Free Orbit");
+    freeOrbitAction_->setCheckable(true);
+    orbitActions->addAction(freeOrbitAction_);
+    connect(freeOrbitAction_, &QAction::triggered, this, [this]() {
+        setOrbitMode(OrbitMode::Free);
+    });
+
     xRayStatusLabel_ = new QLabel("X-RAY ON", toolBar_);
     xRayStatusLabel_->setStyleSheet(
         "QLabel {"
@@ -406,6 +425,12 @@ void CadViewer::syncToolBarState()
     }
     if (xRayAction_ != nullptr) {
         xRayAction_->setChecked(xRayEnabled_);
+    }
+    if (turntableOrbitAction_ != nullptr) {
+        turntableOrbitAction_->setChecked(orbitMode_ == OrbitMode::Turntable);
+    }
+    if (freeOrbitAction_ != nullptr) {
+        freeOrbitAction_->setChecked(orbitMode_ == OrbitMode::Free);
     }
     if (xRayStatusLabel_ != nullptr) {
         xRayStatusLabel_->setVisible(xRayEnabled_);
@@ -1541,6 +1566,84 @@ CadViewer::SelectionMode CadViewer::selectionMode() const
     return selectionMode_;
 }
 
+void CadViewer::setOrbitMode(const OrbitMode mode)
+{
+    if (orbitMode_ == mode) return;
+
+    if (mode == OrbitMode::Turntable) {
+        updateOrbitStateFromCamera();
+        applyTurntableCamera();
+        invalidateSnapProjectionCache("CAMERA_CHANGED: locked-Z orbit mode");
+        if (view_) view_->Redraw();
+        if (transformMode_) updateTransformGizmo();
+    }
+
+    orbitMode_ = mode;
+    syncToolBarState();
+}
+
+CadViewer::OrbitMode CadViewer::orbitMode() const noexcept
+{
+    return orbitMode_;
+}
+
+void CadViewer::updateOrbitStateFromCamera()
+{
+    if (!view_ || view_->Camera().IsNull()) return;
+
+    const gp_Dir direction = view_->Camera()->Direction();
+    const double horizontal = std::hypot(direction.X(), direction.Y());
+    if (horizontal > 1.0e-9) {
+        orbitAzimuth_ = std::atan2(direction.Y(), direction.X());
+    }
+    orbitElevation_ = std::asin(std::clamp(direction.Z(), -1.0, 1.0));
+}
+
+void CadViewer::applyTurntableCamera()
+{
+    if (!view_ || view_->Camera().IsNull()) return;
+
+    const auto camera = view_->Camera();
+    const gp_Pnt center = camera->Center();
+    const double distance = std::max(camera->Distance(), 1.0e-6);
+    const double elevation = std::clamp(
+        orbitElevation_, -OrbitElevationLimit, OrbitElevationLimit);
+    const double horizontal = std::cos(elevation);
+    const gp_Dir direction(
+        horizontal * std::cos(orbitAzimuth_),
+        horizontal * std::sin(orbitAzimuth_),
+        std::sin(elevation));
+
+    gp_Pnt eye = center;
+    eye.Translate(-gp_Vec(direction) * distance);
+    camera->SetEyeAndCenter(eye, center);
+
+    gp_Vec up(0.0, 0.0, 1.0);
+    const gp_Vec directionVector(direction);
+    up.SetCoord(
+        up.X() - directionVector.X() * direction.Z(),
+        up.Y() - directionVector.Y() * direction.Z(),
+        up.Z() - directionVector.Z() * direction.Z());
+    if (up.Magnitude() <= 1.0e-9) {
+        up = gp_Vec(0.0, 1.0, 0.0);
+    }
+    camera->SetUp(gp_Dir(up));
+}
+
+void CadViewer::orbitTurntable(const QPoint& currentPosition)
+{
+    const int deltaX = currentPosition.x() - lastMousePosition_.x();
+    const int deltaY = lastMousePosition_.y() - currentPosition.y();
+    orbitAzimuth_ += static_cast<double>(deltaX) * OrbitRadiansPerPixel;
+    orbitElevation_ = std::clamp(
+        orbitElevation_ + static_cast<double>(deltaY) * OrbitRadiansPerPixel,
+        -OrbitElevationLimit, OrbitElevationLimit);
+    applyTurntableCamera();
+    invalidateSnapProjectionCache("CAMERA_CHANGED: locked-Z orbit");
+    view_->Redraw();
+    if (transformMode_) updateTransformGizmo();
+}
+
 cad::application::SelectionSnapshot CadViewer::selectionSnapshot() const
 {
     return selectionState_.snapshot();
@@ -2193,6 +2296,20 @@ void CadViewer::setStandardView(const StandardView view)
     eye.Translate(-gp_Vec(direction) * distance);
     camera->SetEyeAndCenter(eye, center);
     camera->SetUp(up);
+    switch (view) {
+    case StandardView::Right:
+        orbitAzimuth_ = Pi;
+        orbitElevation_ = 0.0;
+        break;
+    case StandardView::Front:
+        orbitAzimuth_ = -Pi / 2.0;
+        orbitElevation_ = 0.0;
+        break;
+    case StandardView::Top:
+        orbitAzimuth_ = 0.0;
+        orbitElevation_ = -Pi / 2.0;
+        break;
+    }
     invalidateSnapProjectionCache("CAMERA_CHANGED: standard view");
     view_->Redraw();
     if (transformMode_) {
@@ -2314,10 +2431,14 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         event->button() == Qt::MiddleButton &&
         !event->modifiers().testFlag(Qt::ShiftModifier)) {
 
-        view_->StartRotation(
-            lastMousePosition_.x(),
-            lastMousePosition_.y()
-        );
+        if (orbitMode_ == OrbitMode::Free) {
+            view_->StartRotation(
+                lastMousePosition_.x(),
+                lastMousePosition_.y()
+            );
+        } else {
+            updateOrbitStateFromCamera();
+        }
         invalidateSnapProjectionCache("CAMERA_CHANGED: rotation started");
     }
 
@@ -2447,11 +2568,15 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
             );
             invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         } else {
-            view_->Rotation(
-                currentPosition.x(),
-                currentPosition.y()
-            );
-            invalidateSnapProjectionCache("CAMERA_CHANGED: orbit");
+            if (orbitMode_ == OrbitMode::Free) {
+                view_->Rotation(
+                    currentPosition.x(),
+                    currentPosition.y()
+                );
+                invalidateSnapProjectionCache("CAMERA_CHANGED: orbit");
+            } else {
+                orbitTurntable(currentPosition);
+            }
         }
 
     } else if (event->buttons() == Qt::NoButton) {

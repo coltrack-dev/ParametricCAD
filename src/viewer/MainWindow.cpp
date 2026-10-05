@@ -1279,7 +1279,8 @@ void MainWindow::newDocument()
     project_.newProject();
     presenter_->clear();
     applySelection({});
-    featureEditorPanel_->refresh();
+    featureEditorPanel_->setFeatures(modeling_.features());
+    featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     currentFile_.clear();
     updateTitle();
 }
@@ -1460,6 +1461,8 @@ void MainWindow::processProjectLoadPresentationChunk()
     viewer_->setHiddenFeatures(hiddenIds);
     viewer_->restoreSelection(body, {}, {});
     viewer_->endBulkUpdate();
+    featureEditorPanel_->setFeatures(modeling_.features());
+    featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     const auto finalSync = finalSyncTimer.elapsed();
     QElapsedTimer fitTimer;
     fitTimer.start();

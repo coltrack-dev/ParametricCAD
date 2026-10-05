@@ -1,9 +1,12 @@
 #include "viewer/FeatureEditorPanel.h"
 #include "application/ModelingController.h"
+#include "application/ProjectController.h"
 #include <QtTest/QtTest>
 #include <QAction>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
+#include <QTemporaryDir>
+#include <QTreeWidget>
 #include <QUndoStack>
 
 using namespace cad::application;
@@ -145,6 +148,34 @@ private slots:
         QVERIFY(controller.undoStack().isClean());
         controller.undoStack().clear();
         QVERIFY(!undo->isEnabled() && !redo->isEnabled());
+    }
+
+    void loadedBodyAndPanelTreeHaveSameFeatureCount()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("project.pcad");
+
+        ModelingController source;
+        QVERIFY(source.createBox().success);
+        QVERIFY(source.createCylinder().success);
+        QString error;
+        QVERIFY(ProjectController(source).save(path, error));
+
+        ModelingController loadedController;
+        auto loaded = ProjectController::loadProject(path);
+        QVERIFY2(loaded.success(), qPrintable(loaded.error));
+        const auto expected = loaded.body.features().size();
+        loadedController.replaceProject(std::move(loaded.document), std::move(loaded.body));
+
+        FeatureEditorPanel panel;
+        panel.setService(&loadedController);
+        panel.setFeatures(loadedController.features());
+
+        const auto trees = panel.findChildren<QTreeWidget*>();
+        QCOMPARE(trees.size(), 1);
+        QCOMPARE(trees.front()->topLevelItemCount(), 1);
+        QCOMPARE(static_cast<std::size_t>(trees.front()->topLevelItem(0)->childCount()), expected);
     }
 };
 
