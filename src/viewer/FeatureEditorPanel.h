@@ -32,6 +32,7 @@ public:
     void setFeatures(std::vector<cad::application::FeatureDescriptor> features);
     void setVisibilityGroups(std::vector<cad::application::VisibilityGroup> groups);
     void setVisibilityFilters(cad::application::VisibilityFilterState filters);
+    void setVisibilityPresets(std::vector<cad::application::VisibilityPreset> presets);
     void setActionState(const cad::application::ModelingActionState& state);
     void scheduleRefresh();
     void commitPendingEdits();
@@ -63,6 +64,12 @@ public:
                            std::optional<cad::application::VisibilityMode>)> role,
         std::function<void()> clear,
         std::function<void(cad::application::VisibilityCategory)> showOnlyCategory);
+    void setPresetHandlers(
+        std::function<void()> saveCurrent,
+        std::function<void(const QString&)> apply,
+        std::function<void(const QString&)> update,
+        std::function<void(const QString&)> rename,
+        std::function<void(const QString&)> remove);
     void refresh();
     QStringList selectedFeatureIds() const;
     void selectFeatures(const QStringList& featureIds);
@@ -111,6 +118,7 @@ private:
     std::vector<cad::application::FeatureDescriptor> features_;
     std::vector<cad::application::VisibilityGroup> groups_;
     cad::application::VisibilityFilterState filters_;
+    std::vector<cad::application::VisibilityPreset> presets_;
     bool canDelete_{false};
     bool canCreateFace_{false};
     bool canExtrude_{false};
@@ -156,4 +164,9 @@ private:
                        std::optional<cad::application::VisibilityMode>)> roleFilterHandler_;
     std::function<void()> clearFiltersHandler_;
     std::function<void(cad::application::VisibilityCategory)> showOnlyCategoryHandler_;
+    std::function<void()> savePresetHandler_;
+    std::function<void(const QString&)> applyPresetHandler_;
+    std::function<void(const QString&)> updatePresetHandler_;
+    std::function<void(const QString&)> renamePresetHandler_;
+    std::function<void(const QString&)> deletePresetHandler_;
 };

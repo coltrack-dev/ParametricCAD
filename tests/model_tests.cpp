@@ -350,6 +350,7 @@ private slots:
         body.addFeature(a);
         body.addFeature(b);
         QVERIFY(body.recompute());
+        QString error;
 
         VisibilityManager manager;
         const auto parent = manager.createGroup("Parent");
@@ -360,8 +361,9 @@ private slots:
         QVERIFY(manager.setGroupVisibility(*child, VisibilityMode::Hidden));
         QVERIFY(manager.setTypeFilter("FutureCustom", VisibilityMode::Ghosted));
         QVERIFY(manager.setRoleFilter(FeatureRole::Generic, VisibilityMode::Visible));
+        std::string presetError;
+        QVERIFY(manager.saveCurrentAsPreset("Saved View", body, presetError));
 
-        QString error;
         const auto path = directory.filePath("groups.pcad");
         QVERIFY2(ProjectFile::save(path, document, body, error, &manager), qPrintable(error));
         VisibilityManager loadedManager;
@@ -370,6 +372,8 @@ private slots:
         QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error,
             {}, nullptr, true, &loadedManager), qPrintable(error));
         QCOMPARE(loadedManager.groups().size(), std::size_t{2});
+        QCOMPARE(loadedManager.presets().size(), std::size_t{1});
+        QCOMPARE(loadedManager.presets().front().name, std::string("Saved View"));
         QCOMPARE(loadedManager.filters().typeModes.at("FutureCustom"), VisibilityMode::Ghosted);
         QCOMPARE(loadedManager.filters().roleModes.at(FeatureRole::Generic), VisibilityMode::Visible);
         QCOMPARE(loadedManager.effectiveMode(*loadedBody.findFeature("a"), loadedBody),
@@ -391,6 +395,7 @@ private slots:
             {}, nullptr, true, &oldFormatManager), qPrintable(error));
         QVERIFY(oldFormatManager.groups().empty());
         QVERIFY(oldFormatManager.filters().empty());
+        QVERIFY(oldFormatManager.presets().empty());
     }
 
     void visibilityFiltersComposeWithoutRecompute()
@@ -452,6 +457,53 @@ private slots:
         QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Visible);
         QVERIFY(box->state() == FeatureState::UpToDate);
         QVERIFY(box->shape().IsSame(originalShape));
+    }
+
+    void visibilityPresetsCaptureApplyAndIgnoreTemporaryState()
+    {
+        Body body;
+        auto box = std::make_shared<BoxParametricFeature>("box", 2, 2, 2);
+        body.addFeature(box);
+        QVERIFY(body.recompute());
+        VisibilityManager manager;
+        const auto group = manager.createGroup("Roof");
+        QVERIFY(group);
+        QVERIFY(manager.addFeaturesToGroup(*group, {"box"}));
+        QVERIFY(manager.setGroupVisibility(*group, VisibilityMode::Hidden));
+        QVERIFY(manager.setTypeFilter("Box", VisibilityMode::Hidden));
+        box->setUserVisible(false);
+        manager.setIsolatedFeatures({"box"});
+        manager.ghostOthers({"box"});
+
+        std::string error;
+        QVERIFY(manager.saveCurrentAsPreset("Roof Editing", body, error));
+        QCOMPARE(manager.presets().size(), std::size_t{1});
+        QVERIFY(!manager.saveCurrentAsPreset("roof editing", body, error));
+        QVERIFY(!manager.saveCurrentAsPreset("", body, error));
+
+        QVERIFY(manager.setGroupVisibility(*group, VisibilityMode::Visible));
+        manager.clearFilters();
+        box->setUserVisible(true);
+        QVERIFY(manager.applyPreset(manager.presets().front().id, body, error));
+        QVERIFY(!manager.isolationActive());
+        QCOMPARE(manager.filters().typeModes.at("Box"), VisibilityMode::Hidden);
+        QVERIFY(!box->userVisible());
+        QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Hidden);
+
+        QVERIFY(manager.renamePreset(manager.presets().front().id, "Roof Updated", error));
+        QVERIFY(!manager.renamePreset(manager.presets().front().id, "", error));
+        QVERIFY(manager.updatePreset(manager.presets().front().id, body));
+
+        auto newBox = std::make_shared<BoxParametricFeature>("new-box", 3, 3, 3);
+        body.addFeature(newBox);
+        QVERIFY(body.recompute());
+        QCOMPARE(manager.effectiveMode(*newBox, body), VisibilityMode::Hidden);
+
+        QVERIFY(manager.removeGroup(*group));
+        QVERIFY(manager.applyPreset(manager.presets().front().id, body, error));
+        QVERIFY(manager.presets().front().configuration.groupModes.contains(*group));
+        QVERIFY(manager.deletePreset(manager.presets().front().id));
+        QVERIFY(manager.presets().empty());
     }
 };
 

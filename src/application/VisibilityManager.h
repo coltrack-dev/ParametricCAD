@@ -59,6 +59,24 @@ struct VisibilityFilterState
     bool operator==(const VisibilityFilterState&) const = default;
 };
 
+struct VisibilityConfiguration
+{
+    std::unordered_map<std::string, VisibilityMode> groupModes;
+    VisibilityFilterState filters;
+    std::unordered_map<std::string, bool> featureVisibility;
+
+    bool operator==(const VisibilityConfiguration&) const = default;
+};
+
+struct VisibilityPreset
+{
+    std::string id;
+    std::string name;
+    VisibilityConfiguration configuration;
+
+    bool operator==(const VisibilityPreset&) const = default;
+};
+
 std::optional<VisibilityCategory> visibilityCategoryFor(
     const cad::parametric::ParametricFeature& feature);
 const char* visibilityCategoryId(VisibilityCategory category) noexcept;
@@ -101,6 +119,27 @@ public:
     const VisibilityFilterState& filters() const noexcept;
     bool replaceFilters(VisibilityFilterState filters, std::string& error);
 
+    std::optional<std::string> createPreset(
+        const std::string& name, const cad::parametric::Body& body);
+    bool saveCurrentAsPreset(const std::string& name,
+                             const cad::parametric::Body& body,
+                             std::string& error);
+    bool updatePreset(const std::string& presetId,
+                      const cad::parametric::Body& body);
+    bool renamePreset(const std::string& presetId, const std::string& name,
+                      std::string& error);
+    bool deletePreset(const std::string& presetId);
+    bool applyPreset(const std::string& presetId,
+                     cad::parametric::Body& body,
+                     std::string& error);
+    std::vector<VisibilityPreset> presets() const;
+    bool replacePresets(std::vector<VisibilityPreset> presets, std::string& error);
+    VisibilityConfiguration captureConfiguration(
+        const cad::parametric::Body& body) const;
+    bool applyConfiguration(const VisibilityConfiguration& configuration,
+                            cad::parametric::Body& body,
+                            std::string& error);
+
     VisibilityMode effectiveMode(
         const cad::parametric::ParametricFeature& feature,
         const cad::parametric::Body& body) const;
@@ -125,6 +164,8 @@ private:
     std::set<std::string> ghostedSelectionIds_;
     std::unordered_map<std::string, VisibilityGroup> groups_;
     VisibilityFilterState filters_;
+    std::unordered_map<std::string, VisibilityPreset> presets_;
+    std::uint64_t nextPresetSequence_{1};
     std::uint64_t nextGroupSequence_{1};
 };
 

@@ -103,6 +103,14 @@ private:
         cad::application::VisibilityFilterState before,
         cad::application::VisibilityFilterState after,
         const QString& text);
+    void commitVisibilityPresets(
+        std::vector<cad::application::VisibilityPreset> before,
+        std::vector<cad::application::VisibilityPreset> after,
+        const QString& text);
+    void commitVisibilityConfiguration(
+        cad::application::VisibilityConfiguration before,
+        cad::application::VisibilityConfiguration after,
+        const QString& text);
 
     cad::application::ModelingController modeling_;
     cad::application::VisibilityManager visibilityManager_;

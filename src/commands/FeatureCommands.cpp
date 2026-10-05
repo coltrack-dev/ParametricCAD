@@ -365,6 +365,62 @@ void SetVisibilityFiltersCommand::redo()
     apply(after_);
 }
 
+SetVisibilityPresetsCommand::SetVisibilityPresetsCommand(
+    application::VisibilityManager& visibilityManager,
+    std::vector<application::VisibilityPreset> before,
+    std::vector<application::VisibilityPreset> after,
+    const QString& text)
+    : QUndoCommand(text), visibilityManager_(visibilityManager),
+      before_(std::move(before)), after_(std::move(after))
+{
+}
+
+void SetVisibilityPresetsCommand::apply(
+    const std::vector<application::VisibilityPreset>& presets)
+{
+    std::string error;
+    if (!visibilityManager_.replacePresets(presets, error)) throw std::runtime_error(error);
+}
+
+void SetVisibilityPresetsCommand::undo()
+{
+    apply(before_);
+}
+
+void SetVisibilityPresetsCommand::redo()
+{
+    apply(after_);
+}
+
+SetVisibilityConfigurationCommand::SetVisibilityConfigurationCommand(
+    application::VisibilityManager& visibilityManager,
+    parametric::Body& body,
+    application::VisibilityConfiguration before,
+    application::VisibilityConfiguration after,
+    const QString& text)
+    : QUndoCommand(text), visibilityManager_(visibilityManager), body_(body),
+      before_(std::move(before)), after_(std::move(after))
+{
+}
+
+void SetVisibilityConfigurationCommand::apply(
+    const application::VisibilityConfiguration& configuration)
+{
+    std::string error;
+    if (!visibilityManager_.applyConfiguration(configuration, body_, error))
+        throw std::runtime_error(error);
+}
+
+void SetVisibilityConfigurationCommand::undo()
+{
+    apply(before_);
+}
+
+void SetVisibilityConfigurationCommand::redo()
+{
+    apply(after_);
+}
+
 void AddFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());

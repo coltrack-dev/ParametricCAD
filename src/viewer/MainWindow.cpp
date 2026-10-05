@@ -322,6 +322,60 @@ void MainWindow::createParametricPanel()
             const auto after = visibilityManager_.filters();
             if (!(before == after)) commitVisibilityFilters(before, after, "Show Only Category");
         });
+    featureEditorPanel_->setPresetHandlers(
+        [this]() {
+            bool ok = false;
+            const auto name = QInputDialog::getText(this, "Save Visibility Preset",
+                "Name:", QLineEdit::Normal, {}, &ok);
+            if (!ok || name.trimmed().isEmpty()) return;
+            const auto before = visibilityManager_.presets();
+            std::string error;
+            if (visibilityManager_.saveCurrentAsPreset(
+                name.trimmed().toStdString(), modeling_.body(), error)) {
+                commitVisibilityPresets(before, visibilityManager_.presets(),
+                    "Save Visibility Preset");
+            } else {
+                statusBar()->showMessage(QString::fromStdString(error), 3000);
+            }
+        },
+        [this](const QString& presetId) {
+            const auto before = visibilityManager_.captureConfiguration(modeling_.body());
+            std::string error;
+            if (visibilityManager_.applyPreset(presetId.toStdString(), modeling_.body(), error)) {
+                commitVisibilityConfiguration(before,
+                    visibilityManager_.captureConfiguration(modeling_.body()),
+                    "Apply Visibility Preset");
+            } else {
+                statusBar()->showMessage(QString::fromStdString(error), 3000);
+            }
+        },
+        [this](const QString& presetId) {
+            const auto before = visibilityManager_.presets();
+            if (visibilityManager_.updatePreset(presetId.toStdString(), modeling_.body()))
+                commitVisibilityPresets(before, visibilityManager_.presets(),
+                    "Update Visibility Preset");
+        },
+        [this](const QString& presetId) {
+            bool ok = false;
+            const auto name = QInputDialog::getText(this, "Rename Visibility Preset",
+                "Name:", QLineEdit::Normal, {}, &ok);
+            if (!ok || name.trimmed().isEmpty()) return;
+            const auto before = visibilityManager_.presets();
+            std::string error;
+            if (visibilityManager_.renamePreset(presetId.toStdString(),
+                name.trimmed().toStdString(), error)) {
+                commitVisibilityPresets(before, visibilityManager_.presets(),
+                    "Rename Visibility Preset");
+            } else {
+                statusBar()->showMessage(QString::fromStdString(error), 3000);
+            }
+        },
+        [this](const QString& presetId) {
+            const auto before = visibilityManager_.presets();
+            if (visibilityManager_.deletePreset(presetId.toStdString()))
+                commitVisibilityPresets(before, visibilityManager_.presets(),
+                    "Delete Visibility Preset");
+        });
     featureEditorPanel_->setGroupHandlers(
         [this](const QStringList& featureIds) {
             bool ok = false;
@@ -408,12 +462,31 @@ void MainWindow::commitVisibilityFilters(
         visibilityManager_, std::move(before), std::move(after), text));
 }
 
+void MainWindow::commitVisibilityPresets(
+    std::vector<cad::application::VisibilityPreset> before,
+    std::vector<cad::application::VisibilityPreset> after,
+    const QString& text)
+{
+    modeling_.undoStack().push(new cad::commands::SetVisibilityPresetsCommand(
+        visibilityManager_, std::move(before), std::move(after), text));
+}
+
+void MainWindow::commitVisibilityConfiguration(
+    cad::application::VisibilityConfiguration before,
+    cad::application::VisibilityConfiguration after,
+    const QString& text)
+{
+    modeling_.undoStack().push(new cad::commands::SetVisibilityConfigurationCommand(
+        visibilityManager_, modeling_.body(), std::move(before), std::move(after), text));
+}
+
 void MainWindow::refreshModelView(const bool fitView)
 {
     const auto result = presenter_->refreshModel();
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
+    featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
     // ModelPresenter restores the OCCT selection, including topology
     // references. Do not select feature objects again here: that would
     // discard restored face/edge/vertex selection.
@@ -435,6 +508,7 @@ void MainWindow::refreshVisibilityView()
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
+    featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
     applySelectionSnapshot(viewer_->selectionSnapshot(), false);
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (!activeSketchId_.empty()) {
@@ -1457,6 +1531,7 @@ void MainWindow::newDocument()
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
+    featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     currentFile_.clear();
     updateTitle();
@@ -1639,6 +1714,7 @@ void MainWindow::processProjectLoadPresentationChunk()
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
+    featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     const auto finalSync = finalSyncTimer.elapsed();
     QElapsedTimer fitTimer;

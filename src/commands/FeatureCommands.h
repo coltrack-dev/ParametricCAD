@@ -276,6 +276,44 @@ private:
     application::VisibilityFilterState after_;
 };
 
+class SetVisibilityPresetsCommand final : public QUndoCommand
+{
+public:
+    SetVisibilityPresetsCommand(
+        application::VisibilityManager& visibilityManager,
+        std::vector<application::VisibilityPreset> before,
+        std::vector<application::VisibilityPreset> after,
+        const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const std::vector<application::VisibilityPreset>& presets);
+    application::VisibilityManager& visibilityManager_;
+    std::vector<application::VisibilityPreset> before_;
+    std::vector<application::VisibilityPreset> after_;
+};
+
+class SetVisibilityConfigurationCommand final : public QUndoCommand
+{
+public:
+    SetVisibilityConfigurationCommand(
+        application::VisibilityManager& visibilityManager,
+        parametric::Body& body,
+        application::VisibilityConfiguration before,
+        application::VisibilityConfiguration after,
+        const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const application::VisibilityConfiguration& configuration);
+    application::VisibilityManager& visibilityManager_;
+    parametric::Body& body_;
+    application::VisibilityConfiguration before_;
+    application::VisibilityConfiguration after_;
+};
+
 class RemoveFeatureCommand final : public QUndoCommand
 {
 public:

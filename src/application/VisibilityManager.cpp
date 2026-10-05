@@ -5,6 +5,7 @@
 #include "model/ParametricFeature.h"
 
 #include <algorithm>
+#include <cctype>
 #include <utility>
 
 namespace cad::application {
@@ -71,6 +72,17 @@ std::vector<std::string> knownVisibilityTypeIds()
             "LinearPattern", "PathPattern"};
 }
 
+namespace {
+std::string normalizedName(const std::string& name)
+{
+    std::string result;
+    result.reserve(name.size());
+    for (const unsigned char character : name)
+        result.push_back(static_cast<char>(std::tolower(character)));
+    return result;
+}
+}
+
 void VisibilityManager::setIsolatedFeatures(const std::vector<std::string>& featureIds)
 {
     isolatedFeatureIds_.clear();
@@ -104,7 +116,9 @@ void VisibilityManager::clear()
     clearGhosting();
     groups_.clear();
     clearFilters();
+    presets_.clear();
     nextGroupSequence_ = 1;
+    nextPresetSequence_ = 1;
 }
 
 std::optional<std::string> VisibilityManager::createGroup(
@@ -288,6 +302,156 @@ bool VisibilityManager::replaceFilters(
     return true;
 }
 
+VisibilityConfiguration VisibilityManager::captureConfiguration(
+    const cad::parametric::Body& body) const
+{
+    VisibilityConfiguration configuration;
+    for (const auto& [id, group] : groups_)
+        configuration.groupModes.emplace(id, group.mode);
+    configuration.filters = filters_;
+    for (const auto& feature : body.features())
+        configuration.featureVisibility.emplace(feature->id(), feature->userVisible());
+    return configuration;
+}
+
+bool VisibilityManager::applyConfiguration(
+    const VisibilityConfiguration& configuration,
+    cad::parametric::Body& body,
+    std::string& error)
+{
+    error.clear();
+    if (!replaceFilters(configuration.filters, error)) return false;
+    for (auto& [id, group] : groups_) {
+        const auto found = configuration.groupModes.find(id);
+        group.mode = found == configuration.groupModes.end()
+            ? VisibilityMode::Visible : found->second;
+    }
+    for (const auto& feature : body.features()) {
+        const auto found = configuration.featureVisibility.find(feature->id());
+        feature->setUserVisible(found == configuration.featureVisibility.end()
+            ? true : found->second);
+    }
+    return true;
+}
+
+bool VisibilityManager::saveCurrentAsPreset(
+    const std::string& name, const cad::parametric::Body& body, std::string& error)
+{
+    error.clear();
+    if (name.empty()) {
+        error = "Visibility preset name cannot be empty";
+        return false;
+    }
+    const auto normalized = normalizedName(name);
+    for (const auto& [id, preset] : presets_) {
+        if (normalizedName(preset.name) == normalized) {
+            error = "A visibility preset with that name already exists";
+            return false;
+        }
+    }
+    std::string id;
+    do {
+        id = "preset-" + std::to_string(nextPresetSequence_++);
+    } while (presets_.contains(id));
+    presets_.emplace(id, VisibilityPreset{id, name, captureConfiguration(body)});
+    return true;
+}
+
+std::optional<std::string> VisibilityManager::createPreset(
+    const std::string& name, const cad::parametric::Body& body)
+{
+    std::string error;
+    if (!saveCurrentAsPreset(name, body, error)) return {};
+    for (const auto& [id, preset] : presets_) {
+        if (preset.name == name) return id;
+    }
+    return {};
+}
+
+bool VisibilityManager::updatePreset(
+    const std::string& presetId, const cad::parametric::Body& body)
+{
+    const auto found = presets_.find(presetId);
+    if (found == presets_.end()) return false;
+    found->second.configuration = captureConfiguration(body);
+    return true;
+}
+
+bool VisibilityManager::renamePreset(
+    const std::string& presetId, const std::string& name, std::string& error)
+{
+    error.clear();
+    if (name.empty()) {
+        error = "Visibility preset name cannot be empty";
+        return false;
+    }
+    const auto found = presets_.find(presetId);
+    if (found == presets_.end()) return false;
+    const auto normalized = normalizedName(name);
+    for (const auto& [id, preset] : presets_) {
+        if (id != presetId && normalizedName(preset.name) == normalized) {
+            error = "A visibility preset with that name already exists";
+            return false;
+        }
+    }
+    found->second.name = name;
+    return true;
+}
+
+bool VisibilityManager::deletePreset(const std::string& presetId)
+{
+    return presets_.erase(presetId) != 0;
+}
+
+bool VisibilityManager::applyPreset(
+    const std::string& presetId, cad::parametric::Body& body, std::string& error)
+{
+    const auto found = presets_.find(presetId);
+    if (found == presets_.end()) {
+        error = "Visibility preset does not exist";
+        return false;
+    }
+    clearIsolation();
+    clearGhosting();
+    return applyConfiguration(found->second.configuration, body, error);
+}
+
+std::vector<VisibilityPreset> VisibilityManager::presets() const
+{
+    std::vector<VisibilityPreset> result;
+    result.reserve(presets_.size());
+    for (const auto& [id, preset] : presets_) result.push_back(preset);
+    std::sort(result.begin(), result.end(),
+        [](const auto& first, const auto& second) { return first.id < second.id; });
+    return result;
+}
+
+bool VisibilityManager::replacePresets(
+    std::vector<VisibilityPreset> presets, std::string& error)
+{
+    error.clear();
+    std::unordered_map<std::string, VisibilityPreset> replacement;
+    std::set<std::string> names;
+    for (auto& preset : presets) {
+        const auto normalized = normalizedName(preset.name);
+        if (preset.id.empty() || preset.name.empty() || replacement.contains(preset.id)
+            || !names.insert(normalized).second) {
+            error = "Invalid, duplicate, or empty visibility preset";
+            return false;
+        }
+        for (const auto& [typeId, mode] : preset.configuration.filters.typeModes) {
+            if (typeId.empty()) {
+                error = "Visibility preset contains an empty type filter";
+                return false;
+            }
+        }
+        replacement.emplace(preset.id, std::move(preset));
+    }
+    presets_ = std::move(replacement);
+    nextPresetSequence_ = 1;
+    return true;
+}
+
 VisibilityMode VisibilityManager::moreRestrictive(
     const VisibilityMode first, const VisibilityMode second)
 {
@@ -398,7 +562,7 @@ VisibilityProjection VisibilityManager::projection(
     }
     for (const auto& feature : body.features()) {
         result.push_back({feature->id(),
-            modeForFeature(*feature, hiddenFeatureSet, groupModes, filters_)});
+    modeForFeature(*feature, hiddenFeatureSet, groupModes, filters_)});
     }
     return result;
 }

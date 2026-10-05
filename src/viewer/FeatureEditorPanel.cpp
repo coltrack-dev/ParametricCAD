@@ -40,6 +40,8 @@ constexpr int GroupIdRole = Qt::UserRole + 2;
 constexpr int FilterKindRole = Qt::UserRole + 3;
 constexpr int FilterKeyRole = Qt::UserRole + 4;
 constexpr int FilterRootRole = Qt::UserRole + 5;
+constexpr int PresetIdRole = Qt::UserRole + 6;
+constexpr int PresetRootRole = Qt::UserRole + 7;
 
 QString groupModeText(const cad::application::VisibilityMode mode)
 {
@@ -107,6 +109,13 @@ void FeatureEditorPanel::setVisibilityFilters(
     refresh();
 }
 
+void FeatureEditorPanel::setVisibilityPresets(
+    std::vector<cad::application::VisibilityPreset> presets)
+{
+    presets_ = std::move(presets);
+    refresh();
+}
+
 void FeatureEditorPanel::setGroupHandlers(
     std::function<void(const QStringList&)> createGroup,
     std::function<void(const QString&, cad::application::VisibilityMode)> setVisibility,
@@ -138,6 +147,20 @@ void FeatureEditorPanel::setFilterHandlers(
     roleFilterHandler_ = std::move(role);
     clearFiltersHandler_ = std::move(clear);
     showOnlyCategoryHandler_ = std::move(showOnlyCategory);
+}
+
+void FeatureEditorPanel::setPresetHandlers(
+    std::function<void()> saveCurrent,
+    std::function<void(const QString&)> apply,
+    std::function<void(const QString&)> update,
+    std::function<void(const QString&)> rename,
+    std::function<void(const QString&)> remove)
+{
+    savePresetHandler_ = std::move(saveCurrent);
+    applyPresetHandler_ = std::move(apply);
+    updatePresetHandler_ = std::move(update);
+    renamePresetHandler_ = std::move(rename);
+    deletePresetHandler_ = std::move(remove);
 }
 
 void FeatureEditorPanel::setActionState(
@@ -495,6 +518,32 @@ void FeatureEditorPanel::createUi()
         [this](const QPoint& position) {
             auto* item = tree_->itemAt(position);
             if (!item) return;
+            if (item->data(0, PresetRootRole).toBool()) {
+                QMenu menu(tree_);
+                auto* save = menu.addAction("Save Current as Preset...");
+                QObject::connect(save, &QAction::triggered, this,
+                    [this]() { if (savePresetHandler_) savePresetHandler_(); });
+                menu.exec(tree_->viewport()->mapToGlobal(position));
+                return;
+            }
+            const auto presetId = item->data(0, PresetIdRole).toString();
+            if (!presetId.isEmpty()) {
+                QMenu menu(tree_);
+                auto* apply = menu.addAction("Apply Preset");
+                auto* update = menu.addAction("Update Preset");
+                auto* rename = menu.addAction("Rename Preset...");
+                auto* remove = menu.addAction("Delete Preset");
+                QObject::connect(apply, &QAction::triggered, this,
+                    [this, presetId]() { if (applyPresetHandler_) applyPresetHandler_(presetId); });
+                QObject::connect(update, &QAction::triggered, this,
+                    [this, presetId]() { if (updatePresetHandler_) updatePresetHandler_(presetId); });
+                QObject::connect(rename, &QAction::triggered, this,
+                    [this, presetId]() { if (renamePresetHandler_) renamePresetHandler_(presetId); });
+                QObject::connect(remove, &QAction::triggered, this,
+                    [this, presetId]() { if (deletePresetHandler_) deletePresetHandler_(presetId); });
+                menu.exec(tree_->viewport()->mapToGlobal(position));
+                return;
+            }
             if (item->data(0, FilterRootRole).toBool()) {
                 QMenu menu(tree_);
                 auto* clear = menu.addAction("Clear Filters");
@@ -762,6 +811,14 @@ void FeatureEditorPanel::refresh()
     bodyItem->setExpanded(true);
 
     QTreeWidgetItem* featureParent = bodyItem;
+    auto* presetsItem = new QTreeWidgetItem(bodyItem, QStringList{"Visibility Presets"});
+    presetsItem->setData(0, PresetRootRole, true);
+    presetsItem->setExpanded(true);
+    for (const auto& preset : presets_) {
+        auto* item = new QTreeWidgetItem(presetsItem,
+            QStringList{QString::fromStdString(preset.name)});
+        item->setData(0, PresetIdRole, QString::fromStdString(preset.id));
+    }
     if (!groups_.empty()) {
         auto* groupsItem = new QTreeWidgetItem(bodyItem, QStringList{"Visibility Groups"});
         groupsItem->setExpanded(true);

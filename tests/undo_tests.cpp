@@ -225,6 +225,28 @@ private slots:
         QVERIFY(manager.filters().empty());
         stack.redo();
         QCOMPARE(manager.filters().typeModes.at("Box"), cad::application::VisibilityMode::Hidden);
+
+        Body body;
+        auto box = std::make_shared<BoxParametricFeature>("box", 2, 2, 2);
+        body.addFeature(box);
+        QVERIFY(body.recompute());
+        QVERIFY(manager.setTypeFilter("Box", cad::application::VisibilityMode::Hidden));
+        box->setUserVisible(false);
+        std::string presetError;
+        QVERIFY(manager.saveCurrentAsPreset("Saved", body, presetError));
+        manager.clearFilters();
+        box->setUserVisible(true);
+        const auto configurationBefore = manager.captureConfiguration(body);
+        QVERIFY(manager.applyPreset(manager.presets().front().id, body, presetError));
+        const auto configurationAfter = manager.captureConfiguration(body);
+        const auto originalShape = box->shape();
+        stack.push(new SetVisibilityConfigurationCommand(
+            manager, body, configurationBefore, configurationAfter, "Apply Preset"));
+        stack.undo();
+        QVERIFY(box->userVisible());
+        stack.redo();
+        QVERIFY(!box->userVisible());
+        QVERIFY(box->shape().IsSame(originalShape));
     }
 
     void visibilityPersistsAndShowAllPreservesAutomaticHiddenDependencies()
