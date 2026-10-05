@@ -33,6 +33,11 @@ public:
     void setVisibilityGroups(std::vector<cad::application::VisibilityGroup> groups);
     void setVisibilityFilters(cad::application::VisibilityFilterState filters);
     void setVisibilityPresets(std::vector<cad::application::VisibilityPreset> presets);
+    void updateVisibilityPresentation(
+        std::vector<cad::application::FeatureDescriptor> features,
+        std::vector<cad::application::VisibilityGroup> groups,
+        cad::application::VisibilityFilterState filters,
+        std::vector<cad::application::VisibilityPreset> presets);
     void setActionState(const cad::application::ModelingActionState& state);
     void scheduleRefresh();
     void commitPendingEdits();

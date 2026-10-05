@@ -116,6 +116,98 @@ void FeatureEditorPanel::setVisibilityPresets(
     refresh();
 }
 
+void FeatureEditorPanel::updateVisibilityPresentation(
+    std::vector<cad::application::FeatureDescriptor> features,
+    std::vector<cad::application::VisibilityGroup> groups,
+    cad::application::VisibilityFilterState filters,
+    std::vector<cad::application::VisibilityPreset> presets)
+{
+    const auto ids = [](const auto& values, const auto& idOf) {
+        std::vector<std::string> result;
+        result.reserve(values.size());
+        for (const auto& value : values) result.push_back(idOf(value));
+        std::sort(result.begin(), result.end());
+        return result;
+    };
+    const bool structureChanged =
+        ids(features_, [](const auto& value) { return value.id; })
+            != ids(features, [](const auto& value) { return value.id; })
+        || ids(groups_, [](const auto& value) { return value.id; })
+            != ids(groups, [](const auto& value) { return value.id; })
+        || ids(presets_, [](const auto& value) { return value.id; })
+            != ids(presets, [](const auto& value) { return value.id; })
+        || (!groups_.empty() != !groups.empty());
+
+    features_ = std::move(features);
+    groups_ = std::move(groups);
+    filters_ = std::move(filters);
+    presets_ = std::move(presets);
+    if (structureChanged) {
+        refresh();
+        return;
+    }
+
+    std::unordered_map<std::string, const cad::application::FeatureDescriptor*> featureById;
+    for (const auto& feature : features_) featureById.emplace(feature.id, &feature);
+    std::unordered_map<std::string, const cad::application::VisibilityGroup*> groupById;
+    for (const auto& group : groups_) groupById.emplace(group.id, &group);
+    std::unordered_map<std::string, const cad::application::VisibilityPreset*> presetById;
+    for (const auto& preset : presets_) presetById.emplace(preset.id, &preset);
+
+    for (QTreeWidgetItemIterator iterator(tree_); *iterator; ++iterator) {
+        auto* item = *iterator;
+        const auto feature = featureById.find(item->data(0, FeatureIdRole).toString().toStdString());
+        if (feature != featureById.end()) {
+            item->setForeground(0, feature->second->visible
+                ? QBrush() : QBrush(QColor(130, 130, 130)));
+            item->setToolTip(0, feature->second->visible ? QString{} : QStringLiteral("Hidden"));
+            continue;
+        }
+        const auto group = groupById.find(item->data(0, GroupIdRole).toString().toStdString());
+        if (group != groupById.end()) {
+            const auto& value = *group->second;
+            item->setText(0, QString::fromStdString(value.name)
+                + " (" + QString::number(static_cast<qulonglong>(value.memberFeatureIds.size()))
+                + ") — " + groupModeText(value.mode));
+            item->setForeground(0, value.mode == cad::application::VisibilityMode::Hidden
+                ? QBrush(QColor(130, 130, 130)) : QBrush());
+            continue;
+        }
+        const auto preset = presetById.find(item->data(0, PresetIdRole).toString().toStdString());
+        if (preset != presetById.end()) {
+            item->setText(0, QString::fromStdString(preset->second->name));
+            continue;
+        }
+        const int filterKind = item->data(0, FilterKindRole).toInt();
+        if (filterKind != 0) {
+            const QString key = item->data(0, FilterKeyRole).toString();
+            std::optional<cad::application::VisibilityMode> mode;
+            if (filterKind == 1) {
+                for (const auto category : cad::application::visibilityCategories()) {
+                    if (key == QString::fromLatin1(cad::application::visibilityCategoryId(category))) {
+                        const auto found = filters_.categoryModes.find(category);
+                        if (found != filters_.categoryModes.end()) mode = found->second;
+                        break;
+                    }
+                }
+            } else if (filterKind == 2) {
+                const auto found = filters_.typeModes.find(key.toStdString());
+                if (found != filters_.typeModes.end()) mode = found->second;
+            } else if (filterKind == 3) {
+                const auto role = key == "Sketch" ? cad::parametric::FeatureRole::Sketch
+                    : key == "Face" ? cad::parametric::FeatureRole::Face
+                    : cad::parametric::FeatureRole::Generic;
+                const auto found = filters_.roleModes.find(role);
+                if (found != filters_.roleModes.end()) mode = found->second;
+            }
+            const QString title = item->text(0).section(" — ", 0, 0);
+            item->setText(0, title + " — " + filterModeText(mode));
+            item->setForeground(0, mode && *mode == cad::application::VisibilityMode::Hidden
+                ? QBrush(QColor(130, 130, 130)) : QBrush());
+        }
+    }
+}
+
 void FeatureEditorPanel::setGroupHandlers(
     std::function<void(const QStringList&)> createGroup,
     std::function<void(const QString&, cad::application::VisibilityMode)> setVisibility,

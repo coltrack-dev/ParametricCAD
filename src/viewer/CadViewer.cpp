@@ -1531,6 +1531,55 @@ void CadViewer::setFeatureVisibilityModes(
     if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
 }
 
+void CadViewer::applyVisibilityChanges(
+    const std::vector<cad::application::VisibilityChange>& changes)
+{
+    if (!initialized_ || changes.empty()) return;
+    bool changed = false;
+    bool selectedFeatureUnavailable = false;
+    for (const auto& change : changes) {
+        const QString id = QString::fromStdString(change.featureId);
+        const auto object = featureObjects_.find(id);
+        if (object == featureObjects_.end()) continue;
+
+        const auto previous = featureVisibilityMode(id);
+        if (previous == change.newMode) continue;
+        featureVisibility_[id] = change.newMode;
+        const bool displayed = bool(context_->IsDisplayed(object->second));
+        if (change.newMode == VisibilityMode::Hidden) {
+            if (displayed) context_->Erase(object->second, Standard_False);
+        } else {
+            if (!displayed) context_->Display(object->second, Standard_False);
+            setFeatureTransparency(id, object->second);
+            context_->Redisplay(object->second, Standard_False);
+        }
+        changed = true;
+        if (change.newMode != VisibilityMode::Visible
+            && std::any_of(selectionState_.selected.begin(), selectionState_.selected.end(),
+                [&id](const auto& item) { return item.featureId == id; })) {
+            selectedFeatureUnavailable = true;
+        }
+    }
+    if (!changed) return;
+
+    if (selectedFeatureUnavailable) {
+        if (transformDragging_) cancelTransform();
+        if (pushPullActive_) cancelPushPull();
+        context_->ClearSelected(Standard_False);
+    }
+    // Snap references are still invalidated globally in Stage 7. This keeps
+    // candidate caches correct while the viewer presentation update is local.
+    invalidateSnapReferenceCache("MODEL_CHANGED: presentation visibility changed");
+    resetDetectedCycle();
+    selectionState_.hovered.reset();
+    if (bulkUpdateDepth_ == 0) {
+        applySelectionMode();
+        syncSelectionStateFromOcct();
+    }
+    updateTransformGizmo();
+    if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
+}
+
 cad::application::VisibilityMode CadViewer::featureVisibilityMode(
     const QString& featureId) const noexcept
 {

@@ -2,8 +2,6 @@
 
 #include "viewer/CadViewer.h"
 
-#include <map>
-
 cad::viewer::ModelPresenter::ModelPresenter(
     cad::parametric::Body& body,
     cad::application::VisibilityManager& visibilityManager,
@@ -45,11 +43,7 @@ void cad::viewer::ModelPresenter::refreshVisibility()
 
 void cad::viewer::ModelPresenter::applyVisibility()
 {
-    std::map<QString, cad::application::VisibilityMode> modes;
-    for (const auto& state : visibilityManager_.projection(body_)) {
-        modes.emplace(QString::fromStdString(state.featureId), state.mode);
-    }
-    viewer_.setFeatureVisibilityModes(modes);
+    viewer_.applyVisibilityChanges(visibilityManager_.evaluate(body_).changes);
 }
 
 void cad::viewer::ModelPresenter::clear()

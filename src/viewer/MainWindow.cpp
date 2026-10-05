@@ -505,10 +505,9 @@ void MainWindow::refreshModelView(const bool fitView)
 void MainWindow::refreshVisibilityView()
 {
     presenter_->refreshVisibility();
-    featureEditorPanel_->setFeatures(modeling_.features());
-    featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
-    featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
-    featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
+    featureEditorPanel_->updateVisibilityPresentation(
+        modeling_.features(), visibilityManager_.groups(),
+        visibilityManager_.filters(), visibilityManager_.presets());
     applySelectionSnapshot(viewer_->selectionSnapshot(), false);
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (!activeSketchId_.empty()) {

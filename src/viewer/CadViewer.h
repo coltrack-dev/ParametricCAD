@@ -29,6 +29,7 @@
 #include "viewer/TransformMath.h"
 #include "viewer/SelectionAdapter.h"
 #include "application/VisibilityMode.h"
+#include "application/VisibilityManager.h"
 #include "operations/ParametricFeatures.h"
 #include "model/TopologicalReference.h"
 
@@ -87,6 +88,8 @@ public:
     void setHiddenFeatures(const QStringList& featureIds);
     void setFeatureVisibilityModes(
         const std::map<QString, cad::application::VisibilityMode>& modes);
+    void applyVisibilityChanges(
+        const std::vector<cad::application::VisibilityChange>& changes);
     cad::application::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
     void clear();

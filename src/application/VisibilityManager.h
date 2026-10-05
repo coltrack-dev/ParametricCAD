@@ -27,6 +27,19 @@ struct FeatureVisibilityState
 
 using VisibilityProjection = std::vector<FeatureVisibilityState>;
 
+struct VisibilityChange
+{
+    std::string featureId;
+    VisibilityMode oldMode{VisibilityMode::Visible};
+    VisibilityMode newMode{VisibilityMode::Visible};
+};
+
+struct VisibilityUpdate
+{
+    std::vector<VisibilityChange> changes;
+    std::size_t evaluatedFeatureCount{0};
+};
+
 struct VisibilityGroup
 {
     std::string id;
@@ -144,6 +157,9 @@ public:
         const cad::parametric::ParametricFeature& feature,
         const cad::parametric::Body& body) const;
     VisibilityProjection projection(const cad::parametric::Body& body) const;
+    VisibilityUpdate evaluate(const cad::parametric::Body& body);
+    std::size_t lastVisibilityEvaluationCount() const noexcept;
+    std::size_t lastVisibilityChangeCount() const noexcept;
 
 private:
     static VisibilityMode moreRestrictive(VisibilityMode first, VisibilityMode second);
@@ -167,6 +183,9 @@ private:
     std::unordered_map<std::string, VisibilityPreset> presets_;
     std::uint64_t nextPresetSequence_{1};
     std::uint64_t nextGroupSequence_{1};
+    std::unordered_map<std::string, VisibilityMode> effectiveModes_;
+    std::size_t lastVisibilityEvaluationCount_{0};
+    std::size_t lastVisibilityChangeCount_{0};
 };
 
 } // namespace cad::application

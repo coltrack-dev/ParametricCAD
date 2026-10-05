@@ -119,6 +119,9 @@ void VisibilityManager::clear()
     presets_.clear();
     nextGroupSequence_ = 1;
     nextPresetSequence_ = 1;
+    effectiveModes_.clear();
+    lastVisibilityEvaluationCount_ = 0;
+    lastVisibilityChangeCount_ = 0;
 }
 
 std::optional<std::string> VisibilityManager::createGroup(
@@ -565,6 +568,54 @@ VisibilityProjection VisibilityManager::projection(
     modeForFeature(*feature, hiddenFeatureSet, groupModes, filters_)});
     }
     return result;
+}
+
+VisibilityUpdate VisibilityManager::evaluate(const cad::parametric::Body& body)
+{
+    VisibilityUpdate update;
+    const auto hiddenIds = cad::parametric::hiddenFeatureIds(body, isolatedFeatureIds_);
+    const std::set<std::string> hiddenFeatureSet(hiddenIds.begin(), hiddenIds.end());
+    std::unordered_map<std::string, VisibilityMode> effectiveGroups;
+    std::unordered_map<std::string, VisibilityMode> groupModes;
+    for (const auto& [id, group] : groups_) {
+        std::set<std::string> visiting;
+        const auto mode = groupEffectiveMode(id, effectiveGroups, visiting);
+        for (const auto& featureId : group.memberFeatureIds) {
+            const auto found = groupModes.find(featureId);
+            groupModes[featureId] = found == groupModes.end()
+                ? mode : moreRestrictive(found->second, mode);
+        }
+    }
+
+    std::unordered_map<std::string, VisibilityMode> currentModes;
+    currentModes.reserve(body.features().size());
+    for (const auto& feature : body.features()) {
+        const auto mode = modeForFeature(
+            *feature, hiddenFeatureSet, groupModes, filters_);
+        currentModes.emplace(feature->id(), mode);
+        ++update.evaluatedFeatureCount;
+
+        const auto previous = effectiveModes_.find(feature->id());
+        const auto oldMode = previous == effectiveModes_.end()
+            ? VisibilityMode::Visible : previous->second;
+        if (oldMode != mode) {
+            update.changes.push_back({feature->id(), oldMode, mode});
+        }
+    }
+    effectiveModes_ = std::move(currentModes);
+    lastVisibilityEvaluationCount_ = update.evaluatedFeatureCount;
+    lastVisibilityChangeCount_ = update.changes.size();
+    return update;
+}
+
+std::size_t VisibilityManager::lastVisibilityEvaluationCount() const noexcept
+{
+    return lastVisibilityEvaluationCount_;
+}
+
+std::size_t VisibilityManager::lastVisibilityChangeCount() const noexcept
+{
+    return lastVisibilityChangeCount_;
 }
 
 } // namespace cad::application
