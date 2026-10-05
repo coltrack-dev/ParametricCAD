@@ -2,6 +2,7 @@
 #include "model/Document.h"
 #include "model/Body.h"
 #include "model/ProjectFile.h"
+#include "application/VisibilityManager.h"
 #include "operations/BoxFeature.h"
 #include "operations/BasicFeatures.h"
 #include "operations/ParametricFeatures.h"
@@ -24,6 +25,8 @@
 
 using cad::modeling::BasicFeatures;
 using namespace cad::parametric;
+using cad::application::VisibilityManager;
+using cad::application::VisibilityMode;
 
 namespace {
 double volume(const TopoDS_Shape& shape)
@@ -170,6 +173,64 @@ private slots:
         body.markDirtyFrom(profile->id());
         QVERIFY(body.recompute());
         QVERIFY(std::abs(volume(body.shape()) - 24) < 1e-8);
+    }
+
+    void visibilityManagerProjectsTemporaryPolicy()
+    {
+        Body body;
+        auto a = std::make_shared<BoxParametricFeature>("a", 2, 2, 2);
+        auto b = std::make_shared<BoxParametricFeature>("b", 3, 3, 3);
+        auto c = std::make_shared<BoxParametricFeature>("c", 4, 4, 4);
+        body.addFeature(a);
+        body.addFeature(b);
+        body.addFeature(c);
+        QVERIFY(body.recompute());
+
+        VisibilityManager manager;
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Visible);
+        QCOMPARE(manager.projection(body).size(), std::size_t{3});
+
+        a->setUserVisible(false);
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Hidden);
+        a->setUserVisible(true);
+
+        manager.setIsolatedFeatures({"a"});
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Visible);
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Hidden);
+
+        manager.ghostOthers({"a"});
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Visible);
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Hidden);
+        manager.clearIsolation();
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Visible);
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Ghosted);
+
+        b->setUserVisible(false);
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Hidden);
+        manager.clearGhosting();
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Hidden);
+        b->setUserVisible(true);
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Visible);
+
+        QVERIFY(a->userVisible());
+        QVERIFY(b->userVisible());
+        QVERIFY(c->userVisible());
+
+        Body dependentBody;
+        auto base = std::make_shared<HexagonFeature>("base", 30, 12);
+        auto tool = std::make_shared<CylinderParametricFeature>("tool", 5, 20);
+        auto cut = std::make_shared<BooleanFeature>(
+            "cut", base, tool, BooleanOperation::Cut);
+        dependentBody.addFeature(base);
+        dependentBody.addFeature(tool);
+        dependentBody.addFeature(cut);
+        QVERIFY(dependentBody.recompute());
+        VisibilityManager dependentManager;
+        QCOMPARE(dependentManager.effectiveMode(*base, dependentBody), VisibilityMode::Hidden);
+        QCOMPARE(dependentManager.effectiveMode(*cut, dependentBody), VisibilityMode::Visible);
+
+        dependentManager.ghostOthers({"cut"});
+        QCOMPARE(dependentManager.effectiveMode(*base, dependentBody), VisibilityMode::Hidden);
     }
 
     void serializationValidation()

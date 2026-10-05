@@ -7,6 +7,7 @@
 #include <QTimer>
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
+#include "application/VisibilityManager.h"
 
 #include <atomic>
 #include <memory>
@@ -97,6 +98,7 @@ private:
 
     cad::application::ModelingController modeling_;
     cad::application::ProjectController project_;
+    cad::application::VisibilityManager visibilityManager_;
     QString currentFile_;
     QAction* deleteAction_{nullptr};
     QAction* duplicateAction_{nullptr};

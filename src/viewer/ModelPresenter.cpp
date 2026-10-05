@@ -1,12 +1,14 @@
 #include "viewer/ModelPresenter.h"
 
-#include "model/FeatureVisibility.h"
 #include "viewer/CadViewer.h"
 
 #include <map>
 
-cad::viewer::ModelPresenter::ModelPresenter(cad::parametric::Body& body, CadViewer& viewer)
-    : body_(body), viewer_(viewer)
+cad::viewer::ModelPresenter::ModelPresenter(
+    cad::parametric::Body& body,
+    cad::application::VisibilityManager& visibilityManager,
+    CadViewer& viewer)
+    : body_(body), viewer_(viewer), visibilityManager_(visibilityManager)
 {
 }
 
@@ -43,21 +45,9 @@ void cad::viewer::ModelPresenter::refreshVisibility()
 
 void cad::viewer::ModelPresenter::applyVisibility()
 {
-    std::set<std::string> hiddenIds;
-    for (const auto& id : cad::parametric::hiddenFeatureIds(body_, isolatedFeatureIds_)) {
-        hiddenIds.insert(id);
-    }
-    std::map<QString, VisibilityMode> modes;
-    for (const auto& feature : body_.features()) {
-        const auto& id = feature->id();
-        VisibilityMode mode = hiddenIds.contains(id)
-            ? VisibilityMode::Hidden : VisibilityMode::Visible;
-        if (mode == VisibilityMode::Visible
-            && !ghostedSelectionIds_.empty()
-            && !ghostedSelectionIds_.contains(id)) {
-            mode = VisibilityMode::Ghosted;
-        }
-        modes.emplace(QString::fromStdString(id), mode);
+    std::map<QString, cad::application::VisibilityMode> modes;
+    for (const auto& state : visibilityManager_.projection(body_)) {
+        modes.emplace(QString::fromStdString(state.featureId), state.mode);
     }
     viewer_.setFeatureVisibilityModes(modes);
 }
@@ -65,35 +55,5 @@ void cad::viewer::ModelPresenter::applyVisibility()
 void cad::viewer::ModelPresenter::clear()
 {
     viewer_.clear();
-    isolatedFeatureIds_.clear();
-    ghostedSelectionIds_.clear();
-}
-
-void cad::viewer::ModelPresenter::setIsolatedFeatures(
-    const std::vector<std::string>& featureIds)
-{
-    isolatedFeatureIds_.clear();
-    isolatedFeatureIds_.insert(featureIds.begin(), featureIds.end());
-}
-
-void cad::viewer::ModelPresenter::clearIsolation()
-{
-    isolatedFeatureIds_.clear();
-}
-
-bool cad::viewer::ModelPresenter::isolationActive() const noexcept
-{
-    return !isolatedFeatureIds_.empty();
-}
-
-void cad::viewer::ModelPresenter::ghostOthers(
-    const std::vector<std::string>& selectedIds)
-{
-    ghostedSelectionIds_.clear();
-    ghostedSelectionIds_.insert(selectedIds.begin(), selectedIds.end());
-}
-
-void cad::viewer::ModelPresenter::clearGhosting()
-{
-    ghostedSelectionIds_.clear();
+    visibilityManager_.clear();
 }

@@ -1,10 +1,9 @@
 #pragma once
 
 #include "model/Body.h"
-#include "viewer/VisibilityMode.h"
+#include "application/VisibilityManager.h"
 
 #include <string>
-#include <set>
 #include <vector>
 
 class CadViewer;
@@ -21,24 +20,20 @@ struct PresentationResult
 class ModelPresenter final
 {
 public:
-    ModelPresenter(cad::parametric::Body& body, CadViewer& viewer);
+    ModelPresenter(cad::parametric::Body& body,
+                   cad::application::VisibilityManager& visibilityManager,
+                   CadViewer& viewer);
 
     PresentationResult refreshModel();
     void refreshVisibility();
     void clear();
-    void setIsolatedFeatures(const std::vector<std::string>& featureIds);
-    void clearIsolation();
-    bool isolationActive() const noexcept;
-    void ghostOthers(const std::vector<std::string>& selectedIds);
-    void clearGhosting();
 
 private:
     void applyVisibility();
 
     cad::parametric::Body& body_;
     CadViewer& viewer_;
-    std::set<std::string> isolatedFeatureIds_;
-    std::set<std::string> ghostedSelectionIds_;
+    cad::application::VisibilityManager& visibilityManager_;
 };
 
 } // namespace cad::viewer

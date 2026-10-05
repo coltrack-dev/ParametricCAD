@@ -54,6 +54,7 @@ add_library(model_test_support STATIC
     ../src/application/ModelingController.cpp
     ../src/application/SelectionResolver.cpp
     ../src/application/ProjectController.cpp
+    ../src/application/VisibilityManager.cpp
     ../src/model/ProjectFile.cpp
     ../src/commands/FeatureCommands.cpp
     ../src/model/FeatureVisibility.cpp

@@ -67,7 +67,7 @@ using cad::viewer::SnapCandidate;
 using cad::viewer::SnapKind;
 using cad::viewer::TransformHandle;
 using cad::viewer::ViewRay;
-using cad::viewer::VisibilityMode;
+using cad::application::VisibilityMode;
 
 Q_LOGGING_CATEGORY(pcadViewerLog, "parametric.viewer")
 
@@ -1531,7 +1531,7 @@ void CadViewer::setFeatureVisibilityModes(
     if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
 }
 
-cad::viewer::VisibilityMode CadViewer::featureVisibilityMode(
+cad::application::VisibilityMode CadViewer::featureVisibilityMode(
     const QString& featureId) const noexcept
 {
     const auto found = featureVisibility_.find(featureId);

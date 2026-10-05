@@ -28,7 +28,7 @@
 #include "viewer/TransformGizmo.h"
 #include "viewer/TransformMath.h"
 #include "viewer/SelectionAdapter.h"
-#include "viewer/VisibilityMode.h"
+#include "application/VisibilityMode.h"
 #include "operations/ParametricFeatures.h"
 #include "model/TopologicalReference.h"
 
@@ -86,8 +86,8 @@ public:
     void selectFeatures(const QStringList& featureIds);
     void setHiddenFeatures(const QStringList& featureIds);
     void setFeatureVisibilityModes(
-        const std::map<QString, cad::viewer::VisibilityMode>& modes);
-    cad::viewer::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
+        const std::map<QString, cad::application::VisibilityMode>& modes);
+    cad::application::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
     void clear();
     bool hasDisplayedShapes() const;
@@ -237,7 +237,7 @@ private:
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
-    std::map<QString, cad::viewer::VisibilityMode> featureVisibility_;
+    std::map<QString, cad::application::VisibilityMode> featureVisibility_;
     int bulkUpdateDepth_{0};
     bool bulkCachesInvalidated_{false};
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};

@@ -8,6 +8,9 @@ set(PARAMETRIC_CAD_SOURCES
     application/FeatureEditingService.h
     application/ProjectController.cpp
     application/ProjectController.h
+    application/VisibilityManager.cpp
+    application/VisibilityManager.h
+    application/VisibilityMode.h
     commands/FeatureCommands.cpp
     commands/FeatureCommands.h
     model/FeatureVisibility.cpp
@@ -16,7 +19,6 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/MainWindow.h
     viewer/ModelPresenter.cpp
     viewer/ModelPresenter.h
-    viewer/VisibilityMode.h
     viewer/PushPullDrag.cpp
     viewer/PushPullDrag.h
     viewer/TransformMath.cpp

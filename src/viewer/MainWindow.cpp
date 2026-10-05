@@ -49,8 +49,10 @@ std::string pointRoleText(const cad::parametric::SketchPointRole role)
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
       project_(modeling_),
+      visibilityManager_(),
       viewer_(new CadViewer(this)),
-      presenter_(std::make_unique<cad::viewer::ModelPresenter>(modeling_.body(), *viewer_))
+      presenter_(std::make_unique<cad::viewer::ModelPresenter>(
+          modeling_.body(), visibilityManager_, *viewer_))
 {
     updateTitle();
     setCentralWidget(viewer_);
@@ -234,11 +236,11 @@ void MainWindow::createParametricPanel()
         [this](const QStringList& featureIds) {
             std::vector<std::string> ids;
             for (const auto& id : featureIds) ids.push_back(id.toStdString());
-            presenter_->setIsolatedFeatures(ids);
+            visibilityManager_.setIsolatedFeatures(ids);
             refreshVisibilityView();
         },
         [this]() {
-            presenter_->clearIsolation();
+            visibilityManager_.clearIsolation();
             const auto result = modeling_.showAllFeatures();
             if (!result.success) statusBar()->showMessage(
                 QString::fromStdString(result.error), 3000);
@@ -247,11 +249,11 @@ void MainWindow::createParametricPanel()
         [this](const QStringList& featureIds) {
             std::vector<std::string> ids;
             for (const auto& id : featureIds) ids.push_back(id.toStdString());
-            presenter_->ghostOthers(ids);
+            visibilityManager_.ghostOthers(ids);
             refreshVisibilityView();
         },
         [this]() {
-            presenter_->clearGhosting();
+            visibilityManager_.clearGhosting();
             refreshVisibilityView();
         });
 
