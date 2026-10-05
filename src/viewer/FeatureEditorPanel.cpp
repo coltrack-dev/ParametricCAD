@@ -12,6 +12,8 @@
 #include <QMenu>
 #include <QScopedValueRollback>
 #include <QDoubleSpinBox>
+#include <QDebug>
+#include <QElapsedTimer>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
@@ -884,6 +886,9 @@ void FeatureEditorPanel::addBoolean(
 
 void FeatureEditorPanel::refresh()
 {
+    QElapsedTimer performanceTimer;
+    const bool performanceDiagnostics = qEnvironmentVariableIsSet("PARAMETRIC_CAD_PERF");
+    if (performanceDiagnostics) performanceTimer.start();
     const QScopedValueRollback guard(updatingProperties_, true);
     const QSignalBlocker blocker(tree_);
     const auto selectedIds = selectedFeatureIds();
@@ -1025,6 +1030,13 @@ void FeatureEditorPanel::refresh()
         updateSelectedProperties();
     } else {
         clearProperties();
+    }
+    if (performanceDiagnostics) {
+        std::size_t itemCount = 0;
+        for (QTreeWidgetItemIterator iterator(tree_); *iterator; ++iterator) ++itemCount;
+        qInfo().noquote() << "FeatureEditorPanel tree rebuild: features=" << features_.size()
+                          << "items=" << itemCount
+                          << "ms=" << performanceTimer.elapsed();
     }
 }
 

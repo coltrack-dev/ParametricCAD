@@ -69,6 +69,33 @@ itself remains incremental.
 
 ## Tests and diagnostics
 
+The viewer has opt-in diagnostics for large-model investigations. Start the
+IFC-enabled application with:
+
+```bash
+PARAMETRIC_CAD_PERF=1 ./build-ifc/src/ParametricCAD
+```
+
+This reports the OpenGL vendor/renderer/version when available, AIS and
+selectable presentation counts, bulk refresh and selection activation timing,
+tree rebuild timing, FitAll timing, aggregated hover `MoveTo` and navigation
+timings, and snap reference/candidate counts when a transform is started.
+The following controlled experiments are available without changing model
+semantics:
+
+```text
+PARAMETRIC_CAD_DISABLE_SNAP=1       # skip transform snap reference/candidate work
+PARAMETRIC_CAD_DISABLE_SELECTION=1  # keep geometry displayed, disable OCCT picking
+PARAMETRIC_CAD_DISPLAY_MODE=shaded  # shaded faces without edge boundaries
+PARAMETRIC_CAD_DISPLAY_MODE=wireframe
+```
+
+The display and interaction switches are diagnostic only; defaults are
+unchanged. Camera navigation does not invoke model recompute, visibility
+policy evaluation, tree rebuild, or snap topology generation. Hover picking is
+already bypassed while orbiting/panning; the instrumentation measures the
+remaining `MoveTo` cost when the mouse is stationary.
+
 The model tests include deterministic spatial evaluation counts for 100, 500,
 and 5000 synthetic features. They avoid wall-clock assertions. Relevant
 invariants include:

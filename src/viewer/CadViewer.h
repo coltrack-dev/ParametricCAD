@@ -234,6 +234,7 @@ private:
         const QString& featureId, const Handle(AIS_Shape)& object);
     void setFeatureTransparency(
         const QString& featureId, const Handle(AIS_Shape)& object);
+    void recordPerformanceSample(const char* operation, std::int64_t milliseconds);
 
     bool beginPushPull();
     void updatePushPullPreview(const QPoint& position);
@@ -303,6 +304,16 @@ private:
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};
     std::int64_t lastViewerUpdateMilliseconds_{0};
     std::int64_t lastSelectionActivationMilliseconds_{0};
+    struct PerformanceMetric
+    {
+        std::size_t count{0};
+        std::int64_t totalMilliseconds{0};
+        std::int64_t maximumMilliseconds{0};
+    };
+    std::map<QString, PerformanceMetric> performanceMetrics_;
+    bool performanceDiagnostics_{false};
+    bool snapDisabled_{false};
+    bool selectionDisabled_{false};
 
     bool pushPullArmed_{false};
     bool pushPullActive_{false};

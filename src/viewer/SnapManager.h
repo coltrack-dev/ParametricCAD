@@ -101,6 +101,10 @@ public:
 
     static std::size_t lastNearbyEdgePairCount() noexcept;
     static std::size_t lastIntersectionCandidateCount() noexcept;
+    static std::size_t lastCollectedReferenceCount() noexcept;
+    static std::size_t lastUniqueSourceReferenceCount() noexcept;
+    static std::size_t lastUniqueTargetReferenceCount() noexcept;
+    static std::size_t lastCandidateCount() noexcept;
 
     static std::vector<SnapReference> transformReferences(
         const std::vector<SnapReference>& references,

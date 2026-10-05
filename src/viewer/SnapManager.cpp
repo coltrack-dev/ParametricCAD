@@ -32,6 +32,10 @@ constexpr double IntersectionScreenRadius = 96.0;
 
 std::size_t gLastNearbyEdgePairCount = 0;
 std::size_t gLastIntersectionCandidateCount = 0;
+std::size_t gLastCollectedReferenceCount = 0;
+std::size_t gLastUniqueSourceReferenceCount = 0;
+std::size_t gLastUniqueTargetReferenceCount = 0;
+std::size_t gLastCandidateCount = 0;
 
 QString referenceKey(const SnapReference& reference)
 {
@@ -122,6 +126,26 @@ std::size_t SnapManager::lastNearbyEdgePairCount() noexcept
 std::size_t SnapManager::lastIntersectionCandidateCount() noexcept
 {
     return gLastIntersectionCandidateCount;
+}
+
+std::size_t SnapManager::lastCollectedReferenceCount() noexcept
+{
+    return gLastCollectedReferenceCount;
+}
+
+std::size_t SnapManager::lastUniqueSourceReferenceCount() noexcept
+{
+    return gLastUniqueSourceReferenceCount;
+}
+
+std::size_t SnapManager::lastUniqueTargetReferenceCount() noexcept
+{
+    return gLastUniqueTargetReferenceCount;
+}
+
+std::size_t SnapManager::lastCandidateCount() noexcept
+{
+    return gLastCandidateCount;
 }
 
 namespace
@@ -468,6 +492,7 @@ std::vector<SnapReference> SnapManager::collectReferences(
             reference.geometry = std::make_shared<TopoDS_Shape>(reference.shape);
         }
     }
+    gLastCollectedReferenceCount = result.size();
     return result;
 }
 
@@ -519,6 +544,8 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
             uniqueTargets.push_back(target);
         }
     }
+    gLastUniqueSourceReferenceCount = uniqueSources.size();
+    gLastUniqueTargetReferenceCount = uniqueTargets.size();
     std::vector<SnapReference> edgeTargets;
     for (const auto& target : uniqueTargets) {
         if (target.type == SnapReferenceType::Edge) edgeTargets.push_back(target);
@@ -566,6 +593,7 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
         }
         ++sourceIndex;
     }
+    gLastCandidateCount = result.size();
     return result;
 }
 

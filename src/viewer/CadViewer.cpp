@@ -10,6 +10,8 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QDebug>
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
 #include <QFocusEvent>
 #include <QActionGroup>
 #include <QLabel>
@@ -328,6 +330,9 @@ TopoDS_Shape makeTrimPreviewShape(
 CadViewer::CadViewer(QWidget* parent)
     : QWidget(parent)
 {
+    performanceDiagnostics_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_PERF");
+    snapDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SNAP");
+    selectionDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SELECTION");
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_PaintOnScreen);
     setAttribute(Qt::WA_NoSystemBackground);
@@ -343,6 +348,13 @@ CadViewer::CadViewer(QWidget* parent)
     winId();
 
     setupToolBar();
+
+    if (performanceDiagnostics_) {
+        qInfo().noquote() << "CadViewer performance diagnostics enabled"
+                          << "snapDisabled=" << snapDisabled_
+                          << "selectionDisabled=" << selectionDisabled_
+                          << "displayMode=" << qEnvironmentVariable("PARAMETRIC_CAD_DISPLAY_MODE");
+    }
 }
 
 
@@ -989,6 +1001,8 @@ void CadViewer::beginTransform(
     transformOriginalShape_ = transformObject_->Shape();
     transformDelta_ = gp_Trsf();
     activeSnap_.reset();
+    QElapsedTimer snapTimer;
+    if (performanceDiagnostics_) snapTimer.start();
     auto cachedReferences = [this](const QString& id, const TopoDS_Shape& shape)
         -> const std::vector<cad::viewer::SnapReference>& {
         const auto found = snapReferenceCache_.find(id);
@@ -996,10 +1010,13 @@ void CadViewer::beginTransform(
         return snapReferenceCache_.emplace(
             id, snapManager_.collectReferences(id, shape)).first->second;
     };
-    transformSourceReferences_ = cachedReferences(
-        transformFeatureId_, transformOriginalShape_);
+    if (!snapDisabled_) {
+        transformSourceReferences_ = cachedReferences(
+            transformFeatureId_, transformOriginalShape_);
+    }
     transformTargetReferences_.clear();
     for (const auto& [id, object] : featureObjects_) {
+        if (snapDisabled_) break;
         // Snap only against geometry that is actually visible/selectable. Pattern,
         // boolean and copy features hide their dependencies; traversing those
         // presentations here duplicates the same topology in the snap target set.
@@ -1023,7 +1040,9 @@ void CadViewer::beginTransform(
         reference.screenPoint = projection->second;
     }
     auto cachedCandidates = snapCandidateCache_.find(transformFeatureId_);
-    if (cachedCandidates != snapCandidateCache_.end()) {
+    if (snapDisabled_) {
+        transformSnapCandidates_ = std::make_shared<std::vector<SnapCandidate>>();
+    } else if (cachedCandidates != snapCandidateCache_.end()) {
         transformSnapCandidates_ = cachedCandidates->second;
     } else {
         transformSnapCandidates_ = std::make_shared<std::vector<SnapCandidate>>(
@@ -1043,6 +1062,18 @@ void CadViewer::beginTransform(
     }
     snapScreenIndex_ = std::make_shared<cad::viewer::SnapScreenIndex>();
     snapScreenIndex_->rebuild(*transformSnapCandidates_);
+    if (performanceDiagnostics_) {
+        qInfo().noquote() << "Snap preparation: sourceRefsBeforeDedup="
+                          << transformSourceReferences_.size()
+                          << "targetRefsBeforeDedup=" << transformTargetReferences_.size()
+                          << "candidatePairsBeforeDedup="
+                          << transformSourceReferences_.size()
+                              * transformTargetReferences_.size()
+                          << "uniqueSources=" << cad::viewer::SnapManager::lastUniqueSourceReferenceCount()
+                          << "uniqueTargets=" << cad::viewer::SnapManager::lastUniqueTargetReferenceCount()
+                          << "candidatesAfterDedup=" << cad::viewer::SnapManager::lastCandidateCount()
+                          << "buildMs=" << snapTimer.elapsed();
+    }
     if (!makeViewRay(position, transformStartRay_)) return;
 
     const gp_Dir axis = transformGizmo_->axis(handle);
@@ -1104,6 +1135,10 @@ void CadViewer::updateTransformSnap(
     gp_Pnt& pivot,
     const gp_Trsf& rawDelta)
 {
+    if (snapDisabled_) {
+        if (transformGizmo_) transformGizmo_->setSnapActive(false);
+        return;
+    }
     Standard_Integer width = 0;
     Standard_Integer height = 0;
     view_->Window()->Size(width, height);
@@ -1158,6 +1193,8 @@ std::optional<gp_Pnt> CadViewer::worldAnchorAtScreenPoint(const QPoint& position
 
 void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
 {
+    QElapsedTimer timer;
+    timer.start();
     const auto pointBefore = worldAnchorAtScreenPoint(position);
     view_->SetZoom(factor);
 
@@ -1178,6 +1215,7 @@ void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
     }
 
     view_->Redraw();
+    recordPerformanceSample("zoom redraw", timer.elapsed());
 }
 
 void CadViewer::updateTransformPreview(const QPoint& position)
@@ -1330,6 +1368,23 @@ void CadViewer::initializeOcc()
     transformGizmo_ = std::make_unique<cad::viewer::TransformGizmo>(context_);
     view_ = viewer_->CreateView();
 
+    if (performanceDiagnostics_) {
+        const auto openGlContext = QOpenGLContext::currentContext();
+        if (openGlContext) {
+            auto* functions = openGlContext->functions();
+            const auto stringValue = [functions](const GLenum value) {
+                const auto* text = functions->glGetString(value);
+                return text ? QString::fromLatin1(reinterpret_cast<const char*>(text))
+                            : QStringLiteral("<unknown>");
+            };
+            qInfo().noquote() << "OpenGL renderer:" << stringValue(GL_VENDOR)
+                              << "/" << stringValue(GL_RENDERER)
+                              << "/" << stringValue(GL_VERSION);
+        } else {
+            qInfo() << "OpenGL renderer: unavailable at CadViewer initialization";
+        }
+    }
+
     bindWindow();
 
     view_->SetBackgroundColor(Quantity_NOC_GRAY20);
@@ -1427,12 +1482,16 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
         new AIS_Shape(shape);
 
     if (!shape.IsNull()) {
-        if (featureId.startsWith("sketch-")) {
+        const auto displayMode = qEnvironmentVariable("PARAMETRIC_CAD_DISPLAY_MODE");
+        if (displayMode.compare("wireframe", Qt::CaseInsensitive) == 0) {
+            interactiveShape->SetDisplayMode(AIS_WireFrame);
+        } else if (featureId.startsWith("sketch-")) {
             configureSketchPresentation(interactiveShape, featureId);
         } else if (shape.ShapeType() == TopAbs_FACE || TopExp_Explorer(shape, TopAbs_FACE).More()) {
             interactiveShape->SetDisplayMode(AIS_Shaded);
             const auto& drawer = interactiveShape->Attributes();
-            drawer->SetFaceBoundaryDraw(Standard_True);
+            const bool drawEdges = displayMode.compare("shaded", Qt::CaseInsensitive) != 0;
+            drawer->SetFaceBoundaryDraw(drawEdges ? Standard_True : Standard_False);
             drawer->SetFaceBoundaryAspect(
                 new Prs3d_LineAspect(Quantity_NOC_BLACK, Aspect_TOL_SOLID, 1.2));
         } else if (shape.ShapeType() == TopAbs_WIRE) {
@@ -1485,6 +1544,20 @@ void CadViewer::endBulkUpdate()
         timer.start();
         applySelectionMode();
         lastBulkViewerUpdateMilliseconds_ = timer.elapsed();
+        if (performanceDiagnostics_) {
+            std::size_t visible = 0;
+            std::size_t selectable = 0;
+            for (const auto& [id, object] : featureObjects_) {
+                if (!object.IsNull() && context_->IsDisplayed(object)) ++visible;
+                if (featureIsSelectable(id)) ++selectable;
+            }
+            qInfo().noquote() << "CadViewer bulk refresh: features=" << featureObjects_.size()
+                              << "visible=" << visible << "AIS=" << featureObjects_.size()
+                              << "selectable=" << selectable
+                              << "selectionMs=" << lastSelectionActivationMilliseconds_
+                              << "viewerMs=" << lastViewerUpdateMilliseconds_
+                              << "bulkMs=" << lastBulkViewerUpdateMilliseconds_;
+        }
     }
 }
 
@@ -1982,9 +2055,27 @@ cad::application::VisibilityMode CadViewer::featureVisibilityMode(
         ? VisibilityMode::Visible : found->second;
 }
 
+void CadViewer::recordPerformanceSample(
+    const char* operation, const std::int64_t milliseconds)
+{
+    if (!performanceDiagnostics_) return;
+    auto& metric = performanceMetrics_[QString::fromLatin1(operation)];
+    ++metric.count;
+    metric.totalMilliseconds += milliseconds;
+    metric.maximumMilliseconds = std::max(metric.maximumMilliseconds, milliseconds);
+    if (metric.count == 1 || metric.count % 120 == 0) {
+        qInfo().noquote() << "CadViewer performance" << operation
+                          << "samples=" << metric.count
+                          << "avgMs=" << (static_cast<double>(metric.totalMilliseconds)
+                              / static_cast<double>(metric.count))
+                          << "maxMs=" << metric.maximumMilliseconds;
+    }
+}
+
 bool CadViewer::featureIsSelectable(const QString& featureId) const noexcept
 {
-    return featureVisibilityMode(featureId) == VisibilityMode::Visible;
+    return !selectionDisabled_
+        && featureVisibilityMode(featureId) == VisibilityMode::Visible;
 }
 
 void CadViewer::applyFeaturePresentation(
@@ -2072,9 +2163,12 @@ void CadViewer::fitAll()
         return;
     }
 
+    QElapsedTimer timer;
+    timer.start();
     view_->FitAll();
     view_->ZFitAll();
     view_->Redraw();
+    recordPerformanceSample("FitAll", timer.elapsed());
 }
 
 void CadViewer::setSelectionMode(SelectionMode mode)
@@ -2166,6 +2260,8 @@ void CadViewer::applyTurntableCamera()
 
 void CadViewer::orbitTurntable(const QPoint& currentPosition)
 {
+    QElapsedTimer timer;
+    timer.start();
     const int deltaX = currentPosition.x() - lastMousePosition_.x();
     const int deltaY = lastMousePosition_.y() - currentPosition.y();
     orbitAzimuth_ += static_cast<double>(deltaX) * OrbitRadiansPerPixel;
@@ -2175,6 +2271,7 @@ void CadViewer::orbitTurntable(const QPoint& currentPosition)
     applyTurntableCamera();
     invalidateSnapProjectionCache("CAMERA_CHANGED: locked-Z orbit");
     view_->Redraw();
+    recordPerformanceSample("orbit redraw", timer.elapsed());
     if (transformMode_) updateTransformGizmo();
 }
 
@@ -2286,9 +2383,11 @@ void CadViewer::applySelectionMode()
         break;
     }
 
-    context_->Activate(mode, Standard_True);
-    for (const auto& [id, object] : featureObjects_) {
-        if (!featureIsSelectable(id)) context_->Deactivate(object);
+    if (!selectionDisabled_) context_->Activate(mode, Standard_True);
+    if (!selectionDisabled_) {
+        for (const auto& [id, object] : featureObjects_) {
+            if (!featureIsSelectable(id)) context_->Deactivate(object);
+        }
     }
     if (transformGizmo_) {
         transformGizmo_->deactivateSelection();
@@ -2298,6 +2397,13 @@ void CadViewer::applySelectionMode()
     context_->UpdateCurrentViewer();
     lastViewerUpdateMilliseconds_ = updateTimer.elapsed();
     lastSelectionActivationMilliseconds_ = timer.elapsed();
+    if (performanceDiagnostics_) {
+        qInfo().noquote() << "CadViewer selection activation: mode="
+                          << static_cast<int>(selectionMode_)
+                          << "AIS=" << featureObjects_.size()
+                          << "ms=" << lastSelectionActivationMilliseconds_
+                          << "viewerUpdateMs=" << lastViewerUpdateMilliseconds_;
+    }
 }
 
 void CadViewer::resetDetectedCycle()
@@ -2343,14 +2449,17 @@ void CadViewer::setXRayEnabled(bool enabled)
 
 void CadViewer::updateHover(const QPoint& position)
 {
-    if (!initialized_ || pushPullActive_) {
+    if (!initialized_ || pushPullActive_ || selectionDisabled_) {
         return;
     }
 
     resetDetectedCycle();
 
     if (selectionAdapter_) {
+        QElapsedTimer timer;
+        timer.start();
         selectionAdapter_->moveTo(position, view_, true);
+        recordPerformanceSample("hover MoveTo", timer.elapsed());
         const auto detected = selectionAdapter_->detectedHit();
         if (!detected) {
             selectionState_.hovered.reset();
@@ -2375,7 +2484,7 @@ void CadViewer::selectAt(
     bool toggleSelection,
     bool cycleDetected)
 {
-    if (!initialized_ || pushPullActive_) {
+    if (!initialized_ || pushPullActive_ || selectionDisabled_) {
         return;
     }
 
@@ -3000,9 +3109,9 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         invalidateSnapProjectionCache("CAMERA_CHANGED: rotation started");
     }
 
-    if (initialized_ &&
-        event->button() == Qt::LeftButton &&
-        !pushPullArmed_) {
+    if (initialized_ && !selectionDisabled_
+        && event->button() == Qt::LeftButton
+        && !pushPullArmed_) {
         selectionAdapter_->moveTo(lastMousePosition_, view_, true);
         if (!selectionAdapter_->detectedHit()) {
             interactionMode_ = InteractionMode::PendingEmptyPan;
@@ -3116,8 +3225,11 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
         const int deltaX = currentPosition.x() - lastMousePosition_.x();
         const int deltaY = lastMousePosition_.y() - currentPosition.y();
+        QElapsedTimer timer;
+        timer.start();
         invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         view_->Pan(deltaX, deltaY);
+        recordPerformanceSample("pan redraw", timer.elapsed());
         lastMousePosition_ = currentPosition;
         return;
     }
@@ -3147,18 +3259,24 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
                 lastMousePosition_.y() -
                 currentPosition.y();
 
+            QElapsedTimer timer;
+            timer.start();
             view_->Pan(
                 deltaX,
                 deltaY
             );
             invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
+            recordPerformanceSample("pan redraw", timer.elapsed());
         } else {
             if (orbitMode_ == OrbitMode::Free) {
+                QElapsedTimer timer;
+                timer.start();
                 view_->Rotation(
                     currentPosition.x(),
                     currentPosition.y()
                 );
                 invalidateSnapProjectionCache("CAMERA_CHANGED: orbit");
+                recordPerformanceSample("orbit redraw", timer.elapsed());
             } else {
                 orbitTurntable(currentPosition);
             }
