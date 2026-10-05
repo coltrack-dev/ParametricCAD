@@ -82,6 +82,8 @@ endif()
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet TKOffset)
 add_executable(project_file_tests project_file_tests.cpp)
+target_compile_definitions(project_file_tests PRIVATE
+    PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(project_file_tests PRIVATE model_test_support)
 add_test(NAME project_file_tests COMMAND project_file_tests)
 

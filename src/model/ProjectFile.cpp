@@ -655,6 +655,17 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 gp_Vec(number(o, "normalX"), number(o, "normalY"), number(o, "normalZ")),
                 number(o, "distance"));
         }},
+        {"Revolve", [](const QJsonObject& o, const Body& body) {
+            const auto profile = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(profile), "Revolve references missing profile");
+            const gp_Pnt origin(number(o, "axisOriginX"), number(o, "axisOriginY"),
+                number(o, "axisOriginZ"));
+            const gp_Dir direction(number(o, "axisX"), number(o, "axisY"),
+                number(o, "axisZ"));
+            return std::make_shared<RevolveFeature>(string(o, "id"), profile,
+                gp_Ax1(origin, direction),
+                number(o, "angleDegrees") * std::acos(-1.0) / 180.0);
+        }},
         {"Box", [](const QJsonObject& o, const Body&) {
             return std::make_shared<BoxParametricFeature>(string(o,"id"), number(o,"width"), number(o,"depth"), number(o,"height"));
         }},
@@ -704,6 +715,34 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             }
             return std::make_shared<ChamferFeature>(string(o, "id"), source,
                 positiveIntegers(o, "edgeIndices"), number(o, "distance"));
+        }},
+        {"Shell", [](const QJsonObject& o, const Body& body) {
+            const auto base = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(base), "Shell references missing source");
+            return std::make_shared<ShellFeature>(string(o, "id"), base,
+                positiveIntegers(o, "faceIndices"), number(o, "thickness"));
+        }},
+        {"Offset", [](const QJsonObject& o, const Body& body) {
+            const auto base = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(base), "Offset references missing source");
+            return std::make_shared<OffsetFeature>(string(o, "id"), base,
+                number(o, "distance"));
+        }},
+        {"Loft", [](const QJsonObject& o, const Body& body) {
+            std::vector<ParametricFeature::Ptr> sections;
+            for (const auto& id : strings(o, "sectionFeatureIds")) {
+                const auto section = body.findFeature(id);
+                require(static_cast<bool>(section), "Loft references missing section");
+                sections.push_back(section);
+            }
+            return std::make_shared<LoftFeature>(string(o, "id"), sections,
+                boolean(o, "solid"), o.value("ruled").toBool(false));
+        }},
+        {"Sweep", [](const QJsonObject& o, const Body& body) {
+            const auto path = body.findFeature(string(o, "pathFeatureId"));
+            const auto profile = body.findFeature(string(o, "profileFeatureId"));
+            require(path && profile, "Sweep references missing path or profile");
+            return std::make_shared<SweepFeature>(string(o, "id"), path, profile);
         }},
         {"LinearPattern", [](const QJsonObject& o, const Body& body) {
             std::vector<ParametricFeature::Ptr> sources;

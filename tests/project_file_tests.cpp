@@ -243,6 +243,35 @@ int main()
                   && largeMetrics.featureCount == largeFeatureCount
                   && largeLoadedBody.features().size() == largeFeatureCount,
               "large project regression");
+        const auto demoPath = QDir(QStringLiteral(PARAMETRIC_CAD_SOURCE_DIR))
+            .filePath("examples/demo_all_operations.pcad");
+        check(QFile::exists(demoPath), "demo all operations project exists");
+        Document demoDocument;
+        Body demoBody;
+        if (!ProjectFile::load(demoPath, demoDocument, demoBody, error))
+            throw std::runtime_error("load all operations demo: " + error.toStdString());
+        const std::vector<std::string> demoTypes{
+            "Extrude", "Pocket", "PushPull", "Revolve", "Boolean",
+            "Fillet", "Chamfer", "Shell", "Offset", "Loft", "Sweep"};
+        for (const auto& type : demoTypes) {
+            bool found = false;
+            for (const auto& feature : demoBody.features()) {
+                if (feature->typeId() == type) {
+                    found = true;
+                    break;
+                }
+            }
+            check(found, "all operations demo is missing a feature type");
+        }
+        const auto demoRoundtripPath = directory.filePath("demo-all-operations-roundtrip.pcad");
+        check(ProjectFile::save(demoRoundtripPath, demoDocument, demoBody, error),
+              "save all operations demo");
+        Document demoRoundtripDocument;
+        Body demoRoundtripBody;
+        check(ProjectFile::load(demoRoundtripPath, demoRoundtripDocument,
+            demoRoundtripBody, error), "reload all operations demo");
+        check(demoRoundtripBody.features().size() == demoBody.features().size(),
+              "all operations demo roundtrip feature count");
         const auto housePath = QDir::current().filePath("../../examples/house.pcad");
         if (QFile::exists(housePath)) {
             Document houseDocument;

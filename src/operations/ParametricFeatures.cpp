@@ -254,6 +254,17 @@ void writeReferences(QJsonObject& object,
     object.insert("topologicalReferences", values);
 }
 
+TopoDS_Wire wireFromFeature(const ParametricFeature::Ptr& feature)
+{
+    requireFeature(feature, "wire source");
+    TopTools_IndexedMapOfShape wires;
+    TopExp::MapShapes(feature->shape(), TopAbs_WIRE, wires);
+    if (wires.Extent() == 0) {
+        throw std::runtime_error("Feature does not contain a wire");
+    }
+    return TopoDS::Wire(wires.FindKey(1));
+}
+
 std::vector<cad::topology::TopologicalReference> legacyReferences(
     const std::string& featureId, const std::vector<int>& indices)
 {
@@ -1661,6 +1672,18 @@ TopoDS_Shape RevolveFeature::build() const
     );
 }
 
+void RevolveFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(profile_->id()));
+    object.insert("axisOriginX", axis_.Location().X());
+    object.insert("axisOriginY", axis_.Location().Y());
+    object.insert("axisOriginZ", axis_.Location().Z());
+    object.insert("axisX", axis_.Direction().X());
+    object.insert("axisY", axis_.Direction().Y());
+    object.insert("axisZ", axis_.Direction().Z());
+    object.insert("angleDegrees", angleRadians_ * 180.0 / std::acos(-1.0));
+}
+
 BooleanFeature::BooleanFeature(
     std::string id,
     const Ptr& left,
@@ -2030,6 +2053,22 @@ ShellFeature::ShellFeature(
     addDependency(base_);
 }
 
+ShellFeature::ShellFeature(
+    std::string id,
+    const Ptr& base,
+    std::vector<int> faceIndices,
+    const double thickness
+)
+    : ParametricFeature(std::move(id), "Shell"),
+      base_(base),
+      faceIndices_(std::move(faceIndices)),
+      thickness_(thickness)
+{
+    requireFeature(base_, "base");
+    if (faceIndices_.empty()) throw std::invalid_argument("Shell requires a removable face");
+    addDependency(base_);
+}
+
 void ShellFeature::setFacesToRemove(
     std::vector<TopoDS_Face> faces
 )
@@ -2065,11 +2104,41 @@ double ShellFeature::thickness() const noexcept
 
 TopoDS_Shape ShellFeature::build() const
 {
+    auto faces = facesToRemove_;
+    if (!faceIndices_.empty()) {
+        TopTools_IndexedMapOfShape map;
+        TopExp::MapShapes(base_->shape(), TopAbs_FACE, map);
+        faces.clear();
+        for (const int index : faceIndices_) {
+            if (index <= 0 || index > map.Extent())
+                throw std::runtime_error("Shell face reference is no longer valid");
+            faces.push_back(TopoDS::Face(map.FindKey(index)));
+        }
+    }
     return cad::modeling::BasicFeatures::shell(
         base_->shape(),
-        facesToRemove_,
+        faces,
         thickness_
     );
+}
+
+void ShellFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(base_->id()));
+    QJsonArray indices;
+    if (!faceIndices_.empty()) {
+        for (const int index : faceIndices_) indices.append(index);
+    } else {
+        TopTools_IndexedMapOfShape map;
+        TopExp::MapShapes(base_->shape(), TopAbs_FACE, map);
+        for (const auto& face : facesToRemove_) {
+            const int index = map.FindIndex(face);
+            if (index <= 0) throw std::runtime_error("Shell face is not part of source");
+            indices.append(index);
+        }
+    }
+    object.insert("faceIndices", indices);
+    object.insert("thickness", thickness_);
 }
 
 OffsetFeature::OffsetFeature(
@@ -2112,6 +2181,12 @@ TopoDS_Shape OffsetFeature::build() const
     );
 }
 
+void OffsetFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(base_->id()));
+    object.insert("distance", distance_);
+}
+
 LoftFeature::LoftFeature(
     std::string id,
     std::vector<TopoDS_Wire> sections,
@@ -2123,6 +2198,25 @@ LoftFeature::LoftFeature(
       makeSolid_(makeSolid),
       ruled_(ruled)
 {
+}
+
+LoftFeature::LoftFeature(
+    std::string id,
+    std::vector<Ptr> sectionFeatures,
+    const bool makeSolid,
+    const bool ruled
+)
+    : ParametricFeature(std::move(id), "Loft"),
+      sectionFeatures_(std::move(sectionFeatures)),
+      makeSolid_(makeSolid),
+      ruled_(ruled)
+{
+    if (sectionFeatures_.size() < 2)
+        throw std::invalid_argument("Loft requires at least two sections");
+    for (const auto& section : sectionFeatures_) {
+        requireFeature(section, "loft section");
+        addDependency(section);
+    }
 }
 
 void LoftFeature::setSections(
@@ -2167,11 +2261,28 @@ bool LoftFeature::ruled() const noexcept
 
 TopoDS_Shape LoftFeature::build() const
 {
+    auto sections = sections_;
+    if (!sectionFeatures_.empty()) {
+        sections.clear();
+        for (const auto& section : sectionFeatures_) sections.push_back(wireFromFeature(section));
+    }
     return cad::modeling::BasicFeatures::loft(
-        sections_,
+        sections,
         makeSolid_,
         ruled_
     );
+}
+
+void LoftFeature::writeParameters(QJsonObject& object) const
+{
+    if (sectionFeatures_.empty())
+        throw std::runtime_error("Loft has no serializable section feature references");
+    QJsonArray sections;
+    for (const auto& section : sectionFeatures_)
+        sections.append(QString::fromStdString(section->id()));
+    object.insert("sectionFeatureIds", sections);
+    object.insert("solid", makeSolid_);
+    object.insert("ruled", ruled_);
 }
 
 SweepFeature::SweepFeature(
@@ -2184,6 +2295,21 @@ SweepFeature::SweepFeature(
       profile_(profile)
 {
     requireFeature(profile_, "profile");
+    addDependency(profile_);
+}
+
+SweepFeature::SweepFeature(
+    std::string id,
+    const Ptr& pathFeature,
+    const Ptr& profile
+)
+    : ParametricFeature(std::move(id), "Sweep"),
+      pathFeature_(pathFeature),
+      profile_(profile)
+{
+    requireFeature(pathFeature_, "sweep path");
+    requireFeature(profile_, "profile");
+    addDependency(pathFeature_);
     addDependency(profile_);
 }
 
@@ -2209,10 +2335,21 @@ SweepFeature::profile() const noexcept
 
 TopoDS_Shape SweepFeature::build() const
 {
+    const auto path = pathFeature_ ? wireFromFeature(pathFeature_) : path_;
     return cad::modeling::BasicFeatures::sweep(
-        path_,
+        path,
         profile_->shape()
     );
+}
+
+void SweepFeature::writeParameters(QJsonObject& object) const
+{
+    if (!pathFeature_)
+        throw std::runtime_error("Sweep has no serializable path feature reference");
+    object.insert("pathFeatureId", QString::fromStdString(pathFeature_->id()));
+    object.insert("profileFeatureId", QString::fromStdString(profile_->id()));
+    object.insert("solid", true);
+    object.insert("frenet", false);
 }
 
 ParametricFeature::Ptr SketchFeature::clone(std::string newId) const
@@ -2346,8 +2483,9 @@ ParametricFeature::Ptr ChamferFeature::clone(std::string newId) const
 
 ParametricFeature::Ptr ShellFeature::clone(std::string newId) const
 {
-    auto copy = std::make_shared<ShellFeature>(
-        std::move(newId), base_, facesToRemove_, thickness_);
+    auto copy = faceIndices_.empty()
+        ? std::make_shared<ShellFeature>(std::move(newId), base_, facesToRemove_, thickness_)
+        : std::make_shared<ShellFeature>(std::move(newId), base_, faceIndices_, thickness_);
     copyPlacementTo(copy);
     return copy;
 }
@@ -2362,16 +2500,18 @@ ParametricFeature::Ptr OffsetFeature::clone(std::string newId) const
 
 ParametricFeature::Ptr LoftFeature::clone(std::string newId) const
 {
-    auto copy = std::make_shared<LoftFeature>(
-        std::move(newId), sections_, makeSolid_, ruled_);
+    auto copy = sectionFeatures_.empty()
+        ? std::make_shared<LoftFeature>(std::move(newId), sections_, makeSolid_, ruled_)
+        : std::make_shared<LoftFeature>(std::move(newId), sectionFeatures_, makeSolid_, ruled_);
     copyPlacementTo(copy);
     return copy;
 }
 
 ParametricFeature::Ptr SweepFeature::clone(std::string newId) const
 {
-    auto copy = std::make_shared<SweepFeature>(
-        std::move(newId), path_, profile_);
+    auto copy = pathFeature_
+        ? std::make_shared<SweepFeature>(std::move(newId), pathFeature_, profile_)
+        : std::make_shared<SweepFeature>(std::move(newId), path_, profile_);
     copyPlacementTo(copy);
     return copy;
 }

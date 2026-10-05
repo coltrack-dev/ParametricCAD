@@ -376,9 +376,15 @@ TopologicalResolveResult TopologicalReferenceResolver::resolveAgainstShape(
                 "Current feature shape is missing", 0, 0.0};
     TopTools_IndexedMapOfShape map;
     TopExp::MapShapes(currentShape, shapeType(reference.kind), map);
-    if (!reference.signature)
-        return {ResolveStatus::Missing, std::nullopt, std::nullopt,
-                "Legacy topological index is no longer valid", 0, 0.0};
+    if (!reference.signature) {
+        if (!reference.transientIndex || *reference.transientIndex <= 0
+            || *reference.transientIndex > map.Extent()) {
+            return {ResolveStatus::Missing, std::nullopt, std::nullopt,
+                    "Legacy topological index is no longer valid", 0, 0.0};
+        }
+        return {ResolveStatus::Resolved, map(*reference.transientIndex),
+                reference.transientIndex, {}, 1, 0.0};
+    }
 
     std::vector<std::tuple<double, int, TopoDS_Shape>> matches;
     for (int index = 1; index <= map.Extent(); ++index) {

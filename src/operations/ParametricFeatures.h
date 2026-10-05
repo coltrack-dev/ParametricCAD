@@ -541,6 +541,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     Ptr profile_;
@@ -696,6 +697,12 @@ public:
         std::vector<TopoDS_Face> facesToRemove,
         double thickness
     );
+    ShellFeature(
+        std::string id,
+        const Ptr& base,
+        std::vector<int> faceIndices,
+        double thickness
+    );
     const char* typeId() const noexcept override { return "Shell"; }
     Ptr clone(std::string newId) const override;
 
@@ -708,10 +715,12 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     Ptr base_;
     std::vector<TopoDS_Face> facesToRemove_;
+    std::vector<int> faceIndices_;
     double thickness_;
 };
 
@@ -733,6 +742,7 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     Ptr base_;
@@ -748,6 +758,12 @@ public:
         bool makeSolid = true,
         bool ruled = false
     );
+    LoftFeature(
+        std::string id,
+        std::vector<Ptr> sectionFeatures,
+        bool makeSolid,
+        bool ruled
+    );
     const char* typeId() const noexcept override { return "Loft"; }
     Ptr clone(std::string newId) const override;
 
@@ -761,9 +777,11 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     std::vector<TopoDS_Wire> sections_;
+    std::vector<Ptr> sectionFeatures_;
     bool makeSolid_;
     bool ruled_;
 };
@@ -776,6 +794,11 @@ public:
         TopoDS_Wire path,
         const Ptr& profile
     );
+    SweepFeature(
+        std::string id,
+        const Ptr& pathFeature,
+        const Ptr& profile
+    );
     const char* typeId() const noexcept override { return "Sweep"; }
     Ptr clone(std::string newId) const override;
 
@@ -786,9 +809,11 @@ public:
 
 protected:
     TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
 
 private:
     TopoDS_Wire path_;
+    Ptr pathFeature_;
     Ptr profile_;
 };
 
