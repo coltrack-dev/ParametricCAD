@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <cstdint>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -13,6 +14,7 @@
 namespace cad::parametric {
 class Body;
 class ParametricFeature;
+enum class FeatureRole;
 }
 
 namespace cad::application {
@@ -33,6 +35,36 @@ struct VisibilityGroup
     std::unordered_set<std::string> memberFeatureIds;
     VisibilityMode mode{VisibilityMode::Visible};
 };
+
+enum class VisibilityCategory
+{
+    Sketches,
+    Profiles,
+    Primitives,
+    Operations,
+    Patterns
+};
+
+struct VisibilityFilterState
+{
+    std::unordered_map<std::string, VisibilityMode> typeModes;
+    std::map<cad::parametric::FeatureRole, VisibilityMode> roleModes;
+    std::map<VisibilityCategory, VisibilityMode> categoryModes;
+
+    bool empty() const noexcept
+    {
+        return typeModes.empty() && roleModes.empty() && categoryModes.empty();
+    }
+
+    bool operator==(const VisibilityFilterState&) const = default;
+};
+
+std::optional<VisibilityCategory> visibilityCategoryFor(
+    const cad::parametric::ParametricFeature& feature);
+const char* visibilityCategoryId(VisibilityCategory category) noexcept;
+const char* visibilityCategoryName(VisibilityCategory category) noexcept;
+std::vector<VisibilityCategory> visibilityCategories();
+std::vector<std::string> knownVisibilityTypeIds();
 
 class VisibilityManager final
 {
@@ -59,6 +91,16 @@ public:
     std::vector<VisibilityGroup> groups() const;
     bool replaceGroups(std::vector<VisibilityGroup> groups, std::string& error);
 
+    bool setTypeFilter(const std::string& typeId, VisibilityMode mode);
+    bool clearTypeFilter(const std::string& typeId);
+    bool setRoleFilter(cad::parametric::FeatureRole role, VisibilityMode mode);
+    bool clearRoleFilter(cad::parametric::FeatureRole role);
+    bool setCategoryFilter(VisibilityCategory category, VisibilityMode mode);
+    bool clearCategoryFilter(VisibilityCategory category);
+    void clearFilters();
+    const VisibilityFilterState& filters() const noexcept;
+    bool replaceFilters(VisibilityFilterState filters, std::string& error);
+
     VisibilityMode effectiveMode(
         const cad::parametric::ParametricFeature& feature,
         const cad::parametric::Body& body) const;
@@ -73,11 +115,16 @@ private:
     VisibilityMode modeForFeature(
         const cad::parametric::ParametricFeature& feature,
         const std::set<std::string>& hiddenFeatureIds,
-        const std::unordered_map<std::string, VisibilityMode>& groupModes) const;
+        const std::unordered_map<std::string, VisibilityMode>& groupModes,
+        const VisibilityFilterState& filters) const;
+    VisibilityMode filterModeForFeature(
+        const cad::parametric::ParametricFeature& feature,
+        const VisibilityFilterState& filters) const;
 
     std::set<std::string> isolatedFeatureIds_;
     std::set<std::string> ghostedSelectionIds_;
     std::unordered_map<std::string, VisibilityGroup> groups_;
+    VisibilityFilterState filters_;
     std::uint64_t nextGroupSequence_{1};
 };
 

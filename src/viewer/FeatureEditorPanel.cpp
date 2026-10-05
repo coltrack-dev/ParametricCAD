@@ -27,6 +27,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 #include <type_traits>
 #include <utility>
@@ -36,6 +37,9 @@ namespace {
 
 constexpr int FeatureIdRole = Qt::UserRole + 1;
 constexpr int GroupIdRole = Qt::UserRole + 2;
+constexpr int FilterKindRole = Qt::UserRole + 3;
+constexpr int FilterKeyRole = Qt::UserRole + 4;
+constexpr int FilterRootRole = Qt::UserRole + 5;
 
 QString groupModeText(const cad::application::VisibilityMode mode)
 {
@@ -45,6 +49,11 @@ QString groupModeText(const cad::application::VisibilityMode mode)
     case cad::application::VisibilityMode::Hidden: return "Hidden";
     }
     return {};
+}
+
+QString filterModeText(const std::optional<cad::application::VisibilityMode>& mode)
+{
+    return mode ? groupModeText(*mode) : QStringLiteral("Visible");
 }
 
 QDoubleSpinBox* makeLengthEditor(
@@ -91,6 +100,13 @@ void FeatureEditorPanel::setVisibilityGroups(
     refresh();
 }
 
+void FeatureEditorPanel::setVisibilityFilters(
+    cad::application::VisibilityFilterState filters)
+{
+    filters_ = std::move(filters);
+    refresh();
+}
+
 void FeatureEditorPanel::setGroupHandlers(
     std::function<void(const QStringList&)> createGroup,
     std::function<void(const QString&, cad::application::VisibilityMode)> setVisibility,
@@ -105,6 +121,23 @@ void FeatureEditorPanel::setGroupHandlers(
     removeGroupHandler_ = std::move(removeGroup);
     addToGroupHandler_ = std::move(addToGroup);
     removeFromGroupHandler_ = std::move(removeFromGroup);
+}
+
+void FeatureEditorPanel::setFilterHandlers(
+    std::function<void(cad::application::VisibilityCategory,
+                       std::optional<cad::application::VisibilityMode>)> category,
+    std::function<void(const QString&,
+                       std::optional<cad::application::VisibilityMode>)> type,
+    std::function<void(cad::parametric::FeatureRole,
+                       std::optional<cad::application::VisibilityMode>)> role,
+    std::function<void()> clear,
+    std::function<void(cad::application::VisibilityCategory)> showOnlyCategory)
+{
+    categoryFilterHandler_ = std::move(category);
+    typeFilterHandler_ = std::move(type);
+    roleFilterHandler_ = std::move(role);
+    clearFiltersHandler_ = std::move(clear);
+    showOnlyCategoryHandler_ = std::move(showOnlyCategory);
 }
 
 void FeatureEditorPanel::setActionState(
@@ -462,6 +495,66 @@ void FeatureEditorPanel::createUi()
         [this](const QPoint& position) {
             auto* item = tree_->itemAt(position);
             if (!item) return;
+            if (item->data(0, FilterRootRole).toBool()) {
+                QMenu menu(tree_);
+                auto* clear = menu.addAction("Clear Filters");
+                QObject::connect(clear, &QAction::triggered, this,
+                    [this]() { if (clearFiltersHandler_) clearFiltersHandler_(); });
+                menu.exec(tree_->viewport()->mapToGlobal(position));
+                return;
+            }
+            const int filterKind = item->data(0, FilterKindRole).toInt();
+            if (filterKind != 0) {
+                const auto key = item->data(0, FilterKeyRole).toString();
+                QMenu menu(tree_);
+                auto* visible = menu.addAction("Show");
+                auto* ghosted = menu.addAction("Ghost");
+                auto* hidden = menu.addAction("Hide");
+                auto* clear = menu.addAction("Clear Filter");
+                QAction* showOnly = nullptr;
+                if (filterKind == 1) showOnly = menu.addAction("Show Only This Category");
+                const auto apply = [this, filterKind, key](
+                    const std::optional<cad::application::VisibilityMode> mode) {
+                    if (filterKind == 1) {
+                        for (const auto category : cad::application::visibilityCategories()) {
+                            if (QString::fromLatin1(cad::application::visibilityCategoryId(category)) == key) {
+                                if (categoryFilterHandler_) categoryFilterHandler_(category, mode);
+                                return;
+                            }
+                        }
+                    } else if (filterKind == 2) {
+                        if (typeFilterHandler_) typeFilterHandler_(key, mode);
+                    } else if (filterKind == 3) {
+                        const auto role = key == "Sketch"
+                            ? cad::parametric::FeatureRole::Sketch
+                            : key == "Face" ? cad::parametric::FeatureRole::Face
+                            : cad::parametric::FeatureRole::Generic;
+                        if (roleFilterHandler_) roleFilterHandler_(role, mode);
+                    }
+                };
+                QObject::connect(visible, &QAction::triggered, this,
+                    [apply]() { apply(cad::application::VisibilityMode::Visible); });
+                QObject::connect(ghosted, &QAction::triggered, this,
+                    [apply]() { apply(cad::application::VisibilityMode::Ghosted); });
+                QObject::connect(hidden, &QAction::triggered, this,
+                    [apply]() { apply(cad::application::VisibilityMode::Hidden); });
+                QObject::connect(clear, &QAction::triggered, this,
+                    [apply]() { apply({}); });
+                if (showOnly) {
+                    QObject::connect(showOnly, &QAction::triggered, this,
+                        [this, key]() {
+                            for (const auto category : cad::application::visibilityCategories()) {
+                                if (QString::fromLatin1(cad::application::visibilityCategoryId(category)) == key
+                                    && showOnlyCategoryHandler_) {
+                                    showOnlyCategoryHandler_(category);
+                                    return;
+                                }
+                            }
+                        });
+                }
+                menu.exec(tree_->viewport()->mapToGlobal(position));
+                return;
+            }
             const auto groupId = item->data(0, GroupIdRole).toString();
             if (!groupId.isEmpty()) {
                 const auto selected = selectedFeatureIds();
@@ -694,6 +787,52 @@ void FeatureEditorPanel::refresh()
         }
         featureParent = new QTreeWidgetItem(bodyItem, QStringList{"Features"});
         featureParent->setExpanded(true);
+    }
+
+    auto* filtersItem = new QTreeWidgetItem(bodyItem, QStringList{"Visibility Filters"});
+    filtersItem->setData(0, FilterRootRole, true);
+    filtersItem->setExpanded(true);
+    const auto addFilterItem = [](QTreeWidgetItem* parent, const QString& title,
+                                              const int kind, const QString& key,
+                                              const std::optional<cad::application::VisibilityMode>& mode) {
+        auto* item = new QTreeWidgetItem(parent, QStringList{title + " — " + filterModeText(mode)});
+        item->setData(0, FilterKindRole, kind);
+        item->setData(0, FilterKeyRole, key);
+        if (mode && *mode == cad::application::VisibilityMode::Hidden)
+            item->setForeground(0, QBrush(QColor(130, 130, 130)));
+        return item;
+    };
+    const auto categoryMode = [this](const cad::application::VisibilityCategory category)
+        -> std::optional<cad::application::VisibilityMode> {
+        const auto found = filters_.categoryModes.find(category);
+        return found == filters_.categoryModes.end()
+            ? std::optional<cad::application::VisibilityMode>{} : found->second;
+    };
+    for (const auto category : cad::application::visibilityCategories()) {
+        addFilterItem(filtersItem,
+            QString::fromLatin1(cad::application::visibilityCategoryName(category)), 1,
+            QString::fromLatin1(cad::application::visibilityCategoryId(category)),
+            categoryMode(category));
+    }
+    auto* rolesItem = new QTreeWidgetItem(filtersItem, QStringList{"Roles"});
+    rolesItem->setExpanded(false);
+    const std::array<std::pair<cad::parametric::FeatureRole, const char*>, 3> roles{{
+        {cad::parametric::FeatureRole::Generic, "Generic"},
+        {cad::parametric::FeatureRole::Sketch, "Sketch"},
+        {cad::parametric::FeatureRole::Face, "Face"}}};
+    for (const auto& [role, name] : roles) {
+        const auto found = filters_.roleModes.find(role);
+        addFilterItem(rolesItem, QString::fromLatin1(name), 3,
+            QString::fromLatin1(name), found == filters_.roleModes.end()
+                ? std::optional<cad::application::VisibilityMode>{} : found->second);
+    }
+    auto* typesItem = new QTreeWidgetItem(filtersItem, QStringList{"Types"});
+    typesItem->setExpanded(false);
+    for (const auto& type : cad::application::knownVisibilityTypeIds()) {
+        const auto found = filters_.typeModes.find(type);
+        addFilterItem(typesItem, QString::fromStdString(type), 2,
+            QString::fromStdString(type), found == filters_.typeModes.end()
+                ? std::optional<cad::application::VisibilityMode>{} : found->second);
     }
 
     QTreeWidgetItem* currentItemToRestore = nullptr;

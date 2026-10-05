@@ -7,6 +7,7 @@
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QUndoStack>
 
 using namespace cad::application;
@@ -175,7 +176,11 @@ private slots:
         const auto trees = panel.findChildren<QTreeWidget*>();
         QCOMPARE(trees.size(), 1);
         QCOMPARE(trees.front()->topLevelItemCount(), 1);
-        QCOMPARE(static_cast<std::size_t>(trees.front()->topLevelItem(0)->childCount()), expected);
+        std::size_t featureItems = 0;
+        for (QTreeWidgetItemIterator iterator(trees.front()); *iterator; ++iterator) {
+            if ((*iterator)->data(0, Qt::UserRole + 1).isValid()) ++featureItems;
+        }
+        QCOMPARE(featureItems, expected);
     }
 };
 

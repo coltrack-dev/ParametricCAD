@@ -258,6 +258,24 @@ private:
     std::vector<application::VisibilityGroup> after_;
 };
 
+class SetVisibilityFiltersCommand final : public QUndoCommand
+{
+public:
+    SetVisibilityFiltersCommand(
+        application::VisibilityManager& visibilityManager,
+        application::VisibilityFilterState before,
+        application::VisibilityFilterState after,
+        const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const application::VisibilityFilterState& filters);
+    application::VisibilityManager& visibilityManager_;
+    application::VisibilityFilterState before_;
+    application::VisibilityFilterState after_;
+};
+
 class RemoveFeatureCommand final : public QUndoCommand
 {
 public:

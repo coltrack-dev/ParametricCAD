@@ -100,6 +100,74 @@ cad::application::VisibilityMode visibilityMode(const QJsonObject& object)
     throw std::invalid_argument("Invalid visibility group mode");
 }
 
+QString featureRoleName(const cad::parametric::FeatureRole role)
+{
+    switch (role) {
+    case cad::parametric::FeatureRole::Generic: return "Generic";
+    case cad::parametric::FeatureRole::Sketch: return "Sketch";
+    case cad::parametric::FeatureRole::Face: return "Face";
+    }
+    throw std::invalid_argument("Invalid visibility role");
+}
+
+std::optional<cad::parametric::FeatureRole> featureRole(const QString& value)
+{
+    if (value == "Generic") return cad::parametric::FeatureRole::Generic;
+    if (value == "Sketch") return cad::parametric::FeatureRole::Sketch;
+    if (value == "Face") return cad::parametric::FeatureRole::Face;
+    return {};
+}
+
+std::optional<cad::application::VisibilityCategory> visibilityCategory(const QString& value)
+{
+    for (const auto category : cad::application::visibilityCategories()) {
+        if (value == cad::application::visibilityCategoryId(category)) return category;
+    }
+    return {};
+}
+
+cad::application::VisibilityFilterState visibilityFilters(const QJsonObject& root)
+{
+    cad::application::VisibilityFilterState result;
+    const auto visibility = root.value("visibility");
+    if (!visibility.isObject()) return result;
+    const auto filters = visibility.toObject().value("filters");
+    if (filters.isUndefined()) return result;
+    require(filters.isObject(), "Invalid visibility filters");
+    const auto object = filters.toObject();
+    const auto types = object.value("types");
+    if (!types.isUndefined()) {
+        require(types.isArray(), "Invalid visibility type filters");
+        for (const auto& value : types.toArray()) {
+            require(value.isObject(), "Invalid visibility type filter");
+            const auto item = value.toObject();
+            result.typeModes.emplace(string(item, "typeId"), visibilityMode(item));
+        }
+    }
+    const auto roles = object.value("roles");
+    if (!roles.isUndefined()) {
+        require(roles.isArray(), "Invalid visibility role filters");
+        for (const auto& value : roles.toArray()) {
+            require(value.isObject(), "Invalid visibility role filter");
+            const auto item = value.toObject();
+            const auto role = featureRole(QString::fromStdString(string(item, "role")));
+            if (role) result.roleModes[*role] = visibilityMode(item);
+        }
+    }
+    const auto categories = object.value("categories");
+    if (!categories.isUndefined()) {
+        require(categories.isArray(), "Invalid visibility category filters");
+        for (const auto& value : categories.toArray()) {
+            require(value.isObject(), "Invalid visibility category filter");
+            const auto item = value.toObject();
+            const auto category = visibilityCategory(QString::fromStdString(
+                string(item, "category")));
+            if (category) result.categoryModes[*category] = visibilityMode(item);
+        }
+    }
+    return result;
+}
+
 std::vector<cad::application::VisibilityGroup> visibilityGroups(const QJsonObject& root)
 {
     std::vector<cad::application::VisibilityGroup> result;
@@ -530,7 +598,28 @@ bool ProjectFile::save(const QString& path, const Document& document,
                     {"mode", visibilityModeName(group.mode)},
                     {"members", members}});
             }
-            root.insert("visibility", QJsonObject{{"groups", groups}});
+            QJsonObject visibility{{"groups", groups}};
+            const auto& filters = visibilityManager->filters();
+            if (!filters.empty()) {
+                QJsonArray types;
+                for (const auto& [typeId, mode] : filters.typeModes) {
+                    types.append(QJsonObject{{"typeId", QString::fromStdString(typeId)},
+                        {"mode", visibilityModeName(mode)}});
+                }
+                QJsonArray roles;
+                for (const auto& [role, mode] : filters.roleModes) {
+                    roles.append(QJsonObject{{"role", featureRoleName(role)},
+                        {"mode", visibilityModeName(mode)}});
+                }
+                QJsonArray categories;
+                for (const auto& [category, mode] : filters.categoryModes) {
+                    categories.append(QJsonObject{{"category", visibilityCategoryId(category)},
+                        {"mode", visibilityModeName(mode)}});
+                }
+                visibility.insert("filters", QJsonObject{
+                    {"types", types}, {"roles", roles}, {"categories", categories}});
+            }
+            root.insert("visibility", visibility);
         }
         const QByteArray data = QJsonDocument(root).toJson();
         QSaveFile file(path);
@@ -569,6 +658,8 @@ bool ProjectFile::load(const QString& path, Document& document,
         cad::application::VisibilityManager loadedVisibility;
         std::string visibilityError;
         require(loadedVisibility.replaceGroups(visibilityGroups(root), visibilityError),
+                visibilityError.c_str());
+        require(loadedVisibility.replaceFilters(visibilityFilters(root), visibilityError),
                 visibilityError.c_str());
         if (metrics) metrics->parseMilliseconds = stageTimer.elapsed();
 

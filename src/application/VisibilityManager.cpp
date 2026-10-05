@@ -9,6 +9,68 @@
 
 namespace cad::application {
 
+std::optional<VisibilityCategory> visibilityCategoryFor(
+    const cad::parametric::ParametricFeature& feature)
+{
+    using cad::parametric::FeatureRole;
+    if (feature.role() == FeatureRole::Sketch) return VisibilityCategory::Sketches;
+    if (feature.role() == FeatureRole::Face) return VisibilityCategory::Profiles;
+    const std::string type = feature.typeId();
+    if (type == "Box" || type == "Cylinder" || type == "Cone"
+        || type == "Sphere" || type == "Torus" || type == "Hexagon") {
+        return VisibilityCategory::Primitives;
+    }
+    if (type == "Extrude" || type == "Pocket" || type == "PushPull"
+        || type == "Revolve" || type == "Boolean" || type == "Fillet"
+        || type == "Chamfer" || type == "Shell" || type == "Offset"
+        || type == "Loft" || type == "Sweep") {
+        return VisibilityCategory::Operations;
+    }
+    if (type == "LinearPattern" || type == "PathPattern") {
+        return VisibilityCategory::Patterns;
+    }
+    return {};
+}
+
+const char* visibilityCategoryId(const VisibilityCategory category) noexcept
+{
+    switch (category) {
+    case VisibilityCategory::Sketches: return "sketches";
+    case VisibilityCategory::Profiles: return "profiles";
+    case VisibilityCategory::Primitives: return "primitives";
+    case VisibilityCategory::Operations: return "operations";
+    case VisibilityCategory::Patterns: return "patterns";
+    }
+    return "unknown";
+}
+
+const char* visibilityCategoryName(const VisibilityCategory category) noexcept
+{
+    switch (category) {
+    case VisibilityCategory::Sketches: return "Sketches";
+    case VisibilityCategory::Profiles: return "Profiles / Faces";
+    case VisibilityCategory::Primitives: return "Primitives";
+    case VisibilityCategory::Operations: return "Operations";
+    case VisibilityCategory::Patterns: return "Patterns";
+    }
+    return "Unknown";
+}
+
+std::vector<VisibilityCategory> visibilityCategories()
+{
+    return {VisibilityCategory::Sketches, VisibilityCategory::Profiles,
+            VisibilityCategory::Primitives, VisibilityCategory::Operations,
+            VisibilityCategory::Patterns};
+}
+
+std::vector<std::string> knownVisibilityTypeIds()
+{
+    return {"Sketch", "Face", "Box", "Cylinder", "Cone", "Sphere", "Torus",
+            "Hexagon", "Extrude", "Pocket", "PushPull", "Revolve", "Boolean",
+            "Fillet", "Chamfer", "Shell", "Offset", "Loft", "Sweep",
+            "LinearPattern", "PathPattern"};
+}
+
 void VisibilityManager::setIsolatedFeatures(const std::vector<std::string>& featureIds)
 {
     isolatedFeatureIds_.clear();
@@ -41,6 +103,7 @@ void VisibilityManager::clear()
     clearIsolation();
     clearGhosting();
     groups_.clear();
+    clearFilters();
     nextGroupSequence_ = 1;
 }
 
@@ -164,6 +227,67 @@ bool VisibilityManager::replaceGroups(
     return true;
 }
 
+bool VisibilityManager::setTypeFilter(
+    const std::string& typeId, const VisibilityMode mode)
+{
+    if (typeId.empty()) return false;
+    filters_.typeModes[typeId] = mode;
+    return true;
+}
+
+bool VisibilityManager::clearTypeFilter(const std::string& typeId)
+{
+    return filters_.typeModes.erase(typeId) != 0;
+}
+
+bool VisibilityManager::setRoleFilter(
+    const cad::parametric::FeatureRole role, const VisibilityMode mode)
+{
+    filters_.roleModes[role] = mode;
+    return true;
+}
+
+bool VisibilityManager::clearRoleFilter(const cad::parametric::FeatureRole role)
+{
+    return filters_.roleModes.erase(role) != 0;
+}
+
+bool VisibilityManager::setCategoryFilter(
+    const VisibilityCategory category, const VisibilityMode mode)
+{
+    filters_.categoryModes[category] = mode;
+    return true;
+}
+
+bool VisibilityManager::clearCategoryFilter(const VisibilityCategory category)
+{
+    return filters_.categoryModes.erase(category) != 0;
+}
+
+void VisibilityManager::clearFilters()
+{
+    filters_ = {};
+}
+
+const VisibilityFilterState& VisibilityManager::filters() const noexcept
+{
+    return filters_;
+}
+
+bool VisibilityManager::replaceFilters(
+    VisibilityFilterState filters, std::string& error)
+{
+    error.clear();
+    for (const auto& [typeId, mode] : filters.typeModes) {
+        if (typeId.empty()) {
+            error = "Visibility type filter has an empty type ID";
+            return false;
+        }
+    }
+    filters_ = std::move(filters);
+    return true;
+}
+
 VisibilityMode VisibilityManager::moreRestrictive(
     const VisibilityMode first, const VisibilityMode second)
 {
@@ -211,26 +335,47 @@ VisibilityMode VisibilityManager::effectiveMode(
                 ? mode : moreRestrictive(found->second, mode);
         }
     }
-    return modeForFeature(feature, hiddenFeatureSet, groupModes);
+    return modeForFeature(feature, hiddenFeatureSet, groupModes, filters_);
 }
 
 VisibilityMode VisibilityManager::modeForFeature(
     const cad::parametric::ParametricFeature& feature,
     const std::set<std::string>& hiddenFeatureIds,
-    const std::unordered_map<std::string, VisibilityMode>& groupModes) const
+    const std::unordered_map<std::string, VisibilityMode>& groupModes,
+    const VisibilityFilterState& filters) const
 {
     if (hiddenFeatureIds.contains(feature.id())) {
         return VisibilityMode::Hidden;
     }
+    auto mode = VisibilityMode::Visible;
     const auto group = groupModes.find(feature.id());
-    if (group != groupModes.end() && group->second != VisibilityMode::Visible) {
-        return group->second;
-    }
+    if (group != groupModes.end()) mode = moreRestrictive(mode, group->second);
+    const auto filterMode = filterModeForFeature(feature, filters);
+    mode = moreRestrictive(mode, filterMode);
+    if (mode != VisibilityMode::Visible) return mode;
     if (!ghostedSelectionIds_.empty()
         && !ghostedSelectionIds_.contains(feature.id())) {
         return VisibilityMode::Ghosted;
     }
     return VisibilityMode::Visible;
+}
+
+VisibilityMode VisibilityManager::filterModeForFeature(
+    const cad::parametric::ParametricFeature& feature,
+    const VisibilityFilterState& filters) const
+{
+    auto mode = VisibilityMode::Visible;
+    const auto type = filters.typeModes.find(feature.typeId());
+    if (type != filters.typeModes.end()) mode = moreRestrictive(mode, type->second);
+    const auto role = filters.roleModes.find(feature.role());
+    if (role != filters.roleModes.end()) mode = moreRestrictive(mode, role->second);
+    const auto category = visibilityCategoryFor(feature);
+    if (category) {
+        const auto found = filters.categoryModes.find(*category);
+        if (found != filters.categoryModes.end())
+            mode = moreRestrictive(mode, found->second);
+    }
+    return mode;
 }
 
 VisibilityProjection VisibilityManager::projection(
@@ -252,7 +397,8 @@ VisibilityProjection VisibilityManager::projection(
         }
     }
     for (const auto& feature : body.features()) {
-        result.push_back({feature->id(), modeForFeature(*feature, hiddenFeatureSet, groupModes)});
+        result.push_back({feature->id(),
+            modeForFeature(*feature, hiddenFeatureSet, groupModes, filters_)});
     }
     return result;
 }

@@ -213,6 +213,18 @@ private slots:
         stack.redo();
         QCOMPARE(manager.groups().size(), std::size_t{1});
         QCOMPARE(manager.groups().front().memberFeatureIds.size(), std::size_t{1});
+
+        const auto filtersBefore = manager.filters();
+        QVERIFY(manager.setTypeFilter("Box", cad::application::VisibilityMode::Hidden));
+        const auto filtersAfter = manager.filters();
+        QVERIFY(manager.replaceFilters(filtersBefore, error));
+        stack.push(new SetVisibilityFiltersCommand(
+            manager, filtersBefore, filtersAfter, "Hide Box Type"));
+        QCOMPARE(manager.filters().typeModes.at("Box"), cad::application::VisibilityMode::Hidden);
+        stack.undo();
+        QVERIFY(manager.filters().empty());
+        stack.redo();
+        QCOMPARE(manager.filters().typeModes.at("Box"), cad::application::VisibilityMode::Hidden);
     }
 
     void visibilityPersistsAndShowAllPreservesAutomaticHiddenDependencies()

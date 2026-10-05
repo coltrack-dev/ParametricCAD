@@ -27,6 +27,7 @@ using cad::modeling::BasicFeatures;
 using namespace cad::parametric;
 using cad::application::VisibilityManager;
 using cad::application::VisibilityMode;
+using cad::application::VisibilityCategory;
 
 namespace {
 double volume(const TopoDS_Shape& shape)
@@ -49,6 +50,19 @@ private:
         return BasicFeatures::face(BasicFeatures::rectangleWire(width_, 3));
     }
     double width_{2};
+};
+
+class ClassifiedFixture final : public ParametricFeature
+{
+public:
+    ClassifiedFixture(std::string id, std::string type, FeatureRole role)
+        : ParametricFeature(std::move(id), type), type_(std::move(type)), role_(role) {}
+    const char* typeId() const noexcept override { return type_.c_str(); }
+    FeatureRole role() const noexcept override { return role_; }
+private:
+    TopoDS_Shape build() const override { return BasicFeatures::box(1, 1, 1); }
+    std::string type_;
+    FeatureRole role_;
 };
 }
 
@@ -344,6 +358,8 @@ private slots:
         QVERIFY(manager.addFeaturesToGroup(*parent, {"a"}));
         QVERIFY(manager.addFeaturesToGroup(*child, {"a", "b", "missing"}));
         QVERIFY(manager.setGroupVisibility(*child, VisibilityMode::Hidden));
+        QVERIFY(manager.setTypeFilter("FutureCustom", VisibilityMode::Ghosted));
+        QVERIFY(manager.setRoleFilter(FeatureRole::Generic, VisibilityMode::Visible));
 
         QString error;
         const auto path = directory.filePath("groups.pcad");
@@ -354,6 +370,8 @@ private slots:
         QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error,
             {}, nullptr, true, &loadedManager), qPrintable(error));
         QCOMPARE(loadedManager.groups().size(), std::size_t{2});
+        QCOMPARE(loadedManager.filters().typeModes.at("FutureCustom"), VisibilityMode::Ghosted);
+        QCOMPARE(loadedManager.filters().roleModes.at(FeatureRole::Generic), VisibilityMode::Visible);
         QCOMPARE(loadedManager.effectiveMode(*loadedBody.findFeature("a"), loadedBody),
                  VisibilityMode::Hidden);
         QCOMPARE(loadedManager.effectiveMode(*loadedBody.findFeature("b"), loadedBody),
@@ -372,6 +390,68 @@ private slots:
         QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error,
             {}, nullptr, true, &oldFormatManager), qPrintable(error));
         QVERIFY(oldFormatManager.groups().empty());
+        QVERIFY(oldFormatManager.filters().empty());
+    }
+
+    void visibilityFiltersComposeWithoutRecompute()
+    {
+        Body body;
+        auto box = std::make_shared<ClassifiedFixture>("box", "Box", FeatureRole::Generic);
+        auto sketch = std::make_shared<ClassifiedFixture>("sketch", "Sketch", FeatureRole::Sketch);
+        auto face = std::make_shared<ClassifiedFixture>("face", "Face", FeatureRole::Face);
+        auto operation = std::make_shared<ClassifiedFixture>("operation", "Extrude", FeatureRole::Generic);
+        auto pattern = std::make_shared<ClassifiedFixture>("pattern", "LinearPattern", FeatureRole::Generic);
+        auto custom = std::make_shared<ClassifiedFixture>("custom", "FutureCustom", FeatureRole::Generic);
+        for (const auto& feature : {box, sketch, face, operation, pattern, custom})
+            body.addFeature(feature);
+        QVERIFY(body.recompute());
+        const auto originalShape = box->shape();
+
+        VisibilityManager manager;
+        QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Visible);
+        QVERIFY(manager.setTypeFilter("Box", VisibilityMode::Hidden));
+        QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Hidden);
+        QVERIFY(manager.setTypeFilter("Box", VisibilityMode::Ghosted));
+        QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Ghosted);
+        QVERIFY(manager.setCategoryFilter(VisibilityCategory::Primitives,
+                                          VisibilityMode::Hidden));
+        QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Hidden);
+
+        QVERIFY(manager.setRoleFilter(FeatureRole::Sketch, VisibilityMode::Ghosted));
+        QCOMPARE(manager.effectiveMode(*sketch, body), VisibilityMode::Ghosted);
+        QVERIFY(manager.setRoleFilter(FeatureRole::Face, VisibilityMode::Hidden));
+        QCOMPARE(manager.effectiveMode(*face, body), VisibilityMode::Hidden);
+        QVERIFY(manager.setCategoryFilter(VisibilityCategory::Operations,
+                                          VisibilityMode::Hidden));
+        QCOMPARE(manager.effectiveMode(*operation, body), VisibilityMode::Hidden);
+        QVERIFY(manager.setCategoryFilter(VisibilityCategory::Patterns,
+                                          VisibilityMode::Ghosted));
+        QCOMPARE(manager.effectiveMode(*pattern, body), VisibilityMode::Ghosted);
+        QCOMPARE(manager.effectiveMode(*custom, body), VisibilityMode::Visible);
+
+        const auto group = manager.createGroup("Operation Group");
+        QVERIFY(group);
+        QVERIFY(manager.addFeaturesToGroup(*group, {"operation"}));
+        QVERIFY(manager.setGroupVisibility(*group, VisibilityMode::Ghosted));
+        QVERIFY(manager.setTypeFilter("Extrude", VisibilityMode::Hidden));
+        QCOMPARE(manager.effectiveMode(*operation, body), VisibilityMode::Hidden);
+
+        operation->setUserVisible(false);
+        QVERIFY(manager.setTypeFilter("Extrude", VisibilityMode::Visible));
+        QCOMPARE(manager.effectiveMode(*operation, body), VisibilityMode::Hidden);
+        operation->setUserVisible(true);
+
+        manager.setIsolatedFeatures({"custom"});
+        manager.ghostOthers({"custom"});
+        QCOMPARE(manager.effectiveMode(*custom, body), VisibilityMode::Visible);
+        QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Hidden);
+
+        manager.clearIsolation();
+        manager.clearGhosting();
+        manager.clearFilters();
+        QCOMPARE(manager.effectiveMode(*box, body), VisibilityMode::Visible);
+        QVERIFY(box->state() == FeatureState::UpToDate);
+        QVERIFY(box->shape().IsSame(originalShape));
     }
 };
 

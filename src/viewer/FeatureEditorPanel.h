@@ -31,6 +31,7 @@ public:
     void setService(cad::application::FeatureEditingService* service);
     void setFeatures(std::vector<cad::application::FeatureDescriptor> features);
     void setVisibilityGroups(std::vector<cad::application::VisibilityGroup> groups);
+    void setVisibilityFilters(cad::application::VisibilityFilterState filters);
     void setActionState(const cad::application::ModelingActionState& state);
     void scheduleRefresh();
     void commitPendingEdits();
@@ -53,6 +54,15 @@ public:
         std::function<void(const QString&)> removeGroup,
         std::function<void(const QString&, const QStringList&)> addToGroup,
         std::function<void(const QString&, const QStringList&)> removeFromGroup);
+    void setFilterHandlers(
+        std::function<void(cad::application::VisibilityCategory,
+                           std::optional<cad::application::VisibilityMode>)> category,
+        std::function<void(const QString&,
+                           std::optional<cad::application::VisibilityMode>)> type,
+        std::function<void(cad::parametric::FeatureRole,
+                           std::optional<cad::application::VisibilityMode>)> role,
+        std::function<void()> clear,
+        std::function<void(cad::application::VisibilityCategory)> showOnlyCategory);
     void refresh();
     QStringList selectedFeatureIds() const;
     void selectFeatures(const QStringList& featureIds);
@@ -100,6 +110,7 @@ private:
     cad::application::FeatureEditingService* service_{nullptr};
     std::vector<cad::application::FeatureDescriptor> features_;
     std::vector<cad::application::VisibilityGroup> groups_;
+    cad::application::VisibilityFilterState filters_;
     bool canDelete_{false};
     bool canCreateFace_{false};
     bool canExtrude_{false};
@@ -137,4 +148,12 @@ private:
     std::function<void(const QString&)> removeGroupHandler_;
     std::function<void(const QString&, const QStringList&)> addToGroupHandler_;
     std::function<void(const QString&, const QStringList&)> removeFromGroupHandler_;
+    std::function<void(cad::application::VisibilityCategory,
+                       std::optional<cad::application::VisibilityMode>)> categoryFilterHandler_;
+    std::function<void(const QString&,
+                       std::optional<cad::application::VisibilityMode>)> typeFilterHandler_;
+    std::function<void(cad::parametric::FeatureRole,
+                       std::optional<cad::application::VisibilityMode>)> roleFilterHandler_;
+    std::function<void()> clearFiltersHandler_;
+    std::function<void(cad::application::VisibilityCategory)> showOnlyCategoryHandler_;
 };

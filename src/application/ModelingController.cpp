@@ -35,7 +35,8 @@ ModelingResult failure(const std::exception& error)
 bool containsVisibilityCommand(const QUndoCommand* command)
 {
     if (dynamic_cast<const cad::commands::SetFeatureVisibilityCommand*>(command) != nullptr
-        || dynamic_cast<const cad::commands::SetVisibilityGroupsCommand*>(command) != nullptr) {
+        || dynamic_cast<const cad::commands::SetVisibilityGroupsCommand*>(command) != nullptr
+        || dynamic_cast<const cad::commands::SetVisibilityFiltersCommand*>(command) != nullptr) {
         return true;
     }
     for (int index = 0; index < command->childCount(); ++index) {

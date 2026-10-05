@@ -99,6 +99,10 @@ private:
         std::vector<cad::application::VisibilityGroup> before,
         std::vector<cad::application::VisibilityGroup> after,
         const QString& text);
+    void commitVisibilityFilters(
+        cad::application::VisibilityFilterState before,
+        cad::application::VisibilityFilterState after,
+        const QString& text);
 
     cad::application::ModelingController modeling_;
     cad::application::VisibilityManager visibilityManager_;

@@ -244,8 +244,11 @@ void MainWindow::createParametricPanel()
             visibilityManager_.clearIsolation();
             visibilityManager_.clearGhosting();
             const auto beforeGroups = visibilityManager_.groups();
+            const auto beforeFilters = visibilityManager_.filters();
             visibilityManager_.resetGroupVisibility();
+            visibilityManager_.clearFilters();
             const auto afterGroups = visibilityManager_.groups();
+            const auto afterFilters = visibilityManager_.filters();
             modeling_.undoStack().beginMacro("Show All");
             bool groupVisibilityChanged = false;
             for (std::size_t index = 0; index < beforeGroups.size(); ++index) {
@@ -257,6 +260,10 @@ void MainWindow::createParametricPanel()
             if (groupVisibilityChanged) {
                 modeling_.undoStack().push(new cad::commands::SetVisibilityGroupsCommand(
                     visibilityManager_, beforeGroups, afterGroups, "Reset Group Visibility"));
+            }
+            if (!(beforeFilters == afterFilters)) {
+                modeling_.undoStack().push(new cad::commands::SetVisibilityFiltersCommand(
+                    visibilityManager_, beforeFilters, afterFilters, "Reset Visibility Filters"));
             }
             const auto result = modeling_.showAllFeatures();
             modeling_.undoStack().endMacro();
@@ -273,6 +280,47 @@ void MainWindow::createParametricPanel()
         [this]() {
             visibilityManager_.clearGhosting();
             refreshVisibilityView();
+        });
+    featureEditorPanel_->setFilterHandlers(
+        [this](const cad::application::VisibilityCategory category,
+               const std::optional<cad::application::VisibilityMode> mode) {
+            const auto before = visibilityManager_.filters();
+            if (mode) visibilityManager_.setCategoryFilter(category, *mode);
+            else visibilityManager_.clearCategoryFilter(category);
+            const auto after = visibilityManager_.filters();
+            if (!(before == after)) commitVisibilityFilters(before, after, "Change Category Filter");
+        },
+        [this](const QString& typeId,
+               const std::optional<cad::application::VisibilityMode> mode) {
+            const auto before = visibilityManager_.filters();
+            if (mode) visibilityManager_.setTypeFilter(typeId.toStdString(), *mode);
+            else visibilityManager_.clearTypeFilter(typeId.toStdString());
+            const auto after = visibilityManager_.filters();
+            if (!(before == after)) commitVisibilityFilters(before, after, "Change Type Filter");
+        },
+        [this](const cad::parametric::FeatureRole role,
+               const std::optional<cad::application::VisibilityMode> mode) {
+            const auto before = visibilityManager_.filters();
+            if (mode) visibilityManager_.setRoleFilter(role, *mode);
+            else visibilityManager_.clearRoleFilter(role);
+            const auto after = visibilityManager_.filters();
+            if (!(before == after)) commitVisibilityFilters(before, after, "Change Role Filter");
+        },
+        [this]() {
+            const auto before = visibilityManager_.filters();
+            visibilityManager_.clearFilters();
+            const auto after = visibilityManager_.filters();
+            if (!(before == after)) commitVisibilityFilters(before, after, "Clear Visibility Filters");
+        },
+        [this](const cad::application::VisibilityCategory category) {
+            const auto before = visibilityManager_.filters();
+            visibilityManager_.clearFilters();
+            for (const auto candidate : cad::application::visibilityCategories())
+                visibilityManager_.setCategoryFilter(candidate,
+                    candidate == category ? cad::application::VisibilityMode::Visible
+                                          : cad::application::VisibilityMode::Hidden);
+            const auto after = visibilityManager_.filters();
+            if (!(before == after)) commitVisibilityFilters(before, after, "Show Only Category");
         });
     featureEditorPanel_->setGroupHandlers(
         [this](const QStringList& featureIds) {
@@ -351,11 +399,21 @@ void MainWindow::commitVisibilityGroups(
         visibilityManager_, std::move(before), std::move(after), text));
 }
 
+void MainWindow::commitVisibilityFilters(
+    cad::application::VisibilityFilterState before,
+    cad::application::VisibilityFilterState after,
+    const QString& text)
+{
+    modeling_.undoStack().push(new cad::commands::SetVisibilityFiltersCommand(
+        visibilityManager_, std::move(before), std::move(after), text));
+}
+
 void MainWindow::refreshModelView(const bool fitView)
 {
     const auto result = presenter_->refreshModel();
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
+    featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
     // ModelPresenter restores the OCCT selection, including topology
     // references. Do not select feature objects again here: that would
     // discard restored face/edge/vertex selection.
@@ -376,6 +434,7 @@ void MainWindow::refreshVisibilityView()
     presenter_->refreshVisibility();
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
+    featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
     applySelectionSnapshot(viewer_->selectionSnapshot(), false);
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (!activeSketchId_.empty()) {
@@ -1397,6 +1456,7 @@ void MainWindow::newDocument()
     applySelection({});
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
+    featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     currentFile_.clear();
     updateTitle();
@@ -1578,6 +1638,7 @@ void MainWindow::processProjectLoadPresentationChunk()
     presenter_->refreshVisibility();
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
+    featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     const auto finalSync = finalSyncTimer.elapsed();
     QElapsedTimer fitTimer;

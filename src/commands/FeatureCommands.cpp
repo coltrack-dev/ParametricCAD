@@ -336,6 +336,35 @@ void SetVisibilityGroupsCommand::redo()
     apply(after_);
 }
 
+SetVisibilityFiltersCommand::SetVisibilityFiltersCommand(
+    application::VisibilityManager& visibilityManager,
+    application::VisibilityFilterState before,
+    application::VisibilityFilterState after,
+    const QString& text)
+    : QUndoCommand(text), visibilityManager_(visibilityManager),
+      before_(std::move(before)), after_(std::move(after))
+{
+}
+
+void SetVisibilityFiltersCommand::apply(
+    const application::VisibilityFilterState& filters)
+{
+    std::string error;
+    if (!visibilityManager_.replaceFilters(filters, error)) {
+        throw std::runtime_error(error);
+    }
+}
+
+void SetVisibilityFiltersCommand::undo()
+{
+    apply(before_);
+}
+
+void SetVisibilityFiltersCommand::redo()
+{
+    apply(after_);
+}
+
 void AddFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());
