@@ -2,6 +2,9 @@
 
 #include "application/VisibilityMode.h"
 
+#include <Bnd_Box.hxx>
+#include <gp_Pnt.hxx>
+
 #include <set>
 #include <optional>
 #include <string>
@@ -10,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <utility>
 
 namespace cad::parametric {
 class Body;
@@ -32,6 +36,20 @@ struct VisibilityChange
     std::string featureId;
     VisibilityMode oldMode{VisibilityMode::Visible};
     VisibilityMode newMode{VisibilityMode::Visible};
+};
+
+enum class SpatialRelation
+{
+    Intersects
+};
+
+struct SpatialVisibilityRule
+{
+    bool enabled{false};
+    gp_Pnt min;
+    gp_Pnt max;
+    SpatialRelation relation{SpatialRelation::Intersects};
+    VisibilityMode outsideMode{VisibilityMode::Hidden};
 };
 
 struct VisibilityUpdate
@@ -105,6 +123,13 @@ public:
     bool isolationActive() const noexcept;
     void ghostOthers(const std::vector<std::string>& selectedIds);
     void clearGhosting();
+    void setSpatialRule(const SpatialVisibilityRule& rule);
+    void clearSpatialRule();
+    const SpatialVisibilityRule& spatialRule() const noexcept;
+    void updateBoundingBoxes(const cad::parametric::Body& body);
+    std::optional<std::pair<gp_Pnt, gp_Pnt>> spatialBounds(
+        const cad::parametric::Body& body,
+        const std::vector<std::string>& featureIds) const;
     void clear();
 
     std::optional<std::string> createGroup(
@@ -160,6 +185,7 @@ public:
     VisibilityUpdate evaluate(const cad::parametric::Body& body);
     std::size_t lastVisibilityEvaluationCount() const noexcept;
     std::size_t lastVisibilityChangeCount() const noexcept;
+    std::size_t lastSpatialEvaluationCount() const noexcept;
 
 private:
     static VisibilityMode moreRestrictive(VisibilityMode first, VisibilityMode second);
@@ -175,6 +201,8 @@ private:
     VisibilityMode filterModeForFeature(
         const cad::parametric::ParametricFeature& feature,
         const VisibilityFilterState& filters) const;
+    bool insideSpatialRule(
+        const cad::parametric::ParametricFeature& feature) const;
 
     std::set<std::string> isolatedFeatureIds_;
     std::set<std::string> ghostedSelectionIds_;
@@ -184,8 +212,11 @@ private:
     std::uint64_t nextPresetSequence_{1};
     std::uint64_t nextGroupSequence_{1};
     std::unordered_map<std::string, VisibilityMode> effectiveModes_;
+    SpatialVisibilityRule spatialRule_;
+    std::unordered_map<std::string, Bnd_Box> boundingBoxes_;
     std::size_t lastVisibilityEvaluationCount_{0};
     std::size_t lastVisibilityChangeCount_{0};
+    mutable std::size_t lastSpatialEvaluationCount_{0};
 };
 
 } // namespace cad::application

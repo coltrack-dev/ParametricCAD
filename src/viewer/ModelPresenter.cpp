@@ -30,6 +30,7 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
         for (const auto& id : result.presentedIds) ids.append(QString::fromStdString(id));
         return ids;
     }());
+    visibilityManager_.updateBoundingBoxes(body_);
     applyVisibility();
     viewer_.restoreSelection(body_, selectedTopology, selectedObjects);
     viewer_.endBulkUpdate();

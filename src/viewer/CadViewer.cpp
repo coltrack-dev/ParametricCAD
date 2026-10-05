@@ -33,6 +33,7 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRep_Builder.hxx>
@@ -1580,6 +1581,119 @@ void CadViewer::applyVisibilityChanges(
     if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
 }
 
+void CadViewer::setSpatialBox(const gp_Pnt& min, const gp_Pnt& max)
+{
+    if (!initialized_ || context_.IsNull()) return;
+    const gp_Vec diagonal(min, max);
+    if (diagonal.X() <= 0.0 || diagonal.Y() <= 0.0 || diagonal.Z() <= 0.0) return;
+    spatialBoxMin_ = min;
+    spatialBoxMax_ = max;
+    const auto shape = BRepPrimAPI_MakeBox(min, max).Shape();
+    if (spatialBoxObject_.IsNull()) {
+        spatialBoxObject_ = new AIS_Shape(shape);
+        spatialBoxObject_->SetDisplayMode(AIS_WireFrame);
+        spatialBoxObject_->SetColor(Quantity_NOC_CYAN1);
+        spatialBoxObject_->SetTransparency(0.8);
+        context_->Display(spatialBoxObject_, Standard_False);
+        context_->Deactivate(spatialBoxObject_);
+    } else {
+        spatialBoxObject_->SetShape(shape);
+        context_->Redisplay(spatialBoxObject_, Standard_False);
+    }
+    if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
+}
+
+void CadViewer::setSpatialBoxChangedHandler(
+    std::function<void(const gp_Pnt&, const gp_Pnt&)> handler)
+{
+    spatialBoxChangedHandler_ = std::move(handler);
+}
+
+void CadViewer::clearSpatialBox()
+{
+    if (spatialBoxObject_.IsNull() || context_.IsNull()) return;
+    context_->Remove(spatialBoxObject_, Standard_False);
+    spatialBoxObject_.Nullify();
+    spatialBoxMin_ = gp_Pnt();
+    spatialBoxMax_ = gp_Pnt();
+    spatialBoxHandle_ = -1;
+    if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
+}
+
+int CadViewer::spatialBoxHandleAt(const QPoint& position) const
+{
+    if (spatialBoxObject_.IsNull() || view_.IsNull()) return -1;
+    const gp_Pnt center(
+        (spatialBoxMin_.X() + spatialBoxMax_.X()) * 0.5,
+        (spatialBoxMin_.Y() + spatialBoxMax_.Y()) * 0.5,
+        (spatialBoxMin_.Z() + spatialBoxMax_.Z()) * 0.5);
+    const std::array<gp_Pnt, 6> faces{
+        gp_Pnt(spatialBoxMin_.X(), center.Y(), center.Z()),
+        gp_Pnt(spatialBoxMax_.X(), center.Y(), center.Z()),
+        gp_Pnt(center.X(), spatialBoxMin_.Y(), center.Z()),
+        gp_Pnt(center.X(), spatialBoxMax_.Y(), center.Z()),
+        gp_Pnt(center.X(), center.Y(), spatialBoxMin_.Z()),
+        gp_Pnt(center.X(), center.Y(), spatialBoxMax_.Z())};
+    int result = -1;
+    double best = 18.0 * 18.0;
+    for (int index = 0; index < static_cast<int>(faces.size()); ++index) {
+        const auto screen = projectWorldPoint(view_, faces[index], width(), height());
+        const auto dx = screen.x() - position.x();
+        const auto dy = screen.y() - position.y();
+        const auto distance = dx * dx + dy * dy;
+        if (distance < best) {
+            best = distance;
+            result = index;
+        }
+    }
+    return result;
+}
+
+void CadViewer::updateSpatialBoxDrag(const QPoint& position)
+{
+    if (spatialBoxHandle_ < 0 || view_.IsNull()) return;
+    const gp_Pnt center(
+        (spatialBoxDragMin_.X() + spatialBoxDragMax_.X()) * 0.5,
+        (spatialBoxDragMin_.Y() + spatialBoxDragMax_.Y()) * 0.5,
+        (spatialBoxDragMin_.Z() + spatialBoxDragMax_.Z()) * 0.5);
+    const int axis = spatialBoxHandle_ / 2;
+    const bool minimum = (spatialBoxHandle_ % 2) == 0;
+    const double lower = axis == 0 ? spatialBoxDragMin_.X()
+        : axis == 1 ? spatialBoxDragMin_.Y() : spatialBoxDragMin_.Z();
+    const double upper = axis == 0 ? spatialBoxDragMax_.X()
+        : axis == 1 ? spatialBoxDragMax_.Y() : spatialBoxDragMax_.Z();
+    const double length = upper - lower;
+    if (length <= 1.0e-9) return;
+    gp_Pnt axisEnd = center;
+    if (axis == 0) axisEnd.SetX(center.X() + length * 0.5);
+    if (axis == 1) axisEnd.SetY(center.Y() + length * 0.5);
+    if (axis == 2) axisEnd.SetZ(center.Z() + length * 0.5);
+    const auto startScreen = projectWorldPoint(
+        view_, spatialBoxHandle_ % 2 == 0
+            ? (axis == 0 ? gp_Pnt(lower, center.Y(), center.Z())
+                : axis == 1 ? gp_Pnt(center.X(), lower, center.Z())
+                            : gp_Pnt(center.X(), center.Y(), lower))
+            : (axis == 0 ? gp_Pnt(upper, center.Y(), center.Z())
+                : axis == 1 ? gp_Pnt(center.X(), upper, center.Z())
+                            : gp_Pnt(center.X(), center.Y(), upper)), width(), height());
+    const auto endScreen = projectWorldPoint(view_, axisEnd, width(), height());
+    const QPointF screenAxis = endScreen - startScreen;
+    const double screenLengthSquared = QPointF::dotProduct(screenAxis, screenAxis);
+    if (screenLengthSquared <= 1.0e-9) return;
+    const QPointF mouseDelta = QPointF(position - spatialBoxDragStart_);
+    const double worldDelta = QPointF::dotProduct(mouseDelta, screenAxis)
+        / screenLengthSquared * length;
+    const double value = minimum ? std::min(lower + worldDelta, upper - 1.0e-6)
+                                 : std::max(upper + worldDelta, lower + 1.0e-6);
+    gp_Pnt min = spatialBoxDragMin_;
+    gp_Pnt max = spatialBoxDragMax_;
+    if (axis == 0) minimum ? min.SetX(value) : max.SetX(value);
+    if (axis == 1) minimum ? min.SetY(value) : max.SetY(value);
+    if (axis == 2) minimum ? min.SetZ(value) : max.SetZ(value);
+    setSpatialBox(min, max);
+    if (spatialBoxChangedHandler_) spatialBoxChangedHandler_(min, max);
+}
+
 cad::application::VisibilityMode CadViewer::featureVisibilityMode(
     const QString& featureId) const noexcept
 {
@@ -1657,6 +1771,7 @@ void CadViewer::clear()
     }
     sketchPreviewFirstPoint_.reset();
     context_->RemoveAll(Standard_True);
+    spatialBoxObject_.Nullify();
     displayedShapes_.clear();
     featureObjects_.clear();
     featureVisibility_.clear();
@@ -2514,6 +2629,14 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     }
 
     if (initialized_ && event->button() == Qt::LeftButton && !pushPullActive_) {
+        const auto spatialHandle = spatialBoxHandleAt(lastMousePosition_);
+        if (spatialHandle >= 0) {
+            spatialBoxHandle_ = spatialHandle;
+            spatialBoxDragStart_ = lastMousePosition_;
+            spatialBoxDragMin_ = spatialBoxMin_;
+            spatialBoxDragMax_ = spatialBoxMax_;
+            return;
+        }
         const auto axis = axisIndicatorHitTest(lastMousePosition_);
         if (axis) {
             switch (*axis) {
@@ -2661,6 +2784,16 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
+    if (spatialBoxHandle_ >= 0) {
+        if (!event->buttons().testFlag(Qt::LeftButton)) {
+            spatialBoxHandle_ = -1;
+            return;
+        }
+        updateSpatialBoxDrag(currentPosition);
+        lastMousePosition_ = currentPosition;
+        return;
+    }
+
     if (pushPullActive_) {
         updatePushPullPreview(currentPosition);
         lastMousePosition_ = currentPosition;
@@ -2744,6 +2877,10 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
 void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (spatialBoxHandle_ >= 0 && event->button() == Qt::LeftButton) {
+        spatialBoxHandle_ = -1;
+        return;
+    }
     if (transformDragging_) {
         if (event->button() == Qt::LeftButton) {
             commitTransform();

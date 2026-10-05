@@ -22,6 +22,7 @@
 #include <gp_Vec.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt2d.hxx>
+#include <gp_Pnt.hxx>
 
 #include "viewer/PushPullDrag.h"
 #include "viewer/SnapManager.h"
@@ -90,6 +91,10 @@ public:
         const std::map<QString, cad::application::VisibilityMode>& modes);
     void applyVisibilityChanges(
         const std::vector<cad::application::VisibilityChange>& changes);
+    void setSpatialBox(const gp_Pnt& min, const gp_Pnt& max);
+    void clearSpatialBox();
+    void setSpatialBoxChangedHandler(
+        std::function<void(const gp_Pnt&, const gp_Pnt&)> handler);
     cad::application::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
     void clear();
@@ -209,6 +214,8 @@ private:
     void updateOrbitStateFromCamera();
     void applyTurntableCamera();
     void orbitTurntable(const QPoint& currentPosition);
+    int spatialBoxHandleAt(const QPoint& position) const;
+    void updateSpatialBoxDrag(const QPoint& position);
 
     QToolBar* toolBar_{nullptr};
     QLabel* xRayStatusLabel_{nullptr};
@@ -241,6 +248,7 @@ private:
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
     std::map<QString, cad::application::VisibilityMode> featureVisibility_;
+    Handle(AIS_Shape) spatialBoxObject_;
     int bulkUpdateDepth_{0};
     bool bulkCachesInvalidated_{false};
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};
@@ -261,6 +269,13 @@ private:
     std::function<void(const QString&, int, const gp_Vec&, double)> pushPullCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCopyCommittedHandler_;
+    std::function<void(const gp_Pnt&, const gp_Pnt&)> spatialBoxChangedHandler_;
+    gp_Pnt spatialBoxMin_;
+    gp_Pnt spatialBoxMax_;
+    int spatialBoxHandle_{-1};
+    QPoint spatialBoxDragStart_;
+    gp_Pnt spatialBoxDragMin_;
+    gp_Pnt spatialBoxDragMax_;
     bool sketchMode_{false};
     SelectionMode sketchPreviousSelectionMode_{SelectionMode::Object};
     gp_Pnt sketchOrigin_;

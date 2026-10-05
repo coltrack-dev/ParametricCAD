@@ -505,6 +505,72 @@ private slots:
         QVERIFY(manager.deletePreset(manager.presets().front().id));
         QVERIFY(manager.presets().empty());
     }
+
+    void spatialVisibilityUsesWorldBoundsAndComposes()
+    {
+        Body body;
+        auto inside = std::make_shared<BoxParametricFeature>("inside", 1, 1, 1);
+        auto outside = std::make_shared<BoxParametricFeature>("outside", 1, 1, 1);
+        gp_Trsf placement;
+        placement.SetTranslation(gp_Vec(10, 0, 0));
+        outside->setPlacement(placement);
+        body.addFeature(inside);
+        body.addFeature(outside);
+        QVERIFY(body.recompute());
+        const auto originalShape = inside->shape();
+
+        VisibilityManager manager;
+        manager.updateBoundingBoxes(body);
+        cad::application::SpatialVisibilityRule rule;
+        rule.enabled = true;
+        rule.min = gp_Pnt(-0.1, -0.1, -0.1);
+        rule.max = gp_Pnt(2, 2, 2);
+        manager.setSpatialRule(rule);
+        QCOMPARE(manager.effectiveMode(*inside, body), VisibilityMode::Visible);
+        QCOMPARE(manager.effectiveMode(*outside, body), VisibilityMode::Hidden);
+        QVERIFY(manager.lastSpatialEvaluationCount() >= 2);
+
+        rule.outsideMode = VisibilityMode::Ghosted;
+        manager.setSpatialRule(rule);
+        QCOMPARE(manager.effectiveMode(*outside, body), VisibilityMode::Ghosted);
+
+        inside->setUserVisible(false);
+        QCOMPARE(manager.effectiveMode(*inside, body), VisibilityMode::Hidden);
+        inside->setUserVisible(true);
+        const auto group = manager.createGroup("Hidden group");
+        QVERIFY(group);
+        QVERIFY(manager.addFeaturesToGroup(*group, {"inside"}));
+        QVERIFY(manager.setGroupVisibility(*group, VisibilityMode::Hidden));
+        QCOMPARE(manager.effectiveMode(*inside, body), VisibilityMode::Hidden);
+
+        manager.clearSpatialRule();
+        QVERIFY(manager.removeGroup(*group));
+        QCOMPARE(manager.effectiveMode(*outside, body), VisibilityMode::Visible);
+        QVERIFY(inside->shape().IsSame(originalShape));
+    }
+
+    void spatialVisibilityEvaluatesDeterministicFeatureCounts()
+    {
+        for (const auto count : {100, 500, 5000}) {
+            Body body;
+            for (int index = 0; index < count; ++index) {
+                auto feature = std::make_shared<ClassifiedFixture>(
+                    "feature-" + std::to_string(index), "Box", FeatureRole::Generic);
+                body.addFeature(feature);
+            }
+            QVERIFY(body.recompute());
+            VisibilityManager manager;
+            manager.updateBoundingBoxes(body);
+            cad::application::SpatialVisibilityRule rule;
+            rule.enabled = true;
+            rule.min = gp_Pnt(-1, -1, -1);
+            rule.max = gp_Pnt(2, 2, 2);
+            manager.setSpatialRule(rule);
+            const auto update = manager.evaluate(body);
+            QCOMPARE(update.evaluatedFeatureCount, static_cast<std::size_t>(count));
+            QCOMPARE(manager.lastSpatialEvaluationCount(), static_cast<std::size_t>(count));
+        }
+    }
 };
 
 QTEST_APPLESS_MAIN(ModelTests)

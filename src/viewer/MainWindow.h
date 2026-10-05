@@ -46,6 +46,10 @@ private:
     void createParametricPanel();
     void refreshModelView(bool fitView = false);
     void refreshVisibilityView();
+    void activateSpatialVisibility(
+        cad::application::VisibilityMode outsideMode =
+            cad::application::VisibilityMode::Hidden);
+    void clearSpatialVisibility();
     void applySelection(const QStringList& featureIds, bool updateViewer = true);
     void applySelectionSnapshot(
         const cad::application::SelectionSnapshot& selection,

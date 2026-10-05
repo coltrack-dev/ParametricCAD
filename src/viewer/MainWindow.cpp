@@ -85,6 +85,15 @@ MainWindow::MainWindow(QWidget* parent)
                 featureId.toStdString(), delta));
         }
     );
+    viewer_->setSpatialBoxChangedHandler(
+        [this](const gp_Pnt& min, const gp_Pnt& max) {
+            auto rule = visibilityManager_.spatialRule();
+            if (!rule.enabled) return;
+            rule.min = min;
+            rule.max = max;
+            visibilityManager_.setSpatialRule(rule);
+            refreshVisibilityView();
+        });
     viewer_->setSketchPointClickedHandler(
         [this](const gp_Pnt2d& point, const double tolerance) {
             if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend)
@@ -243,6 +252,8 @@ void MainWindow::createParametricPanel()
         [this]() {
             visibilityManager_.clearIsolation();
             visibilityManager_.clearGhosting();
+            visibilityManager_.clearSpatialRule();
+            viewer_->clearSpatialBox();
             const auto beforeGroups = visibilityManager_.groups();
             const auto beforeFilters = visibilityManager_.filters();
             visibilityManager_.resetGroupVisibility();
@@ -516,6 +527,35 @@ void MainWindow::refreshVisibilityView()
         if (sketch) viewer_->setSketchConstraintMarkers(*sketch, selectedConstraintId_.toStdString());
     }
     refreshConstraintManager();
+}
+
+void MainWindow::activateSpatialVisibility(
+    const cad::application::VisibilityMode outsideMode)
+{
+    const auto bounds = visibilityManager_.spatialBounds(modeling_.body(), selectedIds());
+    if (!bounds) {
+        statusBar()->showMessage("No feature geometry is available for a spatial box", 3000);
+        return;
+    }
+    const auto& min = bounds->first;
+    const auto& max = bounds->second;
+    const double margin = std::max({max.X() - min.X(), max.Y() - min.Y(), max.Z() - min.Z()})
+        * 0.05 + 1.0e-3;
+    cad::application::SpatialVisibilityRule rule;
+    rule.enabled = true;
+    rule.min = gp_Pnt(min.X() - margin, min.Y() - margin, min.Z() - margin);
+    rule.max = gp_Pnt(max.X() + margin, max.Y() + margin, max.Z() + margin);
+    rule.outsideMode = outsideMode;
+    visibilityManager_.setSpatialRule(rule);
+    viewer_->setSpatialBox(rule.min, rule.max);
+    refreshVisibilityView();
+}
+
+void MainWindow::clearSpatialVisibility()
+{
+    visibilityManager_.clearSpatialRule();
+    viewer_->clearSpatialBox();
+    refreshVisibilityView();
 }
 
 void MainWindow::refreshConstraintManager()
@@ -794,6 +834,15 @@ void MainWindow::createActions()
 
     auto* modelingMenu = menuBar()->addMenu("&Modeling");
     auto* viewMenu = menuBar()->addMenu("&View");
+
+    auto* spatialHiddenAction = viewMenu->addAction("Activate Spatial Visibility");
+    connect(spatialHiddenAction, &QAction::triggered, this,
+        [this]() { activateSpatialVisibility(cad::application::VisibilityMode::Hidden); });
+    auto* spatialGhostedAction = viewMenu->addAction("Spatial Context (Ghost Outside)");
+    connect(spatialGhostedAction, &QAction::triggered, this,
+        [this]() { activateSpatialVisibility(cad::application::VisibilityMode::Ghosted); });
+    auto* clearSpatialAction = viewMenu->addAction("Clear Spatial Visibility");
+    connect(clearSpatialAction, &QAction::triggered, this, &MainWindow::clearSpatialVisibility);
 
     auto* toolBar = addToolBar("Modeling");
     toolBar->addAction(deleteAction_);
@@ -1709,6 +1758,7 @@ void MainWindow::processProjectLoadPresentationChunk()
     viewer_->retainFeatures(presentedIds);
     viewer_->restoreSelection(body, {}, {});
     viewer_->endBulkUpdate();
+    visibilityManager_.updateBoundingBoxes(body);
     presenter_->refreshVisibility();
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());

@@ -4,6 +4,7 @@
 #include "model/FeatureVisibility.h"
 #include "model/ParametricFeature.h"
 
+#include <BRepBndLib.hxx>
 #include <algorithm>
 #include <cctype>
 #include <utility>
@@ -110,6 +111,51 @@ void VisibilityManager::clearGhosting()
     ghostedSelectionIds_.clear();
 }
 
+void VisibilityManager::setSpatialRule(const SpatialVisibilityRule& rule)
+{
+    spatialRule_ = rule;
+}
+
+void VisibilityManager::clearSpatialRule()
+{
+    spatialRule_ = {};
+}
+
+const SpatialVisibilityRule& VisibilityManager::spatialRule() const noexcept
+{
+    return spatialRule_;
+}
+
+void VisibilityManager::updateBoundingBoxes(const cad::parametric::Body& body)
+{
+    std::unordered_map<std::string, Bnd_Box> replacement;
+    replacement.reserve(body.features().size());
+    for (const auto& feature : body.features()) {
+        if (feature->shape().IsNull()) continue;
+        Bnd_Box bounds;
+        BRepBndLib::Add(feature->shape(), bounds);
+        replacement.emplace(feature->id(), bounds);
+    }
+    boundingBoxes_ = std::move(replacement);
+}
+
+std::optional<std::pair<gp_Pnt, gp_Pnt>> VisibilityManager::spatialBounds(
+    const cad::parametric::Body& body,
+    const std::vector<std::string>& featureIds) const
+{
+    std::unordered_set<std::string> requested(featureIds.begin(), featureIds.end());
+    Bnd_Box bounds;
+    for (const auto& feature : body.features()) {
+        if (!requested.empty() && !requested.contains(feature->id())) continue;
+        const auto found = boundingBoxes_.find(feature->id());
+        if (found != boundingBoxes_.end()) bounds.Add(found->second);
+    }
+    if (bounds.IsVoid()) return {};
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    return std::pair{gp_Pnt(xmin, ymin, zmin), gp_Pnt(xmax, ymax, zmax)};
+}
+
 void VisibilityManager::clear()
 {
     clearIsolation();
@@ -120,8 +166,11 @@ void VisibilityManager::clear()
     nextGroupSequence_ = 1;
     nextPresetSequence_ = 1;
     effectiveModes_.clear();
+    boundingBoxes_.clear();
+    spatialRule_ = {};
     lastVisibilityEvaluationCount_ = 0;
     lastVisibilityChangeCount_ = 0;
+    lastSpatialEvaluationCount_ = 0;
 }
 
 std::optional<std::string> VisibilityManager::createGroup(
@@ -520,11 +569,35 @@ VisibilityMode VisibilityManager::modeForFeature(
     const auto filterMode = filterModeForFeature(feature, filters);
     mode = moreRestrictive(mode, filterMode);
     if (mode != VisibilityMode::Visible) return mode;
+    if (spatialRule_.enabled) {
+        ++lastSpatialEvaluationCount_;
+        if (!insideSpatialRule(feature)) {
+            mode = moreRestrictive(mode, spatialRule_.outsideMode);
+            if (mode != VisibilityMode::Visible) return mode;
+        }
+    }
     if (!ghostedSelectionIds_.empty()
         && !ghostedSelectionIds_.contains(feature.id())) {
         return VisibilityMode::Ghosted;
     }
     return VisibilityMode::Visible;
+}
+
+bool VisibilityManager::insideSpatialRule(
+    const cad::parametric::ParametricFeature& feature) const
+{
+    if (!spatialRule_.enabled) return true;
+    Bnd_Box region;
+    region.Update(spatialRule_.min.X(), spatialRule_.min.Y(), spatialRule_.min.Z(),
+                  spatialRule_.max.X(), spatialRule_.max.Y(), spatialRule_.max.Z());
+    auto found = boundingBoxes_.find(feature.id());
+    if (found == boundingBoxes_.end()) {
+        if (feature.shape().IsNull()) return false;
+        Bnd_Box bounds;
+        BRepBndLib::Add(feature.shape(), bounds);
+        return !bounds.IsOut(region);
+    }
+    return !found->second.IsOut(region);
 }
 
 VisibilityMode VisibilityManager::filterModeForFeature(
@@ -573,6 +646,7 @@ VisibilityProjection VisibilityManager::projection(
 VisibilityUpdate VisibilityManager::evaluate(const cad::parametric::Body& body)
 {
     VisibilityUpdate update;
+    lastSpatialEvaluationCount_ = 0;
     const auto hiddenIds = cad::parametric::hiddenFeatureIds(body, isolatedFeatureIds_);
     const std::set<std::string> hiddenFeatureSet(hiddenIds.begin(), hiddenIds.end());
     std::unordered_map<std::string, VisibilityMode> effectiveGroups;
@@ -616,6 +690,11 @@ std::size_t VisibilityManager::lastVisibilityEvaluationCount() const noexcept
 std::size_t VisibilityManager::lastVisibilityChangeCount() const noexcept
 {
     return lastVisibilityChangeCount_;
+}
+
+std::size_t VisibilityManager::lastSpatialEvaluationCount() const noexcept
+{
+    return lastSpatialEvaluationCount_;
 }
 
 } // namespace cad::application
