@@ -20,6 +20,11 @@ PushPull, Revolve, Boolean, Fillet, Chamfer, Shell, Offset, Loft, Sweep,
 LinearPattern, and PathPattern. Persistence and UI support is feature-specific;
 the registry in `ProjectFile.cpp` is authoritative.
 
+`ImportedFeature` is the Phase B read-only imported-geometry type. It stores a
+world-normalized native OCCT shape with identity ParametricCAD placement and
+generic IFC provenance metadata. Its B-Rep payload is serialized by the
+persistence layer, so reopening a `.pcad` does not require the source IFC.
+
 ## Placement and transforms
 
 Placement is a `gp_Trsf` stored on `ParametricFeature`. The transform gizmo and

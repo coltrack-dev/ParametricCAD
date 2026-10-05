@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Developer-only IFC inventory tool for Phase A import investigations."""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+from pathlib import Path
+import sys
+
+
+PRODUCT_TYPES = [
+    "IfcProduct", "IfcBuildingElement", "IfcWall", "IfcWallStandardCase",
+    "IfcSlab", "IfcColumn", "IfcBeam", "IfcDoor", "IfcWindow", "IfcStair",
+    "IfcRoof", "IfcOpeningElement", "IfcSpace",
+]
+REPRESENTATION_TYPES = [
+    "IfcExtrudedAreaSolid", "IfcRevolvedAreaSolid", "IfcBooleanResult",
+    "IfcBooleanClippingResult", "IfcFacetedBrep", "IfcAdvancedBrep",
+    "IfcMappedItem", "IfcPolygonalFaceSet", "IfcTriangulatedFaceSet",
+    "IfcSweptAreaSolid", "IfcSweptDiskSolid", "IfcFixedReferenceSweptAreaSolid",
+]
+
+
+def entity_type(value) -> str:
+    try:
+        return value.is_a()
+    except Exception:
+        return type(value).__name__
+
+
+def walk_representation(value, result: Counter[str]) -> None:
+    if value is None:
+        return
+    try:
+        result[entity_type(value)] += 1
+        for attribute in value:
+            if hasattr(attribute, "is_a"):
+                walk_representation(attribute, result)
+            elif isinstance(attribute, (tuple, list)):
+                for item in attribute:
+                    walk_representation(item, result)
+    except TypeError:
+        return
+
+
+def placement_depth(product) -> int:
+    placement = getattr(product, "ObjectPlacement", None)
+    depth = 0
+    seen = set()
+    while placement is not None and getattr(placement, "id", lambda: 0)() not in seen:
+        identifier = placement.id()
+        seen.add(identifier)
+        depth += 1
+        placement = getattr(placement, "PlacementRelTo", None)
+    return depth
+
+
+def storey_name(product) -> str:
+    relations = getattr(product, "ContainedInStructure", ()) or ()
+    for relation in relations:
+        structure = getattr(relation, "RelatingStructure", None)
+        if structure is not None and structure.is_a("IfcBuildingStorey"):
+            return structure.Name or structure.GlobalId
+    return "<unassigned>"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("ifc_file", type=Path)
+    args = parser.parse_args()
+
+    try:
+        import ifcopenshell
+    except ImportError as error:
+        print(f"IfcOpenShell is required for inventory: {error}", file=sys.stderr)
+        return 2
+
+    model = ifcopenshell.open(str(args.ifc_file))
+    print(f"file: {args.ifc_file}")
+    print(f"schema: {model.schema}")
+
+    for name in ["IfcProject", "IfcSite", "IfcBuilding", "IfcBuildingStorey"]:
+        print(f"{name}: {len(model.by_type(name))}")
+    for name in PRODUCT_TYPES:
+        print(f"{name}: {len(model.by_type(name))}")
+
+    products = model.by_type("IfcProduct")
+    print("product type counts:")
+    for name, count in sorted(Counter(entity_type(item) for item in products).items()):
+        print(f"  {name}: {count}")
+
+    representations: Counter[str] = Counter()
+    for product in products:
+        representation = getattr(product, "Representation", None)
+        if representation is not None:
+            walk_representation(representation, representations)
+    print("representation type counts:")
+    for name in REPRESENTATION_TYPES:
+        print(f"  {name}: {representations.get(name, 0)}")
+    print("  all encountered:")
+    for name, count in sorted(representations.items()):
+        print(f"    {name}: {count}")
+
+    depths = Counter(placement_depth(product) for product in products)
+    print("placement depth:")
+    print(f"  min: {min(depths) if depths else 0}")
+    print(f"  max: {max(depths) if depths else 0}")
+    print(f"  histogram: {dict(sorted(depths.items()))}")
+
+    print("units:")
+    for assignment in model.by_type("IfcUnitAssignment"):
+        for unit in assignment.Units or ():
+            print(f"  {unit.is_a()}: {getattr(unit, 'UnitType', None)} "
+                  f"{getattr(unit, 'Prefix', None)} {getattr(unit, 'Name', None)}")
+
+    hierarchy = defaultdict(Counter)
+    for product in products:
+        hierarchy[storey_name(product)][entity_type(product)] += 1
+    print("spatial hierarchy:")
+    for project in model.by_type("IfcProject"):
+        print(f"  Project {project.Name or project.GlobalId}")
+    for site in model.by_type("IfcSite"):
+        print(f"    Site {site.Name or site.GlobalId}")
+    for building in model.by_type("IfcBuilding"):
+        print(f"      Building {building.Name or building.GlobalId}")
+    for storey, counts in sorted(hierarchy.items()):
+        print(f"        Storey {storey}")
+        for name, count in sorted(counts.items()):
+            print(f"          {name}: {count}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

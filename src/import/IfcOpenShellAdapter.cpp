@@ -1,0 +1,149 @@
+#include "import/IfcOpenShellAdapter.h"
+
+#include <QElapsedTimer>
+
+#include <algorithm>
+#include <memory>
+#include <stdexcept>
+
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+#include <BRepBuilderAPI_Transform.hxx>
+#include <ifcgeom/IfcGeom.h>
+#include <ifcgeom_schema_agnostic/IfcGeomIterator.h>
+#include <ifcparse/IfcFile.h>
+#include <gp_Trsf.hxx>
+#endif
+
+namespace cad::import {
+
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+namespace {
+
+bool excluded(const QString& type)
+{
+    return type == "IfcOpeningElement" || type == "IfcSpace" || type == "IfcGrid"
+        || type == "IfcDistributionPort" || type == "IfcAnnotation"
+        || type == "IfcProject" || type == "IfcSite" || type == "IfcBuilding"
+        || type == "IfcBuildingStorey";
+}
+
+QString parentValue(const IfcGeom::Element& element, const char* requestedType)
+{
+    for (const auto* parent : element.parents()) {
+        if (parent && parent->type() == requestedType)
+            return QString::fromStdString(parent->name());
+    }
+    return {};
+}
+
+}
+#endif
+
+IfcImportResult IfcOpenShellAdapter::importFile(const QString& path) const
+{
+    IfcImportResult result;
+    QElapsedTimer total;
+    total.start();
+
+#if !defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    Q_UNUSED(path);
+    result.diagnostics.push_back({ImportSeverity::Error, {}, {},
+        QStringLiteral("IfcOpenShell support is disabled. Configure a pinned v0.7.1 build "
+                       "with PARAMETRIC_CAD_ENABLE_IFC=ON.")});
+    result.statistics.failedCount = 1;
+    result.statistics.totalMilliseconds = total.elapsed();
+    return result;
+#else
+    try {
+        QElapsedTimer parse;
+        parse.start();
+        auto file = std::make_unique<IfcParse::IfcFile>(path.toStdString());
+        if (!file->good()) {
+            result.diagnostics.push_back({ImportSeverity::Error, {}, {},
+                QStringLiteral("IfcOpenShell could not open the IFC file")});
+            result.statistics.failedCount = 1;
+            return result;
+        }
+        result.statistics.schema = QString::fromStdString(file->schema()->name());
+        result.statistics.parseMilliseconds = parse.elapsed();
+
+        IfcGeom::IteratorSettings settings;
+        settings.set(IfcGeom::IteratorSettings::USE_BREP_DATA, true);
+        settings.set(IfcGeom::IteratorSettings::USE_WORLD_COORDS, true);
+        settings.set(IfcGeom::IteratorSettings::CONVERT_BACK_UNITS, false);
+        settings.set(IfcGeom::IteratorSettings::SEW_SHELLS, true);
+        settings.set(IfcGeom::IteratorSettings::DISABLE_TRIANGULATION, true);
+        settings.set(IfcGeom::IteratorSettings::ELEMENT_HIERARCHY, true);
+
+        QElapsedTimer geometry;
+        geometry.start();
+        IfcGeom::Iterator iterator(settings, file.get());
+        if (!iterator.initialize()) {
+            result.diagnostics.push_back({ImportSeverity::Error, {}, {},
+                QStringLiteral("IfcOpenShell could not initialize the geometry iterator")});
+            result.statistics.failedCount = 1;
+            return result;
+        }
+
+        do {
+            auto* element = iterator.get_native();
+            if (!element) {
+                ++result.statistics.failedCount;
+                result.diagnostics.push_back({ImportSeverity::Warning, {}, {},
+                    QStringLiteral("Geometry iterator returned no native B-Rep element")});
+                continue;
+            }
+            const QString type = QString::fromStdString(element->type());
+            ++result.statistics.consideredCount;
+            ++result.statistics.consideredByEntity[type];
+            if (excluded(type)) {
+                ++result.statistics.skippedCount;
+                continue;
+            }
+
+            try {
+                // IfcOpenShell's native iterator returns metres when
+                // CONVERT_BACK_UNITS is false. ParametricCAD's canonical unit
+                // is millimetres, so this is the single normalization point.
+                TopoDS_Shape shape = element->geometry().as_compound(true);
+                if (shape.IsNull()) {
+                    ++result.statistics.failedCount;
+                    ++result.statistics.failedByEntity[type];
+                    continue;
+                }
+                gp_Trsf scale;
+                scale.SetScale(gp_Pnt(0, 0, 0), 1000.0);
+                shape = BRepBuilderAPI_Transform(shape, scale, true).Shape();
+                if (shape.IsNull()) throw std::runtime_error("normalized shape is null");
+
+                result.products.push_back({std::move(shape),
+                    QString::fromStdString(element->guid()), type,
+                    QString::fromStdString(element->name()), {},
+                    parentValue(*element, "IfcBuilding"),
+                    parentValue(*element, "IfcBuildingStorey")});
+                ++result.statistics.productsWithGeometry;
+                ++result.statistics.importedCount;
+                ++result.statistics.importedByEntity[type];
+            } catch (const std::exception& exception) {
+                ++result.statistics.failedCount;
+                ++result.statistics.failedByEntity[type];
+                result.diagnostics.push_back({ImportSeverity::Warning,
+                    QString::fromStdString(element->guid()), type,
+                    QString::fromUtf8(exception.what())});
+            }
+        } while (iterator.next());
+
+        result.statistics.geometryMilliseconds = geometry.elapsed();
+        result.statistics.totalMilliseconds = total.elapsed();
+        return result;
+    } catch (const std::exception& exception) {
+        result.diagnostics.push_back({ImportSeverity::Error, {}, {},
+            QString::fromUtf8(exception.what())});
+        result.statistics.failedCount = 1;
+        result.statistics.totalMilliseconds = total.elapsed();
+        return result;
+    }
+#endif
+}
+
+} // namespace cad::import

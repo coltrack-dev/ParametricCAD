@@ -1,0 +1,133 @@
+file: examples/ifc/Duplex_A_20110505.ifc
+schema: IFC2X3
+IfcProject: 1
+IfcSite: 1
+IfcBuilding: 1
+IfcBuildingStorey: 4
+IfcProduct: 295
+IfcBuildingElement: 157
+IfcWall: 57
+IfcWallStandardCase: 56
+IfcSlab: 21
+IfcColumn: 0
+IfcBeam: 8
+IfcDoor: 14
+IfcWindow: 24
+IfcStair: 2
+IfcRoof: 1
+IfcOpeningElement: 50
+IfcSpace: 21
+product type counts:
+  IfcBeam: 8
+  IfcBuilding: 1
+  IfcBuildingStorey: 4
+  IfcCovering: 13
+  IfcDoor: 14
+  IfcFooting: 7
+  IfcFurnishingElement: 61
+  IfcMember: 4
+  IfcOpeningElement: 50
+  IfcRailing: 4
+  IfcRoof: 1
+  IfcSite: 1
+  IfcSlab: 21
+  IfcSpace: 21
+  IfcStair: 2
+  IfcStairFlight: 2
+  IfcWall: 1
+  IfcWallStandardCase: 56
+  IfcWindow: 24
+representation type counts:
+  IfcExtrudedAreaSolid: 419
+  IfcRevolvedAreaSolid: 0
+  IfcBooleanResult: 0
+  IfcBooleanClippingResult: 7
+  IfcFacetedBrep: 0
+  IfcAdvancedBrep: 0
+  IfcMappedItem: 167
+  IfcPolygonalFaceSet: 0
+  IfcTriangulatedFaceSet: 0
+  IfcSweptAreaSolid: 0
+  IfcSweptDiskSolid: 0
+  IfcFixedReferenceSweptAreaSolid: 0
+  all encountered:
+    IfcArbitraryClosedProfileDef: 118
+    IfcArbitraryProfileDefWithVoids: 78
+    IfcAxis2Placement2D: 315
+    IfcAxis2Placement3D: 1190
+    IfcBooleanClippingResult: 7
+    IfcCartesianPoint: 39239
+    IfcCartesianTransformationOperator3D: 167
+    IfcCircle: 92
+    IfcCompositeCurve: 40
+    IfcCompositeCurveSegment: 294
+    IfcConnectedFaceSet: 344
+    IfcDirection: 1426
+    IfcExtrudedAreaSolid: 419
+    IfcFace: 9166
+    IfcFaceBasedSurfaceModel: 67
+    IfcFaceBound: 70
+    IfcFaceOuterBound: 9166
+    IfcGeometricRepresentationContext: 590
+    IfcGeometricRepresentationSubContext: 136
+    IfcGeometricSet: 70
+    IfcMappedItem: 167
+    IfcParameterValue: 184
+    IfcPlane: 7
+    IfcPolyLoop: 9236
+    IfcPolygonalBoundedHalfSpace: 7
+    IfcPolyline: 1148
+    IfcProductDefinitionShape: 286
+    IfcRectangleProfileDef: 223
+    IfcRepresentationMap: 167
+    IfcShapeRepresentation: 590
+    IfcTrimmedCurve: 92
+    float: 118006
+placement depth:
+  min: 1
+  max: 6
+  histogram: {1: 1, 2: 1, 3: 4, 4: 139, 5: 112, 6: 38}
+units:
+  IfcSIUnit: LENGTHUNIT None METRE
+  IfcSIUnit: AREAUNIT None SQUARE_METRE
+  IfcSIUnit: VOLUMEUNIT None CUBIC_METRE
+  IfcConversionBasedUnit: PLANEANGLEUNIT None DEGREE
+  IfcSIUnit: TIMEUNIT None SECOND
+spatial hierarchy:
+  Project 0001
+    Site Default
+      Building 1xS3BCk291UvhgP2a6eflK
+        Storey <unassigned>
+          IfcBuilding: 1
+          IfcBuildingStorey: 4
+          IfcFurnishingElement: 61
+          IfcMember: 4
+          IfcOpeningElement: 50
+          IfcRailing: 4
+          IfcSite: 1
+          IfcSlab: 1
+          IfcSpace: 21
+          IfcStairFlight: 2
+        Storey Level 1
+          IfcBeam: 4
+          IfcCovering: 5
+          IfcDoor: 6
+          IfcSlab: 10
+          IfcStair: 2
+          IfcWallStandardCase: 21
+          IfcWindow: 4
+        Storey Level 2
+          IfcBeam: 4
+          IfcCovering: 8
+          IfcDoor: 8
+          IfcSlab: 10
+          IfcWall: 1
+          IfcWallStandardCase: 24
+          IfcWindow: 18
+        Storey Roof
+          IfcRoof: 1
+          IfcWallStandardCase: 4
+          IfcWindow: 2
+        Storey T/FDN
+          IfcFooting: 7
+          IfcWallStandardCase: 7

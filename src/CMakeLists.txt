@@ -10,6 +10,10 @@ set(PARAMETRIC_CAD_SOURCES
     application/ProjectController.h
     application/VisibilityManager.cpp
     application/VisibilityManager.h
+    application/IfcImporter.cpp
+    application/IfcImporter.h
+    import/IfcOpenShellAdapter.cpp
+    import/IfcOpenShellAdapter.h
     application/VisibilityMode.h
     commands/FeatureCommands.cpp
     commands/FeatureCommands.h
@@ -48,6 +52,8 @@ set(PARAMETRIC_CAD_SOURCES
     model/TopologicalReference.h
     model/Body.cpp
     model/Body.h
+    model/ShapePayload.cpp
+    model/ShapePayload.h
     operations/BoxFeature.cpp
     operations/BoxFeature.h
     operations/CylinderFeature.cpp
@@ -66,6 +72,8 @@ set(PARAMETRIC_CAD_SOURCES
     operations/SketchConstraintSolver.h
     operations/PatternFeatures.cpp
     operations/PatternFeatures.h
+    operations/ImportedFeature.cpp
+    operations/ImportedFeature.h
     geometry/Point3D.h
     geometry/Vector3D.h
 )
@@ -84,6 +92,11 @@ target_include_directories(ParametricCAD
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+if(PARAMETRIC_CAD_ENABLE_IFC)
+    target_compile_definitions(ParametricCAD PRIVATE PARAMETRIC_CAD_HAS_IFCOPENSHELL=1)
+    target_include_directories(ParametricCAD SYSTEM PRIVATE ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
+endif()
 
 target_include_directories(ParametricCAD
         SYSTEM PRIVATE
@@ -126,6 +139,14 @@ target_link_libraries(ParametricCAD
         TKV3d
         TKOpenGl
 )
+
+if(PARAMETRIC_CAD_ENABLE_IFC)
+    target_link_libraries(ParametricCAD PRIVATE
+        ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_PARSE_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY})
+endif()
 
 if(MSVC)
     target_compile_options(ParametricCAD PRIVATE /W4 /permissive-)

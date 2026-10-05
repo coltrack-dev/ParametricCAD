@@ -1,0 +1,161 @@
+file: examples/ifc/BuildingBIMModel.ifc
+schema: IFC4
+IfcProject: 1
+IfcSite: 1
+IfcBuilding: 1
+IfcBuildingStorey: 5
+IfcProduct: 5923
+IfcBuildingElement: 5490
+IfcWall: 146
+IfcWallStandardCase: 0
+IfcSlab: 30
+IfcColumn: 176
+IfcBeam: 37
+IfcDoor: 100
+IfcWindow: 24
+IfcStair: 10
+IfcRoof: 6
+IfcOpeningElement: 129
+IfcSpace: 116
+product type counts:
+  IfcBeam: 37
+  IfcBuilding: 1
+  IfcBuildingElementProxy: 115
+  IfcBuildingStorey: 5
+  IfcColumn: 176
+  IfcCovering: 65
+  IfcCurtainWall: 34
+  IfcDistributionPort: 30
+  IfcDoor: 100
+  IfcElementAssembly: 1
+  IfcFurniture: 104
+  IfcGrid: 5
+  IfcLightFixture: 41
+  IfcMember: 3348
+  IfcOpeningElement: 129
+  IfcPlate: 1349
+  IfcRailing: 30
+  IfcRoof: 6
+  IfcSite: 1
+  IfcSlab: 30
+  IfcSpace: 116
+  IfcStair: 10
+  IfcStairFlight: 20
+  IfcWall: 146
+  IfcWindow: 24
+representation type counts:
+  IfcExtrudedAreaSolid: 7102
+  IfcRevolvedAreaSolid: 0
+  IfcBooleanResult: 0
+  IfcBooleanClippingResult: 0
+  IfcFacetedBrep: 0
+  IfcAdvancedBrep: 0
+  IfcMappedItem: 6598
+  IfcPolygonalFaceSet: 2812
+  IfcTriangulatedFaceSet: 0
+  IfcSweptAreaSolid: 0
+  IfcSweptDiskSolid: 0
+  IfcFixedReferenceSweptAreaSolid: 0
+  all encountered:
+    IfcArbitraryClosedProfileDef: 6963
+    IfcArbitraryProfileDefWithVoids: 139
+    IfcArcIndex: 1214
+    IfcAxis2Placement3D: 27741
+    IfcCartesianPoint: 34339
+    IfcCartesianPointList2D: 8972
+    IfcCartesianPointList3D: 2995
+    IfcCartesianTransformationOperator3D: 6598
+    IfcDirection: 34323
+    IfcExtrudedAreaSolid: 7102
+    IfcGeometricCurveSet: 110
+    IfcGeometricRepresentationContext: 14041
+    IfcGeometricRepresentationSubContext: 14041
+    IfcGeometricSet: 60
+    IfcIndexedPolyCurve: 9155
+    IfcIndexedPolygonalFace: 262578
+    IfcIndexedPolygonalFaceWithVoids: 112
+    IfcLineIndex: 96
+    IfcMappedItem: 6598
+    IfcPolygonalFaceSet: 2812
+    IfcProductDefinitionShape: 5837
+    IfcRepresentationMap: 6598
+    IfcShapeRepresentation: 14041
+    float: 191945
+    int: 973623
+    tuple: 291730
+placement depth:
+  min: 1
+  max: 6
+  histogram: {1: 1, 2: 1, 3: 10, 4: 720, 5: 5070, 6: 121}
+units:
+  IfcSIUnit: LENGTHUNIT MILLI METRE
+  IfcSIUnit: AREAUNIT None SQUARE_METRE
+  IfcConversionBasedUnit: PLANEANGLEUNIT None DEGREE
+  IfcSIUnit: VOLUMEUNIT None CUBIC_METRE
+spatial hierarchy:
+  Project Project Number
+    Site Surface:105545
+      Building 2k5Ou7Xz91rhQHtCV3ZJaw
+        Storey 01 - Entry Level
+          IfcBeam: 12
+          IfcBuildingElementProxy: 102
+          IfcColumn: 67
+          IfcCovering: 19
+          IfcCurtainWall: 23
+          IfcDoor: 29
+          IfcElementAssembly: 1
+          IfcGrid: 1
+          IfcSlab: 7
+          IfcStair: 5
+          IfcWall: 49
+          IfcWindow: 6
+        Storey 02 - Floor
+          IfcBeam: 2
+          IfcColumn: 54
+          IfcCovering: 26
+          IfcCurtainWall: 8
+          IfcDoor: 26
+          IfcGrid: 1
+          IfcRailing: 6
+          IfcRoof: 1
+          IfcSlab: 5
+          IfcStair: 5
+          IfcWall: 45
+          IfcWindow: 9
+        Storey 03 - Floor
+          IfcColumn: 55
+          IfcCovering: 20
+          IfcCurtainWall: 3
+          IfcDoor: 28
+          IfcGrid: 1
+          IfcLightFixture: 16
+          IfcRailing: 3
+          IfcRoof: 1
+          IfcSlab: 5
+          IfcWall: 32
+          IfcWindow: 9
+        Storey <unassigned>
+          IfcBeam: 23
+          IfcBuilding: 1
+          IfcBuildingElementProxy: 5
+          IfcBuildingStorey: 5
+          IfcDistributionPort: 30
+          IfcDoor: 17
+          IfcFurniture: 104
+          IfcLightFixture: 25
+          IfcMember: 3348
+          IfcOpeningElement: 129
+          IfcPlate: 1349
+          IfcRailing: 21
+          IfcSite: 1
+          IfcSlab: 13
+          IfcSpace: 116
+          IfcStairFlight: 20
+        Storey Parapet
+          IfcGrid: 1
+          IfcRoof: 3
+        Storey Roof
+          IfcBuildingElementProxy: 8
+          IfcGrid: 1
+          IfcRoof: 1
+          IfcWall: 20

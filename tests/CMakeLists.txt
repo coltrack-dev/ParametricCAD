@@ -23,6 +23,7 @@ add_executable(push_pull_drag_tests
     ../src/model/TopologicalReference.cpp
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
+    ../src/model/ShapePayload.cpp
     ../src/viewer/TransformGizmoPicking.cpp
 )
 target_include_directories(push_pull_drag_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
@@ -54,6 +55,7 @@ add_library(model_test_support STATIC
     ../src/application/ModelingController.cpp
     ../src/application/SelectionResolver.cpp
     ../src/application/ProjectController.cpp
+    ../src/application/IfcImporter.cpp
     ../src/application/VisibilityManager.cpp
     ../src/model/ProjectFile.cpp
     ../src/commands/FeatureCommands.cpp
@@ -62,6 +64,7 @@ add_library(model_test_support STATIC
     ../src/model/Feature.cpp
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
+    ../src/model/ShapePayload.cpp
     ../src/model/TopologicalReference.cpp
     ../src/operations/BoxFeature.cpp
     ../src/operations/CylinderFeature.cpp
@@ -72,6 +75,8 @@ add_library(model_test_support STATIC
     ../src/operations/SketchExtendService.cpp
     ../src/operations/SketchConstraintSolver.cpp
     ../src/operations/PatternFeatures.cpp
+    ../src/operations/ImportedFeature.cpp
+    ../src/import/IfcOpenShellAdapter.cpp
     ../src/viewer/PushPullDrag.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -81,11 +86,27 @@ if(DEFINED OpenCASCADE_LIBRARY_DIR)
 endif()
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet TKOffset)
+
+if(PARAMETRIC_CAD_ENABLE_IFC)
+    target_compile_definitions(model_test_support PUBLIC PARAMETRIC_CAD_HAS_IFCOPENSHELL=1)
+    target_include_directories(model_test_support SYSTEM PUBLIC ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
+    target_link_libraries(model_test_support PUBLIC
+        ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_PARSE_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY})
+endif()
 add_executable(project_file_tests project_file_tests.cpp)
 target_compile_definitions(project_file_tests PRIVATE
     PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(project_file_tests PRIVATE model_test_support)
 add_test(NAME project_file_tests COMMAND project_file_tests)
+
+add_executable(ifc_import_tests ifc_import_tests.cpp)
+target_compile_definitions(ifc_import_tests PRIVATE
+    PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(ifc_import_tests PRIVATE model_test_support)
+add_test(NAME ifc_import_tests COMMAND ifc_import_tests)
 
 add_executable(model_tests model_tests.cpp)
 target_link_libraries(model_tests PRIVATE model_test_support Qt6::Test)

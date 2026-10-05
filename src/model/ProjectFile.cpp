@@ -8,6 +8,8 @@
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
+#include "operations/ImportedFeature.h"
+#include "model/ShapePayload.h"
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -774,6 +776,21 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 string(o, "id"), sources, path, number(o, "spacing"),
                 static_cast<int>(number(o, "count")), distribution, orientation,
                 number(o, "startOffset"), number(o, "endOffset"), boolean(o, "includeSource"));
+        }},
+        {"IfcImported", [](const QJsonObject& o, const Body&) {
+            const auto payload = o.value("geometryPayload");
+            require(payload.isString() && !payload.toString().isEmpty(),
+                    "Missing imported geometry payload");
+            return std::make_shared<ImportedFeature>(
+                string(o, "id"), string(o, "name"),
+                cad::persistence::decodeBRep(payload.toString().toLatin1()),
+                o.value("sourceFormat").toString("IFC"),
+                o.value("sourceFile").toString(),
+                o.value("ifcGlobalId").toString(),
+                o.value("ifcEntityType").toString(),
+                o.value("ifcDescription").toString(),
+                o.value("ifcBuilding").toString(),
+                o.value("ifcStorey").toString());
         }}
     };
     return registry;

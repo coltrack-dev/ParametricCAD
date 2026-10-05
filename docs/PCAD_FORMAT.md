@@ -1,8 +1,10 @@
 # ParametricCAD `.pcad` format
 
 The current format is version 1 UTF-8 JSON. It stores editable parametric
-definitions and selected presentation metadata; it does not store OCCT B-Rep
-data, AIS handles, undo history, selection, hover, or active transform state.
+definitions and selected presentation metadata. Normal parametric features
+are rebuilt from parameters; imported IFC features additionally store a
+portable OCCT B-Rep payload. AIS handles, undo history, selection, hover, and
+active transform state are not stored.
 
 ## Root
 
@@ -37,6 +39,11 @@ records include Box, Cylinder, Cone, Sphere, Torus, Hexagon, Boolean, Sketch,
 Face, and Extrude; newer feature classes may have limited or pending
 persistence coverage. See `src/model/ProjectFile.cpp` for the authoritative
 registry.
+
+`IfcImported` records contain generic provenance fields (`sourceFormat`,
+`sourceFile`, `ifcGlobalId`, `ifcEntityType`, `ifcBuilding`, and `ifcStorey`)
+and `geometryPayload`. The payload is encoded by `src/model/ShapePayload.*`,
+not by the feature class. `sourceFile` is not a load-time dependency.
 
 ## Placement and visibility
 
@@ -141,6 +148,6 @@ Missing optional visibility/views metadata defaults to empty state. Saved view
 references to missing features or groups are ignored safely by visibility
 application.
 
-Undo history, periodic autosave/recovery state, raw geometry, viewer-only
+Undo history, periodic autosave/recovery state, viewer-only
 Push/Pull preview, active spatial box editing, active section plane, and current
 camera outside a saved view are not persisted.

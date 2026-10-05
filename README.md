@@ -8,6 +8,10 @@ inspection, section clipping, and saved views.
 
 Projects use the native editable `.pcad` JSON format.
 
+The Phase B IFC core can import native OCCT geometry when configured with the
+pinned IfcOpenShell adapter; IFC import UI integration is not part of this
+phase.
+
 ## Current capabilities
 
 ### Modeling
@@ -73,8 +77,9 @@ metadata, not modeling features.
 `.pcad` is UTF-8 JSON, currently format version 1. It stores canonical feature
 parameters, stable IDs, dependencies, placement, persistent feature
 visibility, visibility groups/filters/presets, and saved views. Geometry is
-rebuilt from parameters; raw `TopoDS_Shape` data and undo history are not
-stored. Legacy Box/Cylinder input is converted to canonical Body features.
+rebuilt from parameters. Imported IFC features also carry a portable OCCT
+B-Rep payload so the source IFC is not required after saving. Undo history is
+not stored. Legacy Box/Cylinder input is converted to canonical Body features.
 
 The loader validates a temporary model before replacing the active project.
 Files without newer optional metadata remain valid. See

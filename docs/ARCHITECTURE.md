@@ -57,6 +57,12 @@ affected feature/dependents dirty, recompute, and refresh the model.
 `ProjectFile`: validated load, save, and new-project replacement. Project
 loading builds a temporary document/body/visibility state before committing it.
 
+`IfcImporter` is the application-facing bulk import service. It consumes the
+IFC adapter's application-neutral products and adds `ImportedFeature` objects
+to the flat Body. `IfcOpenShellAdapter` is isolated under `src/import`; no IFC
+dependency reaches CadViewer, SelectionAdapter, VisibilityManager, or core
+feature builders.
+
 `VisibilityManager` owns visibility policy and presentation metadata. It
 calculates the effective `Visible`, `Ghosted`, or `Hidden` mode from persistent
 feature state, dependencies, isolation, groups, filters, spatial rules, and
@@ -102,6 +108,11 @@ Fillet, Chamfer, Shell, Offset, Loft, Sweep, LinearPattern, and PathPattern.
 The exact persistence/UI support of individual advanced features is described
 in [PARAMETRIC_FEATURES.md](PARAMETRIC_FEATURES.md) and
 [PCAD_FORMAT.md](PCAD_FORMAT.md).
+
+`ImportedFeature` is a read-only feature for native imported geometry. Its
+world-normalized B-Rep is stored with identity placement and its IFC building,
+storey, class, and GlobalId are metadata; IFC hierarchy does not become model
+history.
 
 `Document` and legacy `Feature` remain for compatibility with old callers and
 legacy Box/Cylinder input. They are not the canonical presentation or feature
