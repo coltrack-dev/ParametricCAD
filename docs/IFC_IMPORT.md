@@ -14,10 +14,12 @@ ParametricCAD feature ID.
 
 ## Dependency strategy
 
-The application uses OCCT 7.6.3. Current IfcOpenShell requires newer OCCT,
-so Phase B pins the legacy IfcOpenShell `v0.7.1`, commit
+The application uses OCCT 7.6.3. Phase B pins IfcOpenShell `v0.7.1`, commit
 `ed8cbff3d253691ac81450eaf16cad46bf6149e5`, built separately against the same
 OCCT headers and libraries. The complete IfcOpenShell source is not vendored.
+The verified build used GCC 13.3.0, `/usr/include/opencascade`, and
+`/usr/lib/x86_64-linux-gnu`; it produced `libIfcGeom.so`, `libIfcParse.so`,
+`libIfcGeom_ifc2x3.a`, and `libIfcGeom_ifc4.a` against that same OCCT runtime.
 IFC support is opt-in:
 
 ```text
@@ -30,6 +32,21 @@ The external build must expose `IfcGeom`, `IfcParse`, `IfcGeom_ifc2x3`, and
 `IfcGeom_ifc4`, and must use the same compiler ABI and OCCT 7.6.3 build. The
 default build has no IfcOpenShell or Python runtime dependency and reports a
 structured diagnostic if IFC support is unavailable.
+
+When IFC is explicitly enabled, CMake requires these headers and libraries and
+fails during configuration with an actionable error if they are missing. The
+verified developer commands are:
+
+```text
+cmake -S . -B build-ifc -G Ninja \
+  -DPARAMETRIC_CAD_ENABLE_IFC=ON \
+  -DPARAMETRIC_CAD_IFCOPENSHELL_ROOT=/tmp/ifcopenshell-v071-install
+cmake --build build-ifc -j
+LD_LIBRARY_PATH=/tmp/ifcopenshell-v071-install/lib \
+  ./build-ifc/tests/ifc_import_tests
+LD_LIBRARY_PATH=/tmp/ifcopenshell-v071-install/lib \
+  ./build-ifc/tests/ifc_building_acceptance
+```
 
 ## Geometry, placement, and units
 
@@ -60,5 +77,9 @@ importer API. The original IFC is not needed to reopen the saved `.pcad`.
 `IfcImportResult` reports schema, considered/geometry/imported/skipped/failed
 counts, timings, per-entity statistics, and structured diagnostics. The regular
 test target always covers B-Rep payload and ImportedFeature round trips.
-Duplex and Building acceptance tests are enabled in an IFC-enabled build; the
-large Building fixture is intentionally a slow acceptance test.
+Duplex is part of the IFC-enabled regular test target. Building acceptance is
+an explicit slow executable and is not registered in the normal fast `ctest`
+suite. The adapter records representation item names and placement depth for
+diagnostics, including mapped representations and polygonal face sets. IFC
+openings are excluded as Body features; their cuts are expected in the
+physical product B-Rep returned by IfcOpenShell.

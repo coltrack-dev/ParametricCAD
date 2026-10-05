@@ -4,6 +4,7 @@
 
 #include <QDateTime>
 #include <QString>
+#include <QStringList>
 
 #include <map>
 #include <vector>
@@ -29,6 +30,8 @@ struct IfcImportProduct
     QString description;
     QString building;
     QString storey;
+    QStringList representationTypes;
+    int placementDepth{0};
 };
 
 struct IfcImportStatistics

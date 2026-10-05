@@ -8,8 +8,10 @@
 
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
 #include <BRepBuilderAPI_Transform.hxx>
-#include <ifcgeom/IfcGeom.h>
 #include <ifcgeom_schema_agnostic/IfcGeomIterator.h>
+#include <ifcgeom_schema_agnostic/IfcGeomElement.h>
+#include <ifcparse/Ifc2x3.h>
+#include <ifcparse/Ifc4.h>
 #include <ifcparse/IfcFile.h>
 #include <gp_Trsf.hxx>
 #endif
@@ -34,6 +36,59 @@ QString parentValue(const IfcGeom::Element& element, const char* requestedType)
             return QString::fromStdString(parent->name());
     }
     return {};
+}
+
+template <typename Schema>
+QStringList schemaRepresentationTypes(IfcUtil::IfcBaseClass* base)
+{
+    QStringList result;
+    const auto* product = base ? base->as<typename Schema::IfcProduct>() : nullptr;
+    if (!product || !product->Representation()) return result;
+    const auto representations = product->Representation()->Representations();
+    if (!representations) return result;
+    for (auto* item : *representations) {
+        if (!item) continue;
+        const auto type = item->RepresentationType();
+        if (type)
+            result.append(QString::fromStdString(*type));
+        const auto items = item->Items();
+        if (!items) continue;
+        for (auto* representationItem : *items) {
+            if (representationItem)
+                result.append(QString::fromStdString(representationItem->declaration().name()));
+        }
+    }
+    result.removeDuplicates();
+    return result;
+}
+
+QStringList representationTypes(IfcUtil::IfcBaseClass* product)
+{
+    QStringList result = schemaRepresentationTypes<Ifc2x3>(product);
+    if (result.isEmpty())
+        result = schemaRepresentationTypes<Ifc4>(product);
+    return result;
+}
+
+template <typename Schema>
+int schemaPlacementDepth(IfcUtil::IfcBaseClass* base)
+{
+    const auto* product = base ? base->as<typename Schema::IfcProduct>() : nullptr;
+    if (!product) return 0;
+    auto* placement = product->ObjectPlacement();
+    int depth = 0;
+    while (placement && depth < 100) {
+        ++depth;
+        auto* local = placement->template as<typename Schema::IfcLocalPlacement>();
+        placement = local ? local->PlacementRelTo() : nullptr;
+    }
+    return depth;
+}
+
+int placementDepth(IfcUtil::IfcBaseClass* product)
+{
+    const int ifc2x3Depth = schemaPlacementDepth<Ifc2x3>(product);
+    return ifc2x3Depth != 0 ? ifc2x3Depth : schemaPlacementDepth<Ifc4>(product);
 }
 
 }
@@ -120,7 +175,9 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path) const
                     QString::fromStdString(element->guid()), type,
                     QString::fromStdString(element->name()), {},
                     parentValue(*element, "IfcBuilding"),
-                    parentValue(*element, "IfcBuildingStorey")});
+                    parentValue(*element, "IfcBuildingStorey"),
+                    representationTypes(element->product()),
+                    placementDepth(element->product())});
                 ++result.statistics.productsWithGeometry;
                 ++result.statistics.importedCount;
                 ++result.statistics.importedByEntity[type];

@@ -8,10 +8,17 @@
 
 #include <BRepBndLib.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <TopExp_Explorer.hxx>
 #include <QTemporaryDir>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
 
 #include <cmath>
+#include <algorithm>
 #include <iostream>
+#include <map>
+#include <set>
 #include <stdexcept>
 
 #ifndef PARAMETRIC_CAD_SOURCE_DIR
@@ -31,6 +38,48 @@ double width(const TopoDS_Shape& shape)
     double xmin, ymin, zmin, xmax, ymax, zmax;
     box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
     return xmax - xmin;
+}
+
+struct Bounds
+{
+    double xmin{0};
+    double ymin{0};
+    double zmin{0};
+    double xmax{0};
+    double ymax{0};
+    double zmax{0};
+    bool valid{false};
+};
+
+Bounds bounds(const cad::parametric::Body& body)
+{
+    Bnd_Box box;
+    bool found = false;
+    for (const auto& feature : body.features()) {
+        if (feature->shape().IsNull()) continue;
+        Bnd_Box current;
+        BRepBndLib::Add(feature->shape(), current);
+        box.Add(current);
+        found = true;
+    }
+    Bounds result;
+    if (found) {
+        box.Get(result.xmin, result.ymin, result.zmin,
+                result.xmax, result.ymax, result.zmax);
+        result.valid = true;
+    }
+    return result;
+}
+
+std::string shapeKind(const TopoDS_Shape& shape)
+{
+    switch (shape.ShapeType()) {
+    case TopAbs_SOLID: return "solid";
+    case TopAbs_COMPOUND: return "compound";
+    case TopAbs_SHELL: return "shell";
+    case TopAbs_FACE: return "face";
+    default: return "other";
+    }
 }
 }
 
@@ -76,6 +125,146 @@ int main()
         check(result.statistics.schema == "IFC2X3", "Duplex schema");
         check(result.statistics.importedCount > 0 && !unavailableBody.features().empty(),
               "Duplex import");
+        std::cout << "Duplex IFC import\n"
+                  << "  schema: " << result.statistics.schema.toStdString() << '\n'
+                  << "  considered: " << result.statistics.consideredCount << '\n'
+                  << "  with geometry: " << result.statistics.productsWithGeometry << '\n'
+                  << "  imported: " << result.statistics.importedCount << '\n'
+                  << "  skipped: " << result.statistics.skippedCount << '\n'
+                  << "  failed: " << result.statistics.failedCount << '\n'
+                  << "  geometry ms: " << result.statistics.geometryMilliseconds << '\n'
+                  << "  total ms: " << result.statistics.totalMilliseconds << '\n';
+        for (const auto& [type, count] : result.statistics.importedByEntity)
+            std::cout << "  imported " << type.toStdString() << ": " << count << '\n';
+
+        const auto importedBounds = bounds(unavailableBody);
+        check(importedBounds.valid, "Duplex bounds");
+        std::cout << "  bounds mm: [" << importedBounds.xmin << ", "
+                  << importedBounds.ymin << ", " << importedBounds.zmin << "] - ["
+                  << importedBounds.xmax << ", " << importedBounds.ymax << ", "
+                  << importedBounds.zmax << "]\n";
+        check(importedBounds.xmax - importedBounds.xmin > 5000.0
+                  && importedBounds.xmax - importedBounds.xmin < 100000.0,
+              "Duplex unit normalization");
+
+        std::map<std::string, int> topologyCounts;
+        std::map<std::string, std::shared_ptr<cad::parametric::ImportedFeature>> representatives;
+        int nonNull = 0;
+        for (const auto& feature : unavailableBody.features()) {
+            auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
+            if (importedFeature->shape().IsNull()) continue;
+            ++nonNull;
+            ++topologyCounts[shapeKind(importedFeature->shape())];
+            const auto type = importedFeature->ifcEntityType().toStdString();
+            if (!representatives.contains(type)) representatives[type] = importedFeature;
+        }
+        std::cout << "  non-null shapes: " << nonNull << '\n';
+        for (const auto& [kind, count] : topologyCounts)
+            std::cout << "  TopoDS " << kind << ": " << count << '\n';
+        for (const auto& type : {std::string("IfcWall"), std::string("IfcSlab"),
+                                 std::string("IfcDoor"), std::string("IfcWindow")}) {
+            const auto it = representatives.find(type);
+            check(it != representatives.end(), "representative IFC class");
+            const auto& shape = it->second->shape();
+            Bnd_Box box;
+            BRepBndLib::Add(shape, box);
+            double xmin, ymin, zmin, xmax, ymax, zmax;
+            box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+            std::cout << "  representative " << type << " "
+                      << it->second->ifcGlobalId().toStdString() << " "
+                      << shapeKind(shape) << " bounds [" << xmin << ", " << ymin << ", "
+                      << zmin << "] - [" << xmax << ", " << ymax << ", " << zmax << "]\n";
+            check(it->second->placement().Form() == gp_Identity,
+                  "ImportedFeature placement must be identity");
+        }
+
+        std::vector<const cad::import::IfcImportProduct*> mappedProducts;
+        int deepestPlacement = 0;
+        std::vector<const cad::import::IfcImportProduct*> deepestProducts;
+        for (const auto& product : result.products) {
+            if (product.representationTypes.contains("IfcMappedItem"))
+                mappedProducts.push_back(&product);
+            if (product.placementDepth > deepestPlacement) {
+                deepestPlacement = product.placementDepth;
+                deepestProducts.clear();
+            }
+            if (product.placementDepth == deepestPlacement)
+                deepestProducts.push_back(&product);
+        }
+        check(mappedProducts.size() >= 2, "Duplex mapped products");
+        auto importedShape = [&unavailableBody](const auto* product) {
+            const auto feature = unavailableBody.findFeature(
+                (QStringLiteral("ifc-") + product->globalId).toStdString());
+            check(feature && !feature->shape().IsNull(), "Duplex product shape lookup");
+            return feature->shape();
+        };
+        Bnd_Box mappedBoxA;
+        Bnd_Box mappedBoxB;
+        BRepBndLib::Add(importedShape(mappedProducts[0]), mappedBoxA);
+        BRepBndLib::Add(importedShape(mappedProducts[1]), mappedBoxB);
+        double ax, ay, az, ax2, ay2, az2, bx, by, bz, bx2, by2, bz2;
+        mappedBoxA.Get(ax, ay, az, ax2, ay2, az2);
+        mappedBoxB.Get(bx, by, bz, bx2, by2, bz2);
+        check(std::abs((ax + ax2) - (bx + bx2)) > 1.0,
+              "Duplex mapped instances collapsed to one placement");
+        std::cout << "  mapped instances: " << mappedProducts[0]->globalId.toStdString()
+                  << " center-x " << (ax + ax2) / 2.0 << ", "
+                  << mappedProducts[1]->globalId.toStdString() << " center-x "
+                  << (bx + bx2) / 2.0 << '\n';
+        check(deepestPlacement >= 1, "Duplex placement depth");
+        std::cout << "  deepest placement depth: " << deepestPlacement << '\n';
+        for (size_t i = 0; i < std::min<size_t>(3, deepestProducts.size()); ++i)
+            std::cout << "  deep placement sample: "
+                      << deepestProducts[i]->globalId.toStdString() << '\n';
+
+        QTemporaryDir roundTripDirectory;
+        check(roundTripDirectory.isValid(), "IFC roundtrip directory");
+        const auto temporaryIfc = roundTripDirectory.filePath("duplex.ifc");
+        const auto sourceIfc = QStringLiteral(PARAMETRIC_CAD_SOURCE_DIR)
+            + "/examples/ifc/Duplex_A_20110505.ifc";
+        check(QFile::copy(sourceIfc, temporaryIfc), "copy Duplex IFC");
+        cad::parametric::Body roundTripBody;
+        QElapsedTimer saveTimer;
+        saveTimer.start();
+        const auto roundTripResult = importer.importIntoBody(temporaryIfc, roundTripBody);
+        check(roundTripResult.statistics.importedCount == result.statistics.importedCount,
+              "roundtrip import count");
+        const auto pcadPath = roundTripDirectory.filePath("duplex.pcad");
+        Document roundTripDocument;
+        QString roundTripError;
+        check(ProjectFile::save(pcadPath, roundTripDocument, roundTripBody, roundTripError),
+              "save Duplex BRep");
+        std::set<QString> sourceGlobalIds;
+        for (const auto& feature : roundTripBody.features()) {
+            const auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
+            sourceGlobalIds.insert(importedFeature->ifcGlobalId());
+        }
+        const auto saveMilliseconds = saveTimer.elapsed();
+        const auto pcadSize = QFileInfo(pcadPath).size();
+        check(QFile::remove(temporaryIfc), "remove source IFC");
+        Document reloadedDocument;
+        cad::parametric::Body reloadedBody;
+        QElapsedTimer loadTimer;
+        loadTimer.start();
+        check(ProjectFile::load(pcadPath, reloadedDocument, reloadedBody, roundTripError),
+              "reload Duplex BRep");
+        const auto loadMilliseconds = loadTimer.elapsed();
+        const auto reloadedBounds = bounds(reloadedBody);
+        check(reloadedBody.features().size() == roundTripBody.features().size(),
+              "roundtrip feature count");
+        std::set<QString> loadedGlobalIds;
+        for (const auto& feature : reloadedBody.features()) {
+            const auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
+            loadedGlobalIds.insert(importedFeature->ifcGlobalId());
+        }
+        check(loadedGlobalIds == sourceGlobalIds, "roundtrip IFC GlobalIds");
+        check(std::abs(reloadedBounds.xmin - importedBounds.xmin) < 1.0e-5
+                  && std::abs(reloadedBounds.xmax - importedBounds.xmax) < 1.0e-5,
+              "roundtrip bounds");
+        std::cout << "  persistence: source bytes " << QFileInfo(sourceIfc).size()
+                  << ", pcad bytes " << pcadSize
+                  << ", save ms " << saveMilliseconds
+                  << ", reload ms " << loadMilliseconds << '\n';
 #else
         check(result.statistics.importedCount == 0 && result.statistics.failedCount > 0,
               "disabled IFC diagnostic");

@@ -88,7 +88,11 @@ target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet TKOffset)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
-    target_compile_definitions(model_test_support PUBLIC PARAMETRIC_CAD_HAS_IFCOPENSHELL=1)
+    target_compile_definitions(model_test_support PUBLIC
+        PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
+        HAS_SCHEMA_2x3
+        HAS_SCHEMA_4
+        "SCHEMA_SEQ=(2x3)(4)")
     target_include_directories(model_test_support SYSTEM PUBLIC ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
     target_link_libraries(model_test_support PUBLIC
         ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
@@ -107,6 +111,13 @@ target_compile_definitions(ifc_import_tests PRIVATE
     PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(ifc_import_tests PRIVATE model_test_support)
 add_test(NAME ifc_import_tests COMMAND ifc_import_tests)
+
+if(PARAMETRIC_CAD_ENABLE_IFC)
+    add_executable(ifc_building_acceptance ifc_building_acceptance.cpp)
+    target_compile_definitions(ifc_building_acceptance PRIVATE
+        PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    target_link_libraries(ifc_building_acceptance PRIVATE model_test_support)
+endif()
 
 add_executable(model_tests model_tests.cpp)
 target_link_libraries(model_tests PRIVATE model_test_support Qt6::Test)

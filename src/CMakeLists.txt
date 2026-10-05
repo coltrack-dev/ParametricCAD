@@ -94,7 +94,11 @@ target_include_directories(ParametricCAD
 )
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
-    target_compile_definitions(ParametricCAD PRIVATE PARAMETRIC_CAD_HAS_IFCOPENSHELL=1)
+    target_compile_definitions(ParametricCAD PRIVATE
+        PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
+        HAS_SCHEMA_2x3
+        HAS_SCHEMA_4
+        "SCHEMA_SEQ=(2x3)(4)")
     target_include_directories(ParametricCAD SYSTEM PRIVATE ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
 endif()
 
