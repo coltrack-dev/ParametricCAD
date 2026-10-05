@@ -16,6 +16,7 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/MainWindow.h
     viewer/ModelPresenter.cpp
     viewer/ModelPresenter.h
+    viewer/VisibilityMode.h
     viewer/PushPullDrag.cpp
     viewer/PushPullDrag.h
     viewer/TransformMath.cpp

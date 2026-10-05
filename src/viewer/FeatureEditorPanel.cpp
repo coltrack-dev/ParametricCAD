@@ -183,12 +183,16 @@ void FeatureEditorPanel::setVisibilityHandlers(
     std::function<void(const QStringList&)> hide,
     std::function<void(const QStringList&)> show,
     std::function<void(const QStringList&)> isolate,
-    std::function<void()> showAll)
+    std::function<void()> showAll,
+    std::function<void(const QStringList&)> ghostOthers,
+    std::function<void()> clearGhosting)
 {
     hideHandler_ = std::move(hide);
     showHandler_ = std::move(show);
     isolateHandler_ = std::move(isolate);
     showAllHandler_ = std::move(showAll);
+    ghostOthersHandler_ = std::move(ghostOthers);
+    clearGhostingHandler_ = std::move(clearGhosting);
 }
 
 void FeatureEditorPanel::createUi()
@@ -442,6 +446,9 @@ void FeatureEditorPanel::createUi()
             auto* show = menu.addAction("Show");
             auto* isolate = menu.addAction("Isolate");
             menu.addSeparator();
+            auto* ghostOthers = menu.addAction("Ghost Others");
+            auto* clearGhosting = menu.addAction("Clear Ghosting");
+            menu.addSeparator();
             auto* showAll = menu.addAction("Show All");
             hide->setEnabled(hasVisible);
             show->setEnabled(hasHidden);
@@ -451,6 +458,10 @@ void FeatureEditorPanel::createUi()
                 [this, ids]() { if (showHandler_) showHandler_(ids); });
             QObject::connect(isolate, &QAction::triggered, this,
                 [this, ids]() { if (isolateHandler_) isolateHandler_(ids); });
+            QObject::connect(ghostOthers, &QAction::triggered, this,
+                [this, ids]() { if (ghostOthersHandler_) ghostOthersHandler_(ids); });
+            QObject::connect(clearGhosting, &QAction::triggered, this,
+                [this]() { if (clearGhostingHandler_) clearGhostingHandler_(); });
             QObject::connect(showAll, &QAction::triggered, this,
                 [this]() { if (showAllHandler_) showAllHandler_(); });
             menu.exec(tree_->viewport()->mapToGlobal(position));

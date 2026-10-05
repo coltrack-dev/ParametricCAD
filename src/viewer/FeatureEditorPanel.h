@@ -41,7 +41,9 @@ public:
         std::function<void(const QStringList&)> hide,
         std::function<void(const QStringList&)> show,
         std::function<void(const QStringList&)> isolate,
-        std::function<void()> showAll);
+        std::function<void()> showAll,
+        std::function<void(const QStringList&)> ghostOthers,
+        std::function<void()> clearGhosting);
     void refresh();
     QStringList selectedFeatureIds() const;
     void selectFeatures(const QStringList& featureIds);
@@ -117,4 +119,6 @@ private:
     std::function<void(const QStringList&)> showHandler_;
     std::function<void(const QStringList&)> isolateHandler_;
     std::function<void()> showAllHandler_;
+    std::function<void(const QStringList&)> ghostOthersHandler_;
+    std::function<void()> clearGhostingHandler_;
 };

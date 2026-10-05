@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Body.h"
+#include "viewer/VisibilityMode.h"
 
 #include <string>
 #include <set>
@@ -28,6 +29,8 @@ public:
     void setIsolatedFeatures(const std::vector<std::string>& featureIds);
     void clearIsolation();
     bool isolationActive() const noexcept;
+    void ghostOthers(const std::vector<std::string>& selectedIds);
+    void clearGhosting();
 
 private:
     void applyVisibility();
@@ -35,6 +38,7 @@ private:
     cad::parametric::Body& body_;
     CadViewer& viewer_;
     std::set<std::string> isolatedFeatureIds_;
+    std::set<std::string> ghostedSelectionIds_;
 };
 
 } // namespace cad::viewer

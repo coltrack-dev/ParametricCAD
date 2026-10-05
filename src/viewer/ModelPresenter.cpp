@@ -3,6 +3,8 @@
 #include "model/FeatureVisibility.h"
 #include "viewer/CadViewer.h"
 
+#include <map>
+
 cad::viewer::ModelPresenter::ModelPresenter(cad::parametric::Body& body, CadViewer& viewer)
     : body_(body), viewer_(viewer)
 {
@@ -41,17 +43,30 @@ void cad::viewer::ModelPresenter::refreshVisibility()
 
 void cad::viewer::ModelPresenter::applyVisibility()
 {
-    QStringList hidden;
+    std::set<std::string> hiddenIds;
     for (const auto& id : cad::parametric::hiddenFeatureIds(body_, isolatedFeatureIds_)) {
-        hidden.append(QString::fromStdString(id));
+        hiddenIds.insert(id);
     }
-    viewer_.setHiddenFeatures(hidden);
+    std::map<QString, VisibilityMode> modes;
+    for (const auto& feature : body_.features()) {
+        const auto& id = feature->id();
+        VisibilityMode mode = hiddenIds.contains(id)
+            ? VisibilityMode::Hidden : VisibilityMode::Visible;
+        if (mode == VisibilityMode::Visible
+            && !ghostedSelectionIds_.empty()
+            && !ghostedSelectionIds_.contains(id)) {
+            mode = VisibilityMode::Ghosted;
+        }
+        modes.emplace(QString::fromStdString(id), mode);
+    }
+    viewer_.setFeatureVisibilityModes(modes);
 }
 
 void cad::viewer::ModelPresenter::clear()
 {
     viewer_.clear();
     isolatedFeatureIds_.clear();
+    ghostedSelectionIds_.clear();
 }
 
 void cad::viewer::ModelPresenter::setIsolatedFeatures(
@@ -69,4 +84,16 @@ void cad::viewer::ModelPresenter::clearIsolation()
 bool cad::viewer::ModelPresenter::isolationActive() const noexcept
 {
     return !isolatedFeatureIds_.empty();
+}
+
+void cad::viewer::ModelPresenter::ghostOthers(
+    const std::vector<std::string>& selectedIds)
+{
+    ghostedSelectionIds_.clear();
+    ghostedSelectionIds_.insert(selectedIds.begin(), selectedIds.end());
+}
+
+void cad::viewer::ModelPresenter::clearGhosting()
+{
+    ghostedSelectionIds_.clear();
 }

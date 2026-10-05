@@ -67,6 +67,7 @@ using cad::viewer::SnapCandidate;
 using cad::viewer::SnapKind;
 using cad::viewer::TransformHandle;
 using cad::viewer::ViewRay;
+using cad::viewer::VisibilityMode;
 
 Q_LOGGING_CATEGORY(pcadViewerLog, "parametric.viewer")
 
@@ -81,6 +82,7 @@ constexpr double AxisIndicatorScale = 0.12;
 constexpr double AxisIndicatorArm = 0.65;
 constexpr double AxisIndicatorHitRadius = 0.30;
 constexpr double SketchTrimHitPixels = 8.0;
+constexpr Standard_Real GhostTransparency = 0.78;
 constexpr double Pi = 3.14159265358979323846;
 constexpr double OrbitElevationLimit = 89.0 * Pi / 180.0;
 constexpr double OrbitRadiansPerPixel = 0.01;
@@ -888,7 +890,8 @@ void CadViewer::updateTransformGizmo()
     const auto selectedObject = featureObjects_.find(selectionState_.primary->featureId);
     if (selectedObject == featureObjects_.end()
         || selectedObject->second.IsNull()
-        || !context_->IsDisplayed(selectedObject->second)) {
+        || !context_->IsDisplayed(selectedObject->second)
+        || !featureIsSelectable(selectedObject->first)) {
         transformGizmo_->hide();
         return;
     }
@@ -906,7 +909,8 @@ void CadViewer::beginTransform(
     const auto selectedObject = featureObjects_.find(selectionState_.primary->featureId);
     if (selectedObject == featureObjects_.end()
         || selectedObject->second.IsNull()
-        || !context_->IsDisplayed(selectedObject->second)) return;
+        || !context_->IsDisplayed(selectedObject->second)
+        || !featureIsSelectable(selectedObject->first)) return;
 
     transformObject_ = selectedObject->second;
     transformFeatureId_ = selectionState_.primary->featureId;
@@ -933,7 +937,8 @@ void CadViewer::beginTransform(
         // boolean and copy features hide their dependencies; traversing those
         // presentations here duplicates the same topology in the snap target set.
         if (object == transformObject_ || object.IsNull()
-            || !context_->IsDisplayed(object)) continue;
+            || !context_->IsDisplayed(object)
+            || !featureIsSelectable(id)) continue;
         const auto& references = cachedReferences(id, object->Shape());
         transformTargetReferences_.insert(
             transformTargetReferences_.end(), references.begin(), references.end());
@@ -1379,6 +1384,8 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
     displayedShapes_.push_back(interactiveShape);
     if (!featureId.isEmpty()) {
         featureObjects_[featureId] = interactiveShape;
+        featureVisibility_[featureId] = VisibilityMode::Visible;
+        setFeatureTransparency(featureId, interactiveShape);
     }
     invalidateSnapReferenceCache("MODEL_CHANGED: feature added");
     selectionState_.hovered.reset();
@@ -1439,6 +1446,7 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     }
     const auto& object = found->second;
     configureSketchPresentation(object, featureId);
+    setFeatureTransparency(featureId, object);
     if (object->Shape().IsEqual(shape)) {
         if (featureId.startsWith("sketch-")) {
             context_->Redisplay(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
@@ -1457,29 +1465,108 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
 
 void CadViewer::setHiddenFeatures(const QStringList& featureIds)
 {
+    std::map<QString, VisibilityMode> modes;
+    for (const auto& [id, object] : featureObjects_) {
+        Q_UNUSED(object);
+        modes.emplace(id, featureIds.contains(id)
+            ? VisibilityMode::Hidden : VisibilityMode::Visible);
+    }
+    setFeatureVisibilityModes(modes);
+}
+
+void CadViewer::setFeatureVisibilityModes(
+    const std::map<QString, VisibilityMode>& modes)
+{
     if (!initialized_) return;
     bool changed = false;
+    bool selectedFeatureUnavailable = false;
     for (const auto& [id, object] : featureObjects_) {
-        const bool visible = !featureIds.contains(id);
-        if (visible == bool(context_->IsDisplayed(object))) continue;
-        if (visible) {
-            context_->Display(object, Standard_False);
+        const auto mode = [&]() {
+            const auto found = modes.find(id);
+            return found == modes.end() ? VisibilityMode::Visible : found->second;
+        }();
+        const auto previous = featureVisibilityMode(id);
+        const bool modeChanged = previous != mode;
+        featureVisibility_[id] = mode;
+        const bool displayed = bool(context_->IsDisplayed(object));
+        if (mode == VisibilityMode::Hidden) {
+            if (displayed) {
+                context_->Erase(object, Standard_False);
+                changed = true;
+            }
         } else {
-            context_->Erase(object, Standard_False);
+            if (!displayed) {
+                context_->Display(object, Standard_False);
+                changed = true;
+            }
+            if (modeChanged) {
+                setFeatureTransparency(id, object);
+                context_->Redisplay(object, Standard_False);
+            }
         }
-        changed = true;
+        if (modeChanged) {
+            changed = true;
+            if (mode != VisibilityMode::Visible
+                && std::any_of(selectionState_.selected.begin(), selectionState_.selected.end(),
+                    [&id](const auto& item) { return item.featureId == id; })) {
+                selectedFeatureUnavailable = true;
+            }
+        }
     }
-    if (changed) {
-        const bool selectedFeatureHidden = std::any_of(
-            selectionState_.selected.begin(), selectionState_.selected.end(),
-            [&featureIds](const auto& item) { return featureIds.contains(item.featureId); });
-        if (selectedFeatureHidden) context_->ClearSelected(Standard_False);
-        invalidateSnapReferenceCache("MODEL_CHANGED: visibility changed");
-        resetDetectedCycle();
-        selectionState_.hovered.reset();
-        if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
-        updateTransformGizmo();
-        if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
+    if (!changed) return;
+
+    if (selectedFeatureUnavailable) {
+        if (transformDragging_) cancelTransform();
+        if (pushPullActive_) cancelPushPull();
+        context_->ClearSelected(Standard_False);
+    }
+    invalidateSnapReferenceCache("MODEL_CHANGED: presentation visibility changed");
+    resetDetectedCycle();
+    selectionState_.hovered.reset();
+    if (bulkUpdateDepth_ == 0) {
+        applySelectionMode();
+        syncSelectionStateFromOcct();
+    }
+    updateTransformGizmo();
+    if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
+}
+
+cad::viewer::VisibilityMode CadViewer::featureVisibilityMode(
+    const QString& featureId) const noexcept
+{
+    const auto found = featureVisibility_.find(featureId);
+    return found == featureVisibility_.end()
+        ? VisibilityMode::Visible : found->second;
+}
+
+bool CadViewer::featureIsSelectable(const QString& featureId) const noexcept
+{
+    return featureVisibilityMode(featureId) == VisibilityMode::Visible;
+}
+
+void CadViewer::applyFeaturePresentation(
+    const QString& featureId, const Handle(AIS_Shape)& object)
+{
+    if (object.IsNull()) return;
+    if (featureVisibilityMode(featureId) == VisibilityMode::Hidden) {
+        context_->Erase(object, Standard_False);
+        return;
+    }
+    context_->Display(object, Standard_False);
+    setFeatureTransparency(featureId, object);
+    context_->Redisplay(object, Standard_False);
+}
+
+void CadViewer::setFeatureTransparency(
+    const QString& featureId, const Handle(AIS_Shape)& object)
+{
+    if (object.IsNull()) return;
+    if (featureVisibilityMode(featureId) == VisibilityMode::Ghosted) {
+        object->SetTransparency(GhostTransparency);
+    } else if (xRayEnabled_) {
+        object->SetTransparency(XRayTransparency);
+    } else {
+        object->UnsetTransparency();
     }
 }
 
@@ -1495,6 +1582,7 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         cancelPushPull();
         context_->Remove(it->second, Standard_False);
         std::erase(displayedShapes_, it->second);
+        featureVisibility_.erase(it->first);
         it = featureObjects_.erase(it);
         changed = true;
     }
@@ -1522,6 +1610,7 @@ void CadViewer::clear()
     context_->RemoveAll(Standard_True);
     displayedShapes_.clear();
     featureObjects_.clear();
+    featureVisibility_.clear();
     invalidateSnapReferenceCache("MODEL_CHANGED: viewer cleared");
     resetDetectedCycle();
     selectionState_ = {};
@@ -1688,7 +1777,9 @@ void CadViewer::restoreSelection(
         const auto resolved = resolver.resolve(reference);
         if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape) continue;
         const auto object = featureObjects_.find(QString::fromStdString(reference.featureId));
-        if (object == featureObjects_.end() || object->second.IsNull()) continue;
+        if (object == featureObjects_.end() || object->second.IsNull()
+            || !context_->IsDisplayed(object->second)
+            || !featureIsSelectable(object->first)) continue;
         const Handle(StdSelect_BRepOwner) owner = new StdSelect_BRepOwner(
             *resolved.shape, object->second, 0, Standard_True);
         context_->AddOrRemoveSelected(owner, Standard_False);
@@ -1696,7 +1787,8 @@ void CadViewer::restoreSelection(
     for (const auto& featureId : objectFeatureIds) {
         const auto object = featureObjects_.find(QString::fromStdString(featureId));
         if (object != featureObjects_.end() && !object->second.IsNull()
-            && context_->IsDisplayed(object->second)) {
+            && context_->IsDisplayed(object->second)
+            && featureIsSelectable(object->first)) {
             context_->AddOrRemoveSelected(object->second, Standard_False);
         }
     }
@@ -1750,6 +1842,9 @@ void CadViewer::applySelectionMode()
     }
 
     context_->Activate(mode, Standard_True);
+    for (const auto& [id, object] : featureObjects_) {
+        if (!featureIsSelectable(id)) context_->Deactivate(object);
+    }
     if (transformGizmo_) {
         transformGizmo_->deactivateSelection();
     }
@@ -1778,13 +1873,12 @@ void CadViewer::setXRayEnabled(bool enabled)
         if (shape.IsNull()) {
             continue;
         }
-
-        if (xRayEnabled_) {
-            shape->SetTransparency(XRayTransparency);
-        } else {
-            shape->UnsetTransparency();
-        }
-
+        const auto found = std::find_if(
+            featureObjects_.begin(), featureObjects_.end(),
+            [&shape](const auto& entry) { return entry.second == shape; });
+        if (found != featureObjects_.end()) setFeatureTransparency(found->first, shape);
+        else if (xRayEnabled_) shape->SetTransparency(XRayTransparency);
+        else shape->UnsetTransparency();
         context_->Redisplay(shape, Standard_False);
     }
 
@@ -1891,6 +1985,7 @@ bool CadViewer::beginPushPull()
 
     const auto selectedObject = Handle(AIS_Shape)::DownCast(
         faceHit->presentation);
+    if (!featureIsSelectable(faceHit->item.featureId)) return false;
     if (selectedObject.IsNull() || faceHit->shape.IsNull()
         || faceHit->shape.ShapeType() != TopAbs_FACE
         || !faceHit->item.currentSubshapeIndex
@@ -2028,7 +2123,7 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
         }
 
         if (!pushPullObject_.IsNull()) {
-            context_->Display(pushPullObject_, Standard_False);
+            applyFeaturePresentation(pushPullFeatureId_, pushPullObject_);
         }
 
         context_->UpdateCurrentViewer();
@@ -2083,7 +2178,7 @@ void CadViewer::commitPushPull()
     }
 
     if (!pushPullObject_.IsNull()) {
-        context_->Display(pushPullObject_, Standard_False);
+        applyFeaturePresentation(pushPullFeatureId_, pushPullObject_);
     }
 
     pushPullActive_ = false;
@@ -2120,7 +2215,7 @@ void CadViewer::cancelPushPull()
     }
 
     if (!pushPullObject_.IsNull()) {
-        context_->Display(pushPullObject_, Standard_False);
+        applyFeaturePresentation(pushPullFeatureId_, pushPullObject_);
     }
 
     pushPullActive_ = false;
@@ -2752,7 +2847,8 @@ void CadViewer::selectFeatures(const QStringList& featureIds)
     // This is the tree-to-viewer path; do not echo a selection notification.
     context_->ClearSelected(Standard_False);
     for (const auto& [id, object] : featureObjects_) {
-        if (featureIds.contains(id) && context_->IsDisplayed(object)) {
+        if (featureIds.contains(id) && context_->IsDisplayed(object)
+            && featureIsSelectable(id)) {
             context_->AddOrRemoveSelected(object, Standard_False);
         }
     }

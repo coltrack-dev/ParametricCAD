@@ -243,6 +243,16 @@ void MainWindow::createParametricPanel()
             if (!result.success) statusBar()->showMessage(
                 QString::fromStdString(result.error), 3000);
             else refreshVisibilityView();
+        },
+        [this](const QStringList& featureIds) {
+            std::vector<std::string> ids;
+            for (const auto& id : featureIds) ids.push_back(id.toStdString());
+            presenter_->ghostOthers(ids);
+            refreshVisibilityView();
+        },
+        [this]() {
+            presenter_->clearGhosting();
+            refreshVisibilityView();
         });
 
     connect(viewer_, &CadViewer::selectionChanged, this,

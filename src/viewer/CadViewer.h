@@ -28,6 +28,7 @@
 #include "viewer/TransformGizmo.h"
 #include "viewer/TransformMath.h"
 #include "viewer/SelectionAdapter.h"
+#include "viewer/VisibilityMode.h"
 #include "operations/ParametricFeatures.h"
 #include "model/TopologicalReference.h"
 
@@ -84,6 +85,9 @@ public:
     void updateFeature(const TopoDS_Shape& shape, const QString& featureId);
     void selectFeatures(const QStringList& featureIds);
     void setHiddenFeatures(const QStringList& featureIds);
+    void setFeatureVisibilityModes(
+        const std::map<QString, cad::viewer::VisibilityMode>& modes);
+    cad::viewer::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
     void clear();
     bool hasDisplayedShapes() const;
@@ -182,6 +186,11 @@ private:
     void resetDetectedCycle();
     void setXRayEnabled(bool enabled);
     void applySelectionMode();
+    bool featureIsSelectable(const QString& featureId) const noexcept;
+    void applyFeaturePresentation(
+        const QString& featureId, const Handle(AIS_Shape)& object);
+    void setFeatureTransparency(
+        const QString& featureId, const Handle(AIS_Shape)& object);
 
     bool beginPushPull();
     void updatePushPullPreview(const QPoint& position);
@@ -228,6 +237,7 @@ private:
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
+    std::map<QString, cad::viewer::VisibilityMode> featureVisibility_;
     int bulkUpdateDepth_{0};
     bool bulkCachesInvalidated_{false};
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};
