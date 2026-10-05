@@ -11,20 +11,20 @@ package "Qt UI" {
     component CadViewer
     component ModelPresenter
     component TransformGizmo
+    component SnapManager
+    component TransformMath
 }
 
 package "Application" {
     component ModelingController
     component ProjectController
-    component SnapManager
-    component TransformMath
+    component VisibilityManager
     interface FeatureEditingService
 }
 
 package "Commands" {
     component QUndoStack
     component FeatureCommands
-    component TransformFeatureCommand
 }
 
 package "Parametric model" {
@@ -47,26 +47,36 @@ package "Persistence" {
     component ".pcad JSON" as Pcad
 }
 
+package "Presentation state" {
+    component SavedView
+    component SpatialVisibilityRule
+    component "Section clipping state" as SectionState
+}
+
 MainWindow --> ModelingController : modeling actions
 MainWindow --> ProjectController : open / save / new
 MainWindow --> FeatureEditorPanel : selection and descriptors
 MainWindow --> CadViewer : presentation coordination
 MainWindow --> ModelPresenter : bulk Open synchronization
+MainWindow --> VisibilityManager : presentation policy/actions
 ModelPresenter --> CadViewer : batched feature presentation
 ModelPresenter --> Body : recompute / feature state
+ModelPresenter --> VisibilityManager : visibility projection
 
 FeatureEditorPanel ..> FeatureEditingService : uses contract
 ModelingController ..|> FeatureEditingService
 
 CadViewer --> MainWindow : feature IDs / PushPull commit
 CadViewer --> TransformGizmo : display / hit-test handles
-CadViewer --> TransformMath : screen-to-world transforms
 CadViewer --> SnapManager : snap candidates
+CadViewer --> TransformMath : screen-to-world transforms
+CadViewer --> SavedView : camera/presentation restore
+CadViewer --> SpatialVisibilityRule : spatial box presentation
+CadViewer --> SectionState : viewer clip plane
 
 ModelingController --> QUndoStack : push / undo / redo
 QUndoStack --> FeatureCommands
 FeatureCommands --> Body : mutate through commands
-TransformFeatureCommand --> Body : placement before / after
 
 Body *-- ParametricFeature
 PrimitiveFeatures --|> ParametricFeature
@@ -82,6 +92,8 @@ BasicFeatures --> BRep
 
 ProjectController --> ProjectFile
 ProjectFile --> Body : validated load / save
+ProjectFile --> VisibilityManager : groups / filters / presets
+ProjectFile --> SavedView : saved views
 ProjectFile --> Pcad
 
 note right of CadViewer

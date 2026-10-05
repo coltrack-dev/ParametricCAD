@@ -1,384 +1,159 @@
 # ParametricCAD
 
-ParametricCAD is a simple desktop CAD application written in C++ using Qt 6 and Open CASCADE Technology (OCCT).
+ParametricCAD is a desktop parametric CAD application written in C++20 with
+Qt 6 and Open CASCADE Technology (OCCT). It keeps an editable feature history,
+rebuilds OCCT B-Rep geometry from parameters, and provides direct viewer
+interaction for selection, transformation, snapping, visibility, spatial
+inspection, section clipping, and saved views.
 
-The project is intended as a public portfolio project for exploring CAD architecture, B-Rep geometry, interactive 3D modeling, parametric operations, and SketchUp-like direct modeling workflows.
+Projects use the native editable `.pcad` JSON format.
 
-## Architecture
+## Current capabilities
 
-Undo/Redo architecture and checks: [docs/UNDO_REDO.md](docs/UNDO_REDO.md).
+### Modeling
 
-`Body` stores the canonical parametric history, including stable IDs, dependencies,
-parameters and generated geometry. The legacy `Document`/`Feature` API remains for
-compatibility with older callers and `.pcad` input; legacy Box/Cylinder records are
-converted into canonical Body features when loaded. `CadViewer` handles
-visualization and selection, and `FeatureEditorPanel` edits parameters. `.pcad`
-stores parameters and supported dependencies, rather than only `TopoDS_Shape`.
+- Parametric Box, Cylinder, Cone, Sphere, Torus, and Hexagon primitives.
+- Rectangle `Sketch` and `Face` profile workflow.
+- Extrude, Pocket, Push/Pull, Revolve, Boolean Fuse/Cut/Common, Fillet,
+  Chamfer, Shell, Offset, Loft, and Sweep feature classes.
+- Linear and Path Pattern feature classes.
+- Feature placement for Move/Rotate transforms.
+- Stable feature IDs and dependency-aware recompute.
+- QUndoStack-based model editing and undo/redo.
 
-See [AGENTS.md](AGENTS.md), [parametric architecture](docs/PARAMETRIC_FEATURES.md),
-[.pcad format](docs/PCAD_FORMAT.md), [performance notes](docs/PERFORMANCE.md),
-and [roadmap](docs/ROADMAP.md).
+The availability of an operation in the UI and its persistence coverage can
+vary by feature. The canonical runtime model is `Body` containing
+`ParametricFeature` objects; legacy `Document`/`Feature` classes remain only
+for compatibility and legacy input conversion.
 
-## Demo and performance fixture
+### Sketch
 
-`examples/house.pcad` is a large timber-frame house demo. It is also used as a
-viewer stress test, placement/rotation example and large-project loading fixture.
-The extended house fixture and `project_file_tests` exercise the same loading and
-rigid-placement paths at several hundred features.
+The current Sketch MVP supports editable rectangle profiles on the XY plane,
+Sketch-to-Face conversion, and downstream Extrude/Pocket workflows. The
+sketch subsystem also contains line, circle, arc, trimming, extending, and
+constraint services used by the current editing tools. It is not yet a full
+general-purpose constraint CAD system; advanced profile and solver coverage is
+still limited. See [docs/PARAMETRIC_FEATURES.md](docs/PARAMETRIC_FEATURES.md)
+and the focused sketch documents for the current scope.
 
-## Current Features
+### Selection and interaction
 
-### Primitive geometry
+- Object, edge, and face selection modes.
+- OCCT selection normalized to stable feature IDs and application selection
+  state, with tree/viewer synchronization.
+- Transform gizmo with Move/Rotate and duplicate-transform workflows.
+- Cached endpoint, midpoint, and bounded intersection snapping.
+- Push/Pull preview and face interaction.
+- Zoom around the cursor, pan, orbit, standard views, and locked-Z turntable
+  orbit. Free orbit remains available.
+- XYZ orientation widget and X-Ray/select-through support.
 
-- Box creation
-- Cylinder creation
-- Open CASCADE B-Rep geometry
-- Interactive 3D viewport
+### Visibility and model inspection
 
-### Selection
+The visibility policy is owned by `VisibilityManager` and projected by
+`ModelPresenter` into `CadViewer` presentations.
 
-The viewer supports selection of different topology levels:
+- Persistent feature Hide/Show.
+- Temporary Isolate and Show All.
+- Persistent visibility groups, nested groups, and multiple group membership.
+- Type, role, and derived category filters.
+- Ghost Others with `Visible`, `Ghosted`, and `Hidden` presentation modes.
+- Feature-level spatial visibility using cached world-space bounding boxes.
+- Spatial box interaction with Hidden Outside and Ghost Outside modes.
+- Viewer-only section clipping on X, Y, or Z with Flip and Clear actions.
+- Saved views containing presentation and camera state.
 
-- Object
-- Edge
-- Face
+Spatial visibility filters features using bounding boxes. It does not clip
+topology. Section clipping uses OCCT `Graphic3d_ClipPlane` through
+`V3d_View`; it does not modify B-Rep geometry. Saved views are presentation
+metadata, not modeling features.
 
-Keyboard shortcuts:
+### Project format
 
-| Key | Action |
-|---|---|
-| `1` | Object selection |
-| `2` | Edge selection |
-| `3` | Face selection |
-| `Esc` | Clear selection / cancel current tool |
+`.pcad` is UTF-8 JSON, currently format version 1. It stores canonical feature
+parameters, stable IDs, dependencies, placement, persistent feature
+visibility, visibility groups/filters/presets, and saved views. Geometry is
+rebuilt from parameters; raw `TopoDS_Shape` data and undo history are not
+stored. Legacy Box/Cylinder input is converted to canonical Body features.
 
-Geometry under the mouse cursor is highlighted before selection.
+The loader validates a temporary model before replacing the active project.
+Files without newer optional metadata remain valid. See
+[docs/PCAD_FORMAT.md](docs/PCAD_FORMAT.md).
 
-### Push / Pull
+### Performance
 
-A SketchUp-inspired Push/Pull tool is available for planar faces.
+Large project Open uses a worker phase for file parsing and temporary model
+assembly, followed by GUI-thread time-budgeted recompute and presentation
+continuations. CadViewer uses bulk updates, deferred selection activation, and
+incremental visibility deltas. Visibility-only operations do not recompute
+the Body.
 
-Workflow:
+The detailed timber-frame fixture
+`examples/house_1_5_storey_side_dormer.pcad` is used for large-project loading,
+placement/transform, visibility, spatial, section, and saved-view checks.
+See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
-1. Press `P` or select **Push/Pull** from the toolbar.
-2. Move the cursor over a planar face.
-3. Click the face.
-4. Move the mouse to define the extrusion distance.
-5. Click again to confirm.
-6. Press `Esc` to cancel.
-
-Push/Pull uses Open CASCADE operations internally:
-
-- `BRepPrimAPI_MakePrism`
-- `BRepAlgoAPI_Fuse`
-- `BRepAlgoAPI_Cut`
-
-Positive extrusion extends the solid.
-
-Negative extrusion can create a cut into the existing solid.
-
-> Push/Pull is currently an experimental direct-modeling operation. Integration with the parametric feature history is planned.
-
-## X-Ray / Select Through
-
-ParametricCAD includes an experimental X-Ray mode for working with geometry hidden behind visible faces.
-
-Press:
-
-```text
-X
-```
-
-or use the **X-Ray** button on the toolbar.
-
-When X-Ray is enabled:
-
-- solids become semi-transparent;
-- hidden geometry remains visible;
-- the toolbar clearly shows that X-Ray mode is active;
-- `Alt + Left Click` can cycle through detected faces under the cursor.
-
-Example:
+### Architecture
 
 ```text
-P
-→ X-Ray
-→ move cursor over the model
-→ Alt + Left Click until the required rear face is highlighted
-→ move mouse
-→ Left Click to confirm Push/Pull
+Qt UI (MainWindow, FeatureEditorPanel, CadViewer)
+                         |
+Application controllers/services
+                         |
+Body -> ParametricFeature -> OCCT TopoDS_Shape
+                         |
+ModelPresenter -> AIS presentations / viewer interaction
+                         |
+ProjectFile -> .pcad JSON
 ```
 
-X-Ray can be disabled by pressing `X` again.
-
-## Toolbar
-
-The viewport contains a modeling toolbar with the main interaction modes:
-
-```text
-Object | Edge | Face | Push/Pull | X-Ray | Fit
-```
-
-The toolbar remains synchronized with keyboard shortcuts.
-
-The currently active tool or mode is visually highlighted.
-
-When X-Ray is enabled, an additional visible status indicator is displayed.
-
-## View Navigation
-
-Mouse controls are inspired by common 3D modeling applications.
-
-| Input | Action |
-|---|---|
-| Middle Mouse + drag | Orbit |
-| Shift + Middle Mouse + drag | Pan |
-| Mouse Wheel | Zoom |
-| `F` | Fit model to view |
-
-## Technology Stack
-
-- C++20
-- Qt 6
-- Open CASCADE Technology
-- CMake
-- Ninja / Make
-- OpenGL
-
-The same source tree supports native Linux and macOS builds. Linux uses the OCCT
-X11 window backend; macOS uses the native Cocoa window backend provided by OCCT.
-
-## Project Structure
-
-```text
-ParametricCAD/
-├── CMakeLists.txt
-├── src/
-│   ├── app/
-│   │   └── main.cpp
-│   ├── model/
-│   │   ├── Document.cpp
-│   │   └── Feature.cpp
-│   ├── operations/
-│   │   ├── BoxFeature.cpp
-│   │   └── CylinderFeature.cpp
-│   └── viewer/
-│       ├── CadViewer.cpp
-│       ├── CadViewer.h
-│       ├── MainWindow.cpp
-│       └── MainWindow.h
-└── README.md
-```
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/diagrams/architecture-overview.puml](docs/diagrams/architecture-overview.puml).
 
 ## Build
 
-### Requirements
+### Dependencies
 
-Install:
+- CMake 3.24 or newer;
+- Ninja (recommended) or another supported CMake generator;
+- a C++20 compiler;
+- Qt 6 Core, Gui, Widgets, OpenGL, OpenGLWidgets, and Concurrent;
+- Open CASCADE Technology, including visualization and modeling libraries;
+- TBB may be pulled by the OCCT installation, depending on the platform.
 
-- C++ compiler with C++20 support
-- CMake
-- Qt 6
-- Open CASCADE Technology
-
-Example packages on Debian/Ubuntu-based systems may include:
-
-```bash
-sudo apt install \
-    build-essential \
-    cmake \
-    ninja-build \
-    qt6-base-dev \
-    libocct-foundation-dev \
-    libocct-modeling-data-dev \
-    libocct-modeling-algorithms-dev \
-    libocct-visualization-dev
-```
-
-Package names may vary depending on the Linux distribution and Open CASCADE version.
-
-### macOS (Intel x86_64)
-
-Install Xcode Command Line Tools, Homebrew, and the native Qt 6 / Open CASCADE
-packages:
-
-```bash
-xcode-select --install
-brew install cmake ninja qt opencascade
-```
-
-Configure explicitly for the Intel target. The `brew --prefix` form works with
-both `/usr/local` Intel Homebrew and a custom Homebrew installation:
-
-```bash
-cmake -S . -B build-macos -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-  -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix opencascade)"
-```
-
-Build and test:
-
-```bash
-cmake --build build-macos -j
-ctest --test-dir build-macos --output-on-failure
-```
-
-Run the native application bundle:
-
-```bash
-open build-macos/src/ParametricCAD.app
-```
-
-The macOS viewer wraps Qt's native `NSView` in OCCT's `Cocoa_Window`. It does
-not require X11, XQuartz, XCB, or GLX. macOS OpenGL is deprecated by Apple, so
-the application depends on the OpenGL support available in the installed Qt
-and OCCT versions; the existing OCCT `OpenGl_GraphicDriver` path is retained.
-
-### Configure
+Configure, build, and test:
 
 ```bash
 cmake -S . -B build -G Ninja
-```
-
-### Build
-
-```bash
-cmake --build build -j
-```
-
-### Tests (headless)
-
-Qt Test is included with the Qt development packages. Tests are enabled by default
-and can be disabled with `-DPARAMETRIC_CAD_BUILD_TESTS=OFF`.
-
-```bash
-cmake -S . -B build
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-### Run
-
-The executable is currently generated under:
+Run the application:
 
 ```bash
 ./build/src/ParametricCAD
 ```
 
-Depending on the selected CMake build directory, for example when using CLion, it may instead be located under:
+The test suite is headless where possible. GUI camera, clipping, and
+interaction checks require a desktop session.
 
-```bash
-./cmake-build-debug/src/ParametricCAD
-```
-
-## Development Status
-
-ParametricCAD is an early-stage experimental project.
-
-Implemented:
-
-- [x] Qt/Open CASCADE viewport integration
-- [x] Box primitive
-- [x] Cylinder primitive
-- [x] Orbit
-- [x] Pan
-- [x] Zoom
-- [x] Object selection
-- [x] Edge selection
-- [x] Face selection
-- [x] Hover highlighting
-- [x] Push/Pull for planar faces
-- [x] Push/Pull preview
-- [x] X-Ray display mode
-- [x] Select-through / cycling detected geometry
-- [x] Modeling toolbar
-- [x] Parametric feature tree and properties editor for supported primitives
-- [x] Modeling -> Add Rectangle Sketch / Create Face, editable Sketch dimensions and .pcad persistence
-- [x] Version 1 .pcad save/load with supported dependency references
-- [x] Save on close (autosave.pcad fallback for unnamed projects)
-- [x] Undo / Redo for model creation, parameter edits, Body deletion and project clearing
-
-See the [roadmap](docs/ROADMAP.md) for implementation limits and manual smoke tests.
-
-Planned:
-
-- [ ] Parametric Push/Pull feature
-- [ ] Unified Document/Body feature history
-- [ ] Rectangle tool
-- [ ] Line tool
-- [ ] Circle tool
-- [ ] Sketches on planar faces
-- [ ] Move tool
-- [ ] Rotate tool
-- [ ] Scale tool
-- [ ] Offset
-- [ ] Snapping to endpoints, midpoints and intersections
-- [ ] Dimensions and constraints
-- [ ] Groups / Components
-- [ ] Dependency visualization in the model tree
-- [ ] STEP import/export
-- [ ] STL export
-- [ ] Improved X-Ray and hidden geometry interaction
-
-## Architecture Direction
-
-The long-term goal is to combine two modeling approaches.
-
-### Direct modeling
-
-Fast SketchUp-like interaction:
+## Example project
 
 ```text
-Select face
-→ Push/Pull
-→ Move
-→ Cut
-→ Offset
+examples/house_1_5_storey_side_dormer.pcad
 ```
 
-### Parametric modeling
+This is a detailed timber-frame demonstration model and a large-project
+loading fixture. It exercises many placed and transformed features and is
+useful for checking visibility groups/filters, spatial bounding-box focus,
+section clipping, and saved-view restoration.
 
-Operations are stored as editable features:
+## Further documentation
 
-```text
-Document
-└── Body
-    ├── Box
-    ├── Sketch
-    ├── Pad
-    └── Pocket
-```
-
-This should allow simple direct manipulation while preserving an editable CAD feature history.
-
-## License
-
-ParametricCAD is licensed under the MIT License.
-
-See:
-
-```text
-LICENSE
-```
-
-Third-party libraries used by the project retain their respective licenses.
-
-The main external dependencies include:
-
-- Qt 6
-- Open CASCADE Technology
-
-See `THIRD_PARTY_LICENSES.md` for additional information.
-
-## Purpose
-
-This project is developed primarily for:
-
-- learning modern CAD architecture;
-- experimenting with Open CASCADE;
-- implementing interactive 3D modeling tools;
-- studying parametric and direct modeling approaches;
-- demonstrating practical C++ and desktop application development skills.
-
-Contributions, experiments, bug reports and technical discussions are welcome.
+- [Architecture](docs/ARCHITECTURE.md)
+- [Parametric feature architecture](docs/PARAMETRIC_FEATURES.md)
+- [.pcad format](docs/PCAD_FORMAT.md)
+- [Performance and project loading](docs/PERFORMANCE.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Undo/Redo](docs/UNDO_REDO.md)

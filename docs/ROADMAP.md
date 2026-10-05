@@ -1,242 +1,82 @@
 # ParametricCAD Roadmap
 
-Status reflects the current source tree. **Done** means implemented in the stated
-scope; **In progress** means a partial implementation exists; **Planned** means
-missing. Kernel helpers alone do not count as complete editable UI operations.
-Sketch/Face construction uses the existing Body architecture; Boolean Cut is not extended.
+Status is based on the current source tree. A feature is marked **Done** only
+for the scope that is actually implemented in the application.
 
-## Phase 1 — Core primitives
+## Completed
 
-**Done**
+### Canonical parametric model
 
-- BoxFeature and CylinderFeature, plus additional parametric primitives.
-- Document ownership of legacy primitive features.
-- Body feature tree, object/edge/face selection, and FeatureEditorPanel.
-- .pcad v1 save/load for supported primitives and Boolean dependencies.
-- Save on close and autosave.pcad fallback for unnamed documents.
+- Body-owned ordered `ParametricFeature` history with stable IDs.
+- Dependency registration, dirty/recompute/failed states, placement, and OCCT
+  shape generation.
+- Legacy Document/Feature compatibility and legacy primitive conversion.
+- Parametric primitive, profile, operation, pattern, transform, and Push/Pull
+  paths present in the current source tree.
 
-**In progress**
+### Selection subsystem migration
 
-- New Box/Cylinder creation and legacy-file loading use the canonical Body model;
-  legacy Document/Feature classes remain only for compatibility.
-- Autosave: close-time saving exists; periodic saving and recovery do not.
+- OCCT selection normalized through `SelectionAdapter` and
+  `CadViewer::SelectionState`.
+- Stable feature IDs and topology-reference restoration across model refresh.
+- Tree/viewer selection synchronization.
+- Transform gizmo and SnapManager use normalized primary selection rather than
+  arbitrary OCCT selected-owner iteration.
 
-**Planned**
+### Visibility and inspection
 
-- Vertex selection mode (current viewer exposes Object, Edge and Face).
+- Separated model refresh/recompute from visibility refresh.
+- Visible/Ghosted/Hidden presentation modes.
+- Persistent feature Hide/Show, groups, nested groups, filters, visibility
+  presets, isolation, Ghost Others, and Show All.
+- Incremental effective-mode cache and viewer deltas.
+- Feature-level spatial visibility using cached world-space bounding boxes,
+  interactive spatial box, Hidden Outside, and Ghost Outside.
+- Viewer-only OCCT section clipping with Section X/Y/Z, Flip, Clear, grid,
+  normal indicator, and normal-constrained interaction.
+- Persistent saved views for presentation, camera, spatial, section, isolation,
+  and Ghost Others state.
 
-## Phase 2 — Parametric construction
+### Large-project loading
 
-**Done**
+- Temporary model construction during file loading.
+- GUI-thread time-budgeted recompute continuations.
+- Bulk AIS presentation updates and deferred selection/cache synchronization.
+- Incremental visibility presentation updates.
+- Large house regression/stress fixture and deterministic 100/500/5000
+  visibility evaluation coverage.
 
-- Kernel rectangle-to-closed-wire and wire-to-face helpers in BasicFeatures.
-- Stable string IDs, lookup and duplicate rejection in Body/ParametricFeature.
-- Explicit dependency registration and Dirty/UpToDate/Failed states.
-- Existing dependency persistence for Boolean left/right IDs.
-- Rectangle SketchFeature with editable width/height and Sketch -> Wire rebuild.
-- FaceFeature from a selected Sketch, via Modeling -> Create Face.
-- Sketch/Face .pcad persistence, sourceFeatureId validation and editable round-trip.
-- Face -> Extrude creation, positive Length editor and v1 dependency/vector persistence.
-- QUndoStack commands for create/edit/delete/clear; selective dependency rebuild.
+### Editing infrastructure
 
-**In progress**
+- QUndoStack commands for supported feature/model edits, placement, persistent
+  visibility groups/filters/presets, and property changes.
+- Save/load validation and failed-load preservation.
 
-- Direct model callers must explicitly call markDirtyFrom()/recompute(); UI commands
-  already propagate changes to registered dependents without rebuilding unrelated branches.
+## Current limitations / planned work
 
-**Planned**
+- Complete UI and persistence coverage for every advanced feature class remains
+  incomplete even though several wrappers and geometry operations exist.
+- Sketch remains an evolving subsystem rather than a complete constraint CAD
+  editor; advanced profile/solver behavior needs more coverage.
+- Topology-reference restoration is geometry-signature based and can be
+  ambiguous after substantial topology changes.
+- Snap candidate types and intersection coverage can be extended.
+- Feature suppression and dependency visualization are not implemented.
+- Feature-history reorder and automatic dependency graph tooling are not
+  implemented.
+- STEP/STL exchange and additional import/export formats are not implemented.
+- Spatial indexing and more granular snap invalidation may be needed for much
+  larger models.
+- Multiple simultaneous section planes and true section capping workflows are
+  future extensions; the current viewer supports one temporary clipping plane.
 
-- Automatic dependency propagation, topological ordering and cycle detection.
-- Rebuild only affected dependents; define safe source deletion behavior.
-- Reassess ownership only when needed; keep new feature integration in Body for now.
-
-## Phase 3 — Boolean modeling
-
-**Done**
-
-- Existing Body BooleanFeature supports Cut, Fuse and Common, with UI and v1 persistence.
-
-**Planned**
-
-- Integrate Boolean Cut/Fuse/Common with the future Sketch/Face/Extrude chain.
-- Hole operation.
-
-Further Boolean work is deferred until Phase 2 is reliable.
-
-## Phase 4 — Detail operations
-
-**In progress**
-
-- Fillet, Chamfer, Shell and Offset have kernel helpers and parametric wrappers;
-  editor and persistence integration remain missing.
-
-**Planned**
-
-- Draft.
-- Complete editable UI and persistence for detail operations.
-
-## Phase 5 — Advanced sketches
-
-**In progress**
-
-- Circle wire kernel helper exists; no editable circle sketch feature.
-
-**Planned**
-
-- Line, circle, arc and polyline sketch entities.
-- Constraints, dimensions and sketch solver.
-
-## Phase 6 — Advanced features
-
-**In progress**
-
-- Revolve, Sweep and Loft have kernel helpers and parametric wrappers;
-  editor and persistence integration remain missing.
-
-**Planned**
-
-- Complete editable Revolve/Sweep/Loft integration.
-- Pattern and Mirror.
-
-## Phase 7 — Exchange
-
-**Planned**
-
-- STEP import.
-- STEP export.
-- STL export.
-- Optional BREP import/export.
-
-## Phase 8 — Editing infrastructure
-
-**Done**
-
-- Undo/Redo and command history for model operations; see [UNDO_REDO.md](UNDO_REDO.md).
-- Cut operand visibility derives from active history and follows Undo/Redo.
-
-**Planned**
-
-- Dependency visualization.
-- Feature suppression.
-- Reorder feature history if dependency validation and architecture permit.
-
-## Phase 9 — UX
-
-**Done**
-
-- Basic feature tree and properties panel for supported features.
-- Dirty/FAILED markers in the tree and error details in the properties panel.
-- Tree selection uses existing AIS objects without clear/redisplay/Fit All.
-- Parameter refresh no longer calls Fit All; load and explicit Fit still do.
-- Face/edge/vertex selection is restored across feature rebuilds when a unique
-  geometry-signature match exists; missing or ambiguous topology is dropped.
-- SnapManager supports cached endpoint, midpoint, and bounded edge-intersection
-  candidates with endpoint-first priority and transform-time hysteresis.
-- Feature-tree visibility supports persistent Hide/Show, temporary Isolate and
-  Show All without changing feature history or recompute semantics.
-- Large-project Open uses time-budgeted recompute and presentation continuations,
-  bulk AIS updates, deferred selection activation and deferred snap-cache
-  invalidation.
-- Redundant per-feature viewer updates are suppressed during project Open.
-- Large-project regression coverage exists in `project_file_tests`, including a
-  489-Box fixture and a load check for `examples/house.pcad`.
-- Rigid placement save/load regression coverage accepts rounded rotation matrices;
-  the test exercises a 35-degree rotated placement.
-
-**In progress**
-
-- Improved tree/properties panel, including upcoming construction features.
-- Topology selection preservation needs further work for ambiguous or missing
-  geometry signatures.
-
-**Planned**
-
-- Context menus and feature icons.
-- Per-feature visibility toggle and isolate/hide objects.
-- Improve topology naming beyond the current geometry-signature fallback.
-- Extend snap intersection coverage and marker styling as additional curve
-  types become reliable.
-
-## Audit findings and TODOs
-
-- Body/ParametricFeature is the canonical runtime model. Document/Feature and its
-  legacy Box/Cylinder classes remain only for compatibility with existing callers
-  and serialized input; legacy file entries are converted during load.
-- Dependencies remain pointers in memory with stable persisted IDs. Insertion validates
-  source order, and removal rejects sources with active dependents.
-- markDirtyFrom() now marks only the source and its registered dependents.
-- ParametricFeature now handles both standard and OCCT exceptions as failed rebuilds.
-- A failed Body recompute stops at the first error; invalid/dirty presentations are removed.
-  Further error isolation across independent dirty branches remains future work.
-- Parameter refresh updates changed AIS shapes in place and removes absent presentations.
-- Viewer Push/Pull edits are not reflected in the parametric model or .pcad.
-- Face reference errors include both IDs; older Boolean reference errors remain generic.
-- UI Save rebuilds the Body before serialization. Low-level ProjectFile::save callers
-  should also validate their model before writing.
-
-## Automated verification
-
-Run without a display:
+## Verification
 
 ```bash
-cmake -S . -B build
+cmake -S . -B build -G Ninja
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-- geometry_tests: existing vector math checks.
-- project_file_tests: existing v1 round-trip, IDs/types/parameters and references,
-  editing after load, malformed JSON/version/parameters/references/duplicate IDs,
-  failed-load preservation, empty projects and write failure.
-- model_tests (Qt Test, no QApplication): rectangle dimension validation, closed
-  wire/face geometry and area changes, invalid/open profile rejection, extrusion
-  volume/vector changes and errors, Document ownership, Body identity/dependency
-  resolution and explicit rebuild/recovery, unsupported version/type handling.
-
-- sketch_face_tests: production Sketch/Face geometry, validation, dependency rebuild,
-  expired/wrong sources, mixed legacy primitive and Sketch/Face round-trip, editing after
-  load, and broken sourceFeatureId rejection without replacing the active document.
-
-- undo_tests: stable IDs, add/remove/clear, ordered restoration, typed parameter edits,
-  Sketch/Face/Extrude dependency rebuild, Cut visibility, clean state and save/load.
-- undo_panel_tests: offscreen editingFinished grouping and Ctrl+Z/Ctrl+Y in editors.
-GUI camera behavior requires the manual check below; it is not covered by CTest.
-
-## Manual smoke test
-
-### Current implementation
-
-1. Start ParametricCAD and create a Box from the Model panel.
-2. Zoom, pan and orbit to a distinctive view.
-3. Select different features in the tree; verify the view does not move.
-4. Edit the Box width in Properties; verify geometry changes and camera/zoom/pan stay fixed.
-5. Save As test.pcad, close, reopen and edit the Box again.
-6. Verify object/edge/face selection, X-Ray, navigation and explicit Fit still work.
-
-### Sketch -> Face
-
-1. Choose Modeling -> Add Rectangle Sketch; verify the selected sketch appears in the tree.
-2. Set a distinctive camera/zoom/pan, then choose Modeling -> Create Face.
-3. Verify the Face appears, its source ID is shown in Properties and the view stays fixed.
-4. Select the Sketch and edit Width/Height; verify the dependent Face updates in place.
-5. Try Create Face with no selection, a primitive, a Face or multiple features selected;
-   verify a clear message and no new feature.
-6. Save As test.pcad, close, reopen, select the Sketch and edit its dimensions again.
-
-### Target Sketch -> Face -> Extrude workflow
-
-Implemented through Body; run this manual scenario to verify viewport behavior.
-
-1. Start ParametricCAD.
-2. Create Rectangle Sketch.
-3. Create Face.
-4. Extrude.
-5. Change sketch width.
-6. Verify Face and Extrude update.
-7. Verify camera zoom/pan are preserved.
-8. Change extrusion length.
-9. Save as test.pcad.
-10. Close application.
-11. Open test.pcad.
-12. Verify Sketch -> Face -> Extrude dependencies.
-13. Edit parameters again after loading.
+See [ARCHITECTURE.md](ARCHITECTURE.md), [PERFORMANCE.md](PERFORMANCE.md), and
+[PCAD_FORMAT.md](PCAD_FORMAT.md) for implementation boundaries.

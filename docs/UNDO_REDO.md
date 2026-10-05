@@ -1,6 +1,6 @@
 # Undo / Redo
 
-One QUndoStack belongs to MainWindow's current project. Edit -> Undo uses Ctrl+Z;
+One QUndoStack belongs to the current `ModelingController` project. Edit -> Undo uses Ctrl+Z;
 Redo uses Ctrl+Y and the platform's standard Qt Redo bindings. Actions show the
 command name and disable themselves when there is nothing to undo/redo.
 
@@ -50,7 +50,9 @@ selection. Tree/viewer synchronization blocks recursive selection notifications.
 Successful Save calls setClean() without deleting history. The window's modified
 marker follows QUndoStack::cleanChanged; returning to the saved index removes it.
 New and successful Open clear the stack. Failed Open/Save preserve history; Save
-rejects a Body that cannot rebuild. .pcad contains only the current model.
+rejects a Body that cannot rebuild. `.pcad` contains the current model plus
+persisted visibility metadata and saved views; it does not contain undo history
+or transient viewer state.
 
 Extrude Face is available for a selected Face; its Length editor scales the existing
 extrusion direction. The v1 serializer stores sourceFeatureId and vectorX/Y/Z, so
