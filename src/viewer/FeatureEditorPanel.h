@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QStringList>
 #include "application/FeatureEditingService.h"
+#include "application/VisibilityManager.h"
 #include "operations/ParametricFeatures.h"
 
 #include <functional>
@@ -29,6 +30,7 @@ public:
 
     void setService(cad::application::FeatureEditingService* service);
     void setFeatures(std::vector<cad::application::FeatureDescriptor> features);
+    void setVisibilityGroups(std::vector<cad::application::VisibilityGroup> groups);
     void setActionState(const cad::application::ModelingActionState& state);
     void scheduleRefresh();
     void commitPendingEdits();
@@ -44,6 +46,13 @@ public:
         std::function<void()> showAll,
         std::function<void(const QStringList&)> ghostOthers,
         std::function<void()> clearGhosting);
+    void setGroupHandlers(
+        std::function<void(const QStringList&)> createGroup,
+        std::function<void(const QString&, cad::application::VisibilityMode)> setVisibility,
+        std::function<void(const QString&)> isolateGroup,
+        std::function<void(const QString&)> removeGroup,
+        std::function<void(const QString&, const QStringList&)> addToGroup,
+        std::function<void(const QString&, const QStringList&)> removeFromGroup);
     void refresh();
     QStringList selectedFeatureIds() const;
     void selectFeatures(const QStringList& featureIds);
@@ -90,6 +99,7 @@ private:
 
     cad::application::FeatureEditingService* service_{nullptr};
     std::vector<cad::application::FeatureDescriptor> features_;
+    std::vector<cad::application::VisibilityGroup> groups_;
     bool canDelete_{false};
     bool canCreateFace_{false};
     bool canExtrude_{false};
@@ -121,4 +131,10 @@ private:
     std::function<void()> showAllHandler_;
     std::function<void(const QStringList&)> ghostOthersHandler_;
     std::function<void()> clearGhostingHandler_;
+    std::function<void(const QStringList&)> createGroupHandler_;
+    std::function<void(const QString&, cad::application::VisibilityMode)> groupVisibilityHandler_;
+    std::function<void(const QString&)> isolateGroupHandler_;
+    std::function<void(const QString&)> removeGroupHandler_;
+    std::function<void(const QString&, const QStringList&)> addToGroupHandler_;
+    std::function<void(const QString&, const QStringList&)> removeFromGroupHandler_;
 };

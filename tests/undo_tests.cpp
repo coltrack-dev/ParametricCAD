@@ -1,4 +1,5 @@
 #include "commands/FeatureCommands.h"
+#include "application/VisibilityManager.h"
 #include "model/FeatureVisibility.h"
 #include "model/ProjectFile.h"
 #include "operations/BoxFeature.h"
@@ -190,6 +191,28 @@ private slots:
         QVERIFY(std::find(restored.begin(), restored.end(), "a") != restored.end());
         QVERIFY(std::find(restored.begin(), restored.end(), "b") != restored.end());
         QVERIFY(std::find(restored.begin(), restored.end(), "c") == restored.end());
+    }
+
+    void visibilityGroupUndoRedo()
+    {
+        cad::application::VisibilityManager manager;
+        const auto before = manager.groups();
+        const auto id = manager.createGroup("Roof");
+        QVERIFY(id);
+        QVERIFY(manager.addFeaturesToGroup(*id, {"feature"}));
+        const auto after = manager.groups();
+        std::string error;
+        QVERIFY(manager.replaceGroups(before, error));
+
+        QUndoStack stack;
+        stack.push(new SetVisibilityGroupsCommand(
+            manager, before, after, "Create Visibility Group"));
+        QCOMPARE(manager.groups().size(), std::size_t{1});
+        stack.undo();
+        QVERIFY(manager.groups().empty());
+        stack.redo();
+        QCOMPARE(manager.groups().size(), std::size_t{1});
+        QCOMPARE(manager.groups().front().memberFeatureIds.size(), std::size_t{1});
     }
 
     void visibilityPersistsAndShowAllPreservesAutomaticHiddenDependencies()

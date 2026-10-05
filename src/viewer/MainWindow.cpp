@@ -2,6 +2,7 @@
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
 #include "viewer/ModelPresenter.h"
+#include "commands/FeatureCommands.h"
 #include "model/FeatureVisibility.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
@@ -48,8 +49,8 @@ std::string pointRoleText(const cad::parametric::SketchPointRole role)
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
-      project_(modeling_),
       visibilityManager_(),
+      project_(modeling_, &visibilityManager_),
       viewer_(new CadViewer(this)),
       presenter_(std::make_unique<cad::viewer::ModelPresenter>(
           modeling_.body(), visibilityManager_, *viewer_))
@@ -241,7 +242,24 @@ void MainWindow::createParametricPanel()
         },
         [this]() {
             visibilityManager_.clearIsolation();
+            visibilityManager_.clearGhosting();
+            const auto beforeGroups = visibilityManager_.groups();
+            visibilityManager_.resetGroupVisibility();
+            const auto afterGroups = visibilityManager_.groups();
+            modeling_.undoStack().beginMacro("Show All");
+            bool groupVisibilityChanged = false;
+            for (std::size_t index = 0; index < beforeGroups.size(); ++index) {
+                if (beforeGroups[index].mode != afterGroups[index].mode) {
+                    groupVisibilityChanged = true;
+                    break;
+                }
+            }
+            if (groupVisibilityChanged) {
+                modeling_.undoStack().push(new cad::commands::SetVisibilityGroupsCommand(
+                    visibilityManager_, beforeGroups, afterGroups, "Reset Group Visibility"));
+            }
             const auto result = modeling_.showAllFeatures();
+            modeling_.undoStack().endMacro();
             if (!result.success) statusBar()->showMessage(
                 QString::fromStdString(result.error), 3000);
             else refreshVisibilityView();
@@ -255,6 +273,60 @@ void MainWindow::createParametricPanel()
         [this]() {
             visibilityManager_.clearGhosting();
             refreshVisibilityView();
+        });
+    featureEditorPanel_->setGroupHandlers(
+        [this](const QStringList& featureIds) {
+            bool ok = false;
+            const auto name = QInputDialog::getText(this, "Create Visibility Group",
+                "Name:", QLineEdit::Normal, {}, &ok);
+            if (!ok || name.trimmed().isEmpty()) return;
+            const auto before = visibilityManager_.groups();
+            const auto id = visibilityManager_.createGroup(name.trimmed().toStdString());
+            if (!id || !visibilityManager_.addFeaturesToGroup(*id,
+                [&featureIds]() {
+                    std::vector<std::string> ids;
+                    for (const auto& featureId : featureIds) ids.push_back(featureId.toStdString());
+                    return ids;
+                }())) return;
+            commitVisibilityGroups(before, visibilityManager_.groups(), "Create Visibility Group");
+        },
+        [this](const QString& groupId, const cad::application::VisibilityMode mode) {
+            const auto before = visibilityManager_.groups();
+            if (visibilityManager_.setGroupVisibility(groupId.toStdString(), mode)) {
+                commitVisibilityGroups(before, visibilityManager_.groups(), "Change Group Visibility");
+            }
+        },
+        [this](const QString& groupId) {
+            std::vector<std::string> ids;
+            for (const auto& group : visibilityManager_.groups()) {
+                if (QString::fromStdString(group.id) != groupId) continue;
+                ids.assign(group.memberFeatureIds.begin(), group.memberFeatureIds.end());
+                break;
+            }
+            visibilityManager_.setIsolatedFeatures(ids);
+            refreshVisibilityView();
+        },
+        [this](const QString& groupId) {
+            const auto before = visibilityManager_.groups();
+            if (visibilityManager_.removeGroup(groupId.toStdString())) {
+                commitVisibilityGroups(before, visibilityManager_.groups(), "Delete Visibility Group");
+            }
+        },
+        [this](const QString& groupId, const QStringList& featureIds) {
+            const auto before = visibilityManager_.groups();
+            std::vector<std::string> ids;
+            for (const auto& featureId : featureIds) ids.push_back(featureId.toStdString());
+            if (visibilityManager_.addFeaturesToGroup(groupId.toStdString(), ids)) {
+                commitVisibilityGroups(before, visibilityManager_.groups(), "Add Features to Group");
+            }
+        },
+        [this](const QString& groupId, const QStringList& featureIds) {
+            const auto before = visibilityManager_.groups();
+            std::vector<std::string> ids;
+            for (const auto& featureId : featureIds) ids.push_back(featureId.toStdString());
+            if (visibilityManager_.removeFeaturesFromGroup(groupId.toStdString(), ids)) {
+                commitVisibilityGroups(before, visibilityManager_.groups(), "Remove Features from Group");
+            }
         });
 
     connect(viewer_, &CadViewer::selectionChanged, this,
@@ -270,10 +342,20 @@ void MainWindow::createParametricPanel()
     );
 }
 
+void MainWindow::commitVisibilityGroups(
+    std::vector<cad::application::VisibilityGroup> before,
+    std::vector<cad::application::VisibilityGroup> after,
+    const QString& text)
+{
+    modeling_.undoStack().push(new cad::commands::SetVisibilityGroupsCommand(
+        visibilityManager_, std::move(before), std::move(after), text));
+}
+
 void MainWindow::refreshModelView(const bool fitView)
 {
     const auto result = presenter_->refreshModel();
     featureEditorPanel_->setFeatures(modeling_.features());
+    featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     // ModelPresenter restores the OCCT selection, including topology
     // references. Do not select feature objects again here: that would
     // discard restored face/edge/vertex selection.
@@ -293,6 +375,7 @@ void MainWindow::refreshVisibilityView()
 {
     presenter_->refreshVisibility();
     featureEditorPanel_->setFeatures(modeling_.features());
+    featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     applySelectionSnapshot(viewer_->selectionSnapshot(), false);
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (!activeSketchId_.empty()) {
@@ -1313,6 +1396,7 @@ void MainWindow::newDocument()
     presenter_->clear();
     applySelection({});
     featureEditorPanel_->setFeatures(modeling_.features());
+    featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     currentFile_.clear();
     updateTitle();
@@ -1435,6 +1519,7 @@ void MainWindow::processProjectLoadRecomputeChunk()
         std::move(projectLoadResult_->body));
     currentFile_ = pendingProjectPath_;
     presenter_->clear();
+    visibilityManager_ = std::move(projectLoadResult_->visibility);
     applySelection({});
     projectLoadMetrics_.cleanupMilliseconds = cleanupTimer.elapsed();
     projectLoadPresentationIndex_ = 0;
@@ -1484,17 +1569,15 @@ void MainWindow::processProjectLoadPresentationChunk()
             presentedIds.append(QString::fromStdString(feature->id()));
         }
     }
-    const auto hidden = cad::parametric::hiddenFeatureIds(body, {});
-    QStringList hiddenIds;
-    for (const auto& id : hidden) hiddenIds.append(QString::fromStdString(id));
     QElapsedTimer finalSyncTimer;
     finalSyncTimer.start();
     viewer_->beginBulkUpdate();
     viewer_->retainFeatures(presentedIds);
-    viewer_->setHiddenFeatures(hiddenIds);
     viewer_->restoreSelection(body, {}, {});
     viewer_->endBulkUpdate();
+    presenter_->refreshVisibility();
     featureEditorPanel_->setFeatures(modeling_.features());
+    featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     const auto finalSync = finalSyncTimer.elapsed();
     QElapsedTimer fitTimer;

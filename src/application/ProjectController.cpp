@@ -4,8 +4,9 @@
 
 namespace cad::application {
 
-ProjectController::ProjectController(ModelingController& modeling)
-    : modeling_(modeling)
+ProjectController::ProjectController(ModelingController& modeling,
+                                     VisibilityManager* visibilityManager)
+    : modeling_(modeling), visibilityManager_(visibilityManager)
 {
 }
 
@@ -14,7 +15,8 @@ ProjectLoadResult ProjectController::loadProject(
 {
     ProjectLoadResult result;
     if (!ProjectFile::load(path, result.document, result.body, result.error,
-                           std::move(progress), &result.metrics, recompute)) {
+                           std::move(progress), &result.metrics, recompute,
+                           &result.visibility)) {
         result.document = {};
         result.body = {};
     }
@@ -27,7 +29,8 @@ bool ProjectController::save(const QString& path, QString& error)
         error = QString::fromStdString(modeling_.body().lastError());
         return false;
     }
-    if (!ProjectFile::save(path, modeling_.document(), modeling_.body(), error)) {
+    if (!ProjectFile::save(path, modeling_.document(), modeling_.body(), error,
+                           visibilityManager_)) {
         return false;
     }
     modeling_.undoStack().setClean();
@@ -42,12 +45,14 @@ bool ProjectController::open(const QString& path, QString& error)
         return false;
     }
     modeling_.replaceProject(std::move(result.document), std::move(result.body));
+    if (visibilityManager_) *visibilityManager_ = std::move(result.visibility);
     return true;
 }
 
 void ProjectController::newProject()
 {
     modeling_.replaceProject({}, {});
+    if (visibilityManager_) visibilityManager_->clear();
 }
 
 bool ProjectController::isDirty() const noexcept

@@ -95,10 +95,14 @@ private:
     void createChamfer();
     void deleteFeature();
     void clearDocument();
+    void commitVisibilityGroups(
+        std::vector<cad::application::VisibilityGroup> before,
+        std::vector<cad::application::VisibilityGroup> after,
+        const QString& text);
 
     cad::application::ModelingController modeling_;
-    cad::application::ProjectController project_;
     cad::application::VisibilityManager visibilityManager_;
+    cad::application::ProjectController project_;
     QString currentFile_;
     QAction* deleteAction_{nullptr};
     QAction* duplicateAction_{nullptr};

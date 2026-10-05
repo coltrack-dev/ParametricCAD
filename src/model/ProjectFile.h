@@ -18,9 +18,12 @@ using ProjectLoadProgress = std::function<void(int loadedFeatures, int totalFeat
 
 class Document;
 namespace cad::parametric { class Body; }
+namespace cad::application { class VisibilityManager; }
 namespace ProjectFile {
-bool save(const QString& path, const Document& document, const cad::parametric::Body& body, QString& error);
+bool save(const QString& path, const Document& document, const cad::parametric::Body& body,
+          QString& error, const cad::application::VisibilityManager* visibilityManager = nullptr);
 bool load(const QString& path, Document& document, cad::parametric::Body& body, QString& error,
           ProjectLoadProgress progress = {}, ProjectLoadMetrics* metrics = nullptr,
-          bool recompute = true);
+          bool recompute = true,
+          cad::application::VisibilityManager* visibilityManager = nullptr);
 }

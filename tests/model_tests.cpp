@@ -233,6 +233,57 @@ private slots:
         QCOMPARE(dependentManager.effectiveMode(*base, dependentBody), VisibilityMode::Hidden);
     }
 
+    void visibilityGroupsCombineAndValidate()
+    {
+        Body body;
+        auto a = std::make_shared<BoxParametricFeature>("a", 2, 2, 2);
+        auto b = std::make_shared<BoxParametricFeature>("b", 3, 3, 3);
+        auto c = std::make_shared<BoxParametricFeature>("c", 4, 4, 4);
+        body.addFeature(a);
+        body.addFeature(b);
+        body.addFeature(c);
+        QVERIFY(body.recompute());
+
+        VisibilityManager manager;
+        const auto building = manager.createGroup("Building");
+        QVERIFY(building);
+        const auto roof = manager.createGroup("Roof", *building);
+        QVERIFY(roof);
+        const auto fasteners = manager.createGroup("Fasteners", *roof);
+        QVERIFY(fasteners);
+        QVERIFY(manager.addFeaturesToGroup(*roof, {"a", "b"}));
+        QVERIFY(manager.addFeaturesToGroup(*fasteners, {"a", "missing"}));
+        QVERIFY(manager.setGroupVisibility(*building, VisibilityMode::Ghosted));
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Ghosted);
+        QCOMPARE(manager.effectiveMode(*c, body), VisibilityMode::Visible);
+        QVERIFY(manager.setGroupVisibility(*building, VisibilityMode::Hidden));
+        QVERIFY(manager.setGroupVisibility(*roof, VisibilityMode::Visible));
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Hidden);
+        QVERIFY(manager.renameGroup(*roof, "Roof Renamed"));
+        QCOMPARE(manager.groups()[1].name, std::string("Roof Renamed"));
+        QVERIFY(manager.setGroupVisibility(*building, VisibilityMode::Visible));
+        QVERIFY(manager.setGroupVisibility(*fasteners, VisibilityMode::Hidden));
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Hidden);
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Visible);
+
+        QVERIFY(manager.setGroupVisibility(*fasteners, VisibilityMode::Visible));
+        manager.ghostOthers({"a"});
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Visible);
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Ghosted);
+        manager.setIsolatedFeatures({"c"});
+        QCOMPARE(manager.effectiveMode(*a, body), VisibilityMode::Hidden);
+        QCOMPARE(manager.effectiveMode(*c, body), VisibilityMode::Ghosted);
+        manager.clearIsolation();
+        manager.clearGhosting();
+        QVERIFY(manager.removeFeaturesFromGroup(*roof, {"b"}));
+        QCOMPARE(manager.effectiveMode(*b, body), VisibilityMode::Visible);
+
+        QVERIFY(!manager.setGroupParent(*building, *building));
+        QVERIFY(!manager.setGroupParent(*building, *fasteners));
+        QVERIFY(manager.removeGroup(*fasteners));
+        QCOMPARE(manager.groups().size(), std::size_t{2});
+    }
+
     void serializationValidation()
     {
         // TODO: extend the production Sketch/Face round-trip to Extrude when serializable.
@@ -272,6 +323,55 @@ private slots:
         QVERIFY2(error.contains("Unsupported parametric feature type"), qPrintable(error));
         QVERIFY(file.open(QIODevice::ReadOnly));
         QCOMPARE(file.readAll(), invalid);
+    }
+
+    void visibilityGroupsRoundTrip()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Document document;
+        Body body;
+        auto a = std::make_shared<BoxParametricFeature>("a", 2, 3, 4);
+        auto b = std::make_shared<CylinderParametricFeature>("b", 2, 6);
+        body.addFeature(a);
+        body.addFeature(b);
+        QVERIFY(body.recompute());
+
+        VisibilityManager manager;
+        const auto parent = manager.createGroup("Parent");
+        const auto child = manager.createGroup("Child", *parent);
+        QVERIFY(parent && child);
+        QVERIFY(manager.addFeaturesToGroup(*parent, {"a"}));
+        QVERIFY(manager.addFeaturesToGroup(*child, {"a", "b", "missing"}));
+        QVERIFY(manager.setGroupVisibility(*child, VisibilityMode::Hidden));
+
+        QString error;
+        const auto path = directory.filePath("groups.pcad");
+        QVERIFY2(ProjectFile::save(path, document, body, error, &manager), qPrintable(error));
+        VisibilityManager loadedManager;
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error,
+            {}, nullptr, true, &loadedManager), qPrintable(error));
+        QCOMPARE(loadedManager.groups().size(), std::size_t{2});
+        QCOMPARE(loadedManager.effectiveMode(*loadedBody.findFeature("a"), loadedBody),
+                 VisibilityMode::Hidden);
+        QCOMPARE(loadedManager.effectiveMode(*loadedBody.findFeature("b"), loadedBody),
+                 VisibilityMode::Hidden);
+
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        auto root = QJsonDocument::fromJson(file.readAll()).object();
+        file.close();
+        root.remove("visibility");
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const auto oldFormat = QJsonDocument(root).toJson();
+        QCOMPARE(file.write(oldFormat), qint64(oldFormat.size()));
+        file.close();
+        VisibilityManager oldFormatManager;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error,
+            {}, nullptr, true, &oldFormatManager), qPrintable(error));
+        QVERIFY(oldFormatManager.groups().empty());
     }
 };
 

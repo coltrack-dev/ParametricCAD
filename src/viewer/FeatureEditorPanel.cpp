@@ -27,6 +27,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <unordered_map>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -34,6 +35,17 @@
 namespace {
 
 constexpr int FeatureIdRole = Qt::UserRole + 1;
+constexpr int GroupIdRole = Qt::UserRole + 2;
+
+QString groupModeText(const cad::application::VisibilityMode mode)
+{
+    switch (mode) {
+    case cad::application::VisibilityMode::Visible: return "Visible";
+    case cad::application::VisibilityMode::Ghosted: return "Ghosted";
+    case cad::application::VisibilityMode::Hidden: return "Hidden";
+    }
+    return {};
+}
 
 QDoubleSpinBox* makeLengthEditor(
     QWidget* parent,
@@ -70,6 +82,29 @@ void FeatureEditorPanel::setFeatures(
 {
     features_ = std::move(features);
     refresh();
+}
+
+void FeatureEditorPanel::setVisibilityGroups(
+    std::vector<cad::application::VisibilityGroup> groups)
+{
+    groups_ = std::move(groups);
+    refresh();
+}
+
+void FeatureEditorPanel::setGroupHandlers(
+    std::function<void(const QStringList&)> createGroup,
+    std::function<void(const QString&, cad::application::VisibilityMode)> setVisibility,
+    std::function<void(const QString&)> isolateGroup,
+    std::function<void(const QString&)> removeGroup,
+    std::function<void(const QString&, const QStringList&)> addToGroup,
+    std::function<void(const QString&, const QStringList&)> removeFromGroup)
+{
+    createGroupHandler_ = std::move(createGroup);
+    groupVisibilityHandler_ = std::move(setVisibility);
+    isolateGroupHandler_ = std::move(isolateGroup);
+    removeGroupHandler_ = std::move(removeGroup);
+    addToGroupHandler_ = std::move(addToGroup);
+    removeFromGroupHandler_ = std::move(removeFromGroup);
 }
 
 void FeatureEditorPanel::setActionState(
@@ -426,7 +461,49 @@ void FeatureEditorPanel::createUi()
     connect(tree_, &QTreeWidget::customContextMenuRequested, this,
         [this](const QPoint& position) {
             auto* item = tree_->itemAt(position);
-            if (!item || !item->data(0, FeatureIdRole).isValid()) return;
+            if (!item) return;
+            const auto groupId = item->data(0, GroupIdRole).toString();
+            if (!groupId.isEmpty()) {
+                const auto selected = selectedFeatureIds();
+                auto group = std::find_if(groups_.begin(), groups_.end(),
+                    [&groupId](const auto& candidate) {
+                        return QString::fromStdString(candidate.id) == groupId;
+                    });
+                if (group == groups_.end()) return;
+                QMenu menu(tree_);
+                auto* visible = menu.addAction("Show Group");
+                auto* ghosted = menu.addAction("Ghost Group");
+                auto* hidden = menu.addAction("Hide Group");
+                auto* isolate = menu.addAction("Isolate Group");
+                menu.addSeparator();
+                auto* add = menu.addAction("Add Selection to Group");
+                auto* remove = menu.addAction("Remove Selection from Group");
+                auto* deleteGroup = menu.addAction("Delete Group");
+                add->setEnabled(!selected.isEmpty());
+                remove->setEnabled(!selected.isEmpty());
+                QObject::connect(visible, &QAction::triggered, this,
+                    [this, groupId]() { if (groupVisibilityHandler_)
+                        groupVisibilityHandler_(groupId, cad::application::VisibilityMode::Visible); });
+                QObject::connect(ghosted, &QAction::triggered, this,
+                    [this, groupId]() { if (groupVisibilityHandler_)
+                        groupVisibilityHandler_(groupId, cad::application::VisibilityMode::Ghosted); });
+                QObject::connect(hidden, &QAction::triggered, this,
+                    [this, groupId]() { if (groupVisibilityHandler_)
+                        groupVisibilityHandler_(groupId, cad::application::VisibilityMode::Hidden); });
+                QObject::connect(isolate, &QAction::triggered, this,
+                    [this, groupId]() { if (isolateGroupHandler_) isolateGroupHandler_(groupId); });
+                QObject::connect(add, &QAction::triggered, this,
+                    [this, groupId, selected]() { if (addToGroupHandler_)
+                        addToGroupHandler_(groupId, selected); });
+                QObject::connect(remove, &QAction::triggered, this,
+                    [this, groupId, selected]() { if (removeFromGroupHandler_)
+                        removeFromGroupHandler_(groupId, selected); });
+                QObject::connect(deleteGroup, &QAction::triggered, this,
+                    [this, groupId]() { if (removeGroupHandler_) removeGroupHandler_(groupId); });
+                menu.exec(tree_->viewport()->mapToGlobal(position));
+                return;
+            }
+            if (!item->data(0, FeatureIdRole).isValid()) return;
             if (!item->isSelected()) {
                 tree_->clearSelection();
                 item->setSelected(true);
@@ -448,6 +525,7 @@ void FeatureEditorPanel::createUi()
             menu.addSeparator();
             auto* ghostOthers = menu.addAction("Ghost Others");
             auto* clearGhosting = menu.addAction("Clear Ghosting");
+            auto* createGroup = menu.addAction("Create Group...");
             menu.addSeparator();
             auto* showAll = menu.addAction("Show All");
             hide->setEnabled(hasVisible);
@@ -462,6 +540,8 @@ void FeatureEditorPanel::createUi()
                 [this, ids]() { if (ghostOthersHandler_) ghostOthersHandler_(ids); });
             QObject::connect(clearGhosting, &QAction::triggered, this,
                 [this]() { if (clearGhostingHandler_) clearGhostingHandler_(); });
+            QObject::connect(createGroup, &QAction::triggered, this,
+                [this, ids]() { if (createGroupHandler_) createGroupHandler_(ids); });
             QObject::connect(showAll, &QAction::triggered, this,
                 [this]() { if (showAllHandler_) showAllHandler_(); });
             menu.exec(tree_->viewport()->mapToGlobal(position));
@@ -588,6 +668,34 @@ void FeatureEditorPanel::refresh()
         new QTreeWidgetItem(tree_, QStringList{"Body"});
     bodyItem->setExpanded(true);
 
+    QTreeWidgetItem* featureParent = bodyItem;
+    if (!groups_.empty()) {
+        auto* groupsItem = new QTreeWidgetItem(bodyItem, QStringList{"Visibility Groups"});
+        groupsItem->setExpanded(true);
+        std::unordered_map<std::string, QTreeWidgetItem*> groupItems;
+        for (const auto& group : groups_) {
+            const auto title = QString::fromStdString(group.name)
+                + " (" + QString::number(static_cast<qulonglong>(group.memberFeatureIds.size()))
+                + ") — " + groupModeText(group.mode);
+            auto* item = new QTreeWidgetItem(groupsItem, QStringList{title});
+            item->setData(0, GroupIdRole, QString::fromStdString(group.id));
+            groupItems.emplace(group.id, item);
+            if (group.mode == cad::application::VisibilityMode::Hidden) {
+                item->setForeground(0, QBrush(QColor(130, 130, 130)));
+            }
+        }
+        for (const auto& group : groups_) {
+            if (!group.parentId) continue;
+            const auto item = groupItems.find(group.id);
+            const auto parent = groupItems.find(*group.parentId);
+            if (item == groupItems.end() || parent == groupItems.end()) continue;
+            groupsItem->removeChild(item->second);
+            parent->second->addChild(item->second);
+        }
+        featureParent = new QTreeWidgetItem(bodyItem, QStringList{"Features"});
+        featureParent->setExpanded(true);
+    }
+
     QTreeWidgetItem* currentItemToRestore = nullptr;
 
     for (const auto& feature : features_) {
@@ -601,7 +709,7 @@ void FeatureEditorPanel::refresh()
 
         auto* item =
             new QTreeWidgetItem(
-                bodyItem,
+                featureParent,
                 QStringList{title}
             );
 

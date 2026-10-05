@@ -3,6 +3,7 @@
 #include "model/Feature.h"
 #include "model/Document.h"
 #include "model/Body.h"
+#include "application/VisibilityManager.h"
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
@@ -76,6 +77,54 @@ std::vector<int> positiveIntegers(const QJsonObject& o, const char* key)
                     && std::floor(value.toDouble()) == value.toDouble(),
                 "Invalid positive integer array item");
         result.push_back(value.toInt());
+    }
+    return result;
+}
+
+QString visibilityModeName(const cad::application::VisibilityMode mode)
+{
+    switch (mode) {
+    case cad::application::VisibilityMode::Visible: return "visible";
+    case cad::application::VisibilityMode::Ghosted: return "ghosted";
+    case cad::application::VisibilityMode::Hidden: return "hidden";
+    }
+    throw std::invalid_argument("Invalid visibility mode");
+}
+
+cad::application::VisibilityMode visibilityMode(const QJsonObject& object)
+{
+    const auto value = string(object, "mode");
+    if (value == "visible") return cad::application::VisibilityMode::Visible;
+    if (value == "ghosted") return cad::application::VisibilityMode::Ghosted;
+    if (value == "hidden") return cad::application::VisibilityMode::Hidden;
+    throw std::invalid_argument("Invalid visibility group mode");
+}
+
+std::vector<cad::application::VisibilityGroup> visibilityGroups(const QJsonObject& root)
+{
+    std::vector<cad::application::VisibilityGroup> result;
+    const auto visibility = root.value("visibility");
+    if (visibility.isUndefined()) return result;
+    require(visibility.isObject(), "Invalid visibility metadata");
+    const auto groups = visibility.toObject().value("groups");
+    require(groups.isArray(), "Invalid visibility groups");
+    for (const auto& value : groups.toArray()) {
+        require(value.isObject(), "Invalid visibility group");
+        const auto object = value.toObject();
+        cad::application::VisibilityGroup group{
+            string(object, "id"), string(object, "name"), {}, {}, visibilityMode(object)};
+        const auto parent = object.value("parentId");
+        if (!parent.isUndefined() && !parent.isNull()) {
+            require(parent.isString(), "Invalid visibility group parent");
+            group.parentId = parent.toString().toStdString();
+        }
+        const auto members = object.value("members");
+        require(members.isArray(), "Invalid visibility group members");
+        for (const auto& member : members.toArray()) {
+            require(member.isString(), "Invalid visibility group member");
+            group.memberFeatureIds.insert(member.toString().toStdString());
+        }
+        result.push_back(std::move(group));
     }
     return result;
 }
@@ -444,7 +493,8 @@ ParametricFeature::Ptr decode(const QJsonObject& o, const Body& body)
 }
 
 bool ProjectFile::save(const QString& path, const Document& document,
-                       const cad::parametric::Body& body, QString& error)
+                       const cad::parametric::Body& body, QString& error,
+                       const cad::application::VisibilityManager* visibilityManager)
 {
     error.clear();
     try {
@@ -464,8 +514,25 @@ bool ProjectFile::save(const QString& path, const Document& document,
             history.append(encode(feature, preceding));
             preceding.addFeature(feature);
         }
-        const QByteArray data = QJsonDocument(QJsonObject{{"format", "ParametricCAD"}, {"version", 1},
-            {"features", features}, {"body", history}}).toJson();
+        QJsonObject root{{"format", "ParametricCAD"}, {"version", 1},
+            {"features", features}, {"body", history}};
+        if (visibilityManager) {
+            QJsonArray groups;
+            for (const auto& group : visibilityManager->groups()) {
+                QJsonArray members;
+                for (const auto& featureId : group.memberFeatureIds)
+                    members.append(QString::fromStdString(featureId));
+                groups.append(QJsonObject{
+                    {"id", QString::fromStdString(group.id)},
+                    {"name", QString::fromStdString(group.name)},
+                    {"parentId", group.parentId
+                        ? QJsonValue(QString::fromStdString(*group.parentId)) : QJsonValue()},
+                    {"mode", visibilityModeName(group.mode)},
+                    {"members", members}});
+            }
+            root.insert("visibility", QJsonObject{{"groups", groups}});
+        }
+        const QByteArray data = QJsonDocument(root).toJson();
         QSaveFile file(path);
         if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
             error = file.errorString(); return false;
@@ -479,7 +546,8 @@ bool ProjectFile::save(const QString& path, const Document& document,
 bool ProjectFile::load(const QString& path, Document& document,
                        cad::parametric::Body& body, QString& error,
                        ProjectLoadProgress progress, ProjectLoadMetrics* metrics,
-                       bool recompute)
+                       bool recompute,
+                       cad::application::VisibilityManager* visibilityManager)
 {
     error.clear();
     if (metrics) *metrics = {};
@@ -498,6 +566,10 @@ bool ProjectFile::load(const QString& path, Document& document,
         const auto root = json.object();
         require(string(root,"format") == "ParametricCAD" && number(root,"version") == 1, "Unsupported project format or version");
         require(root.value("features").isArray() && root.value("body").isArray(), "Missing feature arrays");
+        cad::application::VisibilityManager loadedVisibility;
+        std::string visibilityError;
+        require(loadedVisibility.replaceGroups(visibilityGroups(root), visibilityError),
+                visibilityError.c_str());
         if (metrics) metrics->parseMilliseconds = stageTimer.elapsed();
 
         Body loadedBody;
@@ -549,6 +621,7 @@ bool ProjectFile::load(const QString& path, Document& document,
         Document loaded;
         document = std::move(loaded);
         body = std::move(loadedBody);
+        if (visibilityManager) *visibilityManager = std::move(loadedVisibility);
         return true;
     } catch (const Standard_Failure& e) { error = QString::fromUtf8(e.GetMessageString()); }
       catch (const std::exception& e) { error = QString::fromUtf8(e.what()); }

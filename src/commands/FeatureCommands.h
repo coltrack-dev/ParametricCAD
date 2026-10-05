@@ -3,6 +3,7 @@
 #include "model/Feature.h"
 #include "model/Document.h"
 #include "model/Body.h"
+#include "application/VisibilityManager.h"
 #include "operations/ParametricFeatures.h"
 #include <QUndoCommand>
 #include <QStringList>
@@ -237,6 +238,24 @@ private:
     std::vector<std::string> featureIds_;
     std::vector<bool> before_;
     std::vector<bool> after_;
+};
+
+class SetVisibilityGroupsCommand final : public QUndoCommand
+{
+public:
+    SetVisibilityGroupsCommand(
+        application::VisibilityManager& visibilityManager,
+        std::vector<application::VisibilityGroup> before,
+        std::vector<application::VisibilityGroup> after,
+        const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const std::vector<application::VisibilityGroup>& groups);
+    application::VisibilityManager& visibilityManager_;
+    std::vector<application::VisibilityGroup> before_;
+    std::vector<application::VisibilityGroup> after_;
 };
 
 class RemoveFeatureCommand final : public QUndoCommand

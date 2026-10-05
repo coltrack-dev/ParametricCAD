@@ -307,6 +307,35 @@ void SetFeatureVisibilityCommand::redo()
     apply(after_);
 }
 
+SetVisibilityGroupsCommand::SetVisibilityGroupsCommand(
+    application::VisibilityManager& visibilityManager,
+    std::vector<application::VisibilityGroup> before,
+    std::vector<application::VisibilityGroup> after,
+    const QString& text)
+    : QUndoCommand(text), visibilityManager_(visibilityManager),
+      before_(std::move(before)), after_(std::move(after))
+{
+}
+
+void SetVisibilityGroupsCommand::apply(
+    const std::vector<application::VisibilityGroup>& groups)
+{
+    std::string error;
+    if (!visibilityManager_.replaceGroups(groups, error)) {
+        throw std::runtime_error(error);
+    }
+}
+
+void SetVisibilityGroupsCommand::undo()
+{
+    apply(before_);
+}
+
+void SetVisibilityGroupsCommand::redo()
+{
+    apply(after_);
+}
+
 void AddFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());

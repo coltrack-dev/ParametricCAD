@@ -31,6 +31,18 @@ ModelingResult failure(const std::exception& error)
 {
     return {false, {}, error.what()};
 }
+
+bool containsVisibilityCommand(const QUndoCommand* command)
+{
+    if (dynamic_cast<const cad::commands::SetFeatureVisibilityCommand*>(command) != nullptr
+        || dynamic_cast<const cad::commands::SetVisibilityGroupsCommand*>(command) != nullptr) {
+        return true;
+    }
+    for (int index = 0; index < command->childCount(); ++index) {
+        if (containsVisibilityCommand(command->child(index))) return true;
+    }
+    return false;
+}
 }
 
 cad::parametric::Body& ModelingController::body() noexcept { return body_; }
@@ -1076,8 +1088,7 @@ void ModelingController::clearProject()
 bool ModelingController::isVisibilityCommandAt(const int index) const noexcept
 {
     if (index < 0 || index >= undoStack_.count()) return false;
-    return dynamic_cast<const cad::commands::SetFeatureVisibilityCommand*>(
-        undoStack_.command(index)) != nullptr;
+    return containsVisibilityCommand(undoStack_.command(index));
 }
 
 ModelingActionState ModelingController::actionState(
