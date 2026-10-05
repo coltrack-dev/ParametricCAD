@@ -9,6 +9,9 @@ command name and disable themselves when there is nothing to undo/redo.
 `src/commands/FeatureCommands.*` contains:
 
 - AddFeatureCommand: retains a shared feature object and its insertion position.
+- ImportFeaturesCommand: retains a prepared batch of read-only ImportedFeature
+  objects and inserts/removes the whole batch as one undo step. Redo reuses the
+  retained objects and never reparses the IFC source.
 - RemoveFeatureCommand: retains the selected feature and all transitive dependents,
   restoring the same objects, IDs, dependency links and original Body positions.
   Edit -> Delete (Delete key, also on the toolbar) confirms dependent removal;

@@ -79,6 +79,20 @@ ModelingResult ModelingController::addFeature(
     }
 }
 
+ModelingResult ModelingController::importFeatures(
+    std::vector<cad::parametric::ParametricFeature::Ptr> features)
+{
+    if (features.empty()) return {false, {}, "Import produced no features"};
+    const auto firstId = features.front()->id();
+    try {
+        undoStack_.push(new cad::commands::ImportFeaturesCommand(
+            body_, std::move(features), "Import IFC"));
+        return {true, firstId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::createBox()
 {
     return addFeature(std::make_shared<cad::parametric::BoxParametricFeature>(

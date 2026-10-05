@@ -63,6 +63,12 @@ to the flat Body. `IfcOpenShellAdapter` is isolated under `src/import`; no IFC
 dependency reaches CadViewer, SelectionAdapter, VisibilityManager, or core
 feature builders.
 
+The C1 GUI path runs `IfcImporter::prepare()` asynchronously. It transfers a
+complete prepared result back to the GUI thread, constructs model features,
+and commits them with the generic `Body::appendFeatures()` path through one
+`ImportFeaturesCommand`. This keeps the current project transactional while
+the worker runs and avoids per-product recompute/presentation updates.
+
 `VisibilityManager` owns visibility policy and presentation metadata. It
 calculates the effective `Visible`, `Ghosted`, or `Hidden` mode from persistent
 feature state, dependencies, isolation, groups, filters, spatial rules, and

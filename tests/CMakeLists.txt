@@ -118,6 +118,12 @@ target_compile_definitions(ifc_import_tests PRIVATE
 target_link_libraries(ifc_import_tests PRIVATE model_test_support)
 add_test(NAME ifc_import_tests COMMAND ifc_import_tests)
 
+add_executable(ifc_workflow_tests ifc_workflow_tests.cpp)
+target_compile_definitions(ifc_workflow_tests PRIVATE
+    PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(ifc_workflow_tests PRIVATE model_test_support)
+add_test(NAME ifc_workflow_tests COMMAND ifc_workflow_tests)
+
 if(PARAMETRIC_CAD_ENABLE_IFC)
     add_executable(ifc_building_acceptance ifc_building_acceptance.cpp)
     target_compile_definitions(ifc_building_acceptance PRIVATE

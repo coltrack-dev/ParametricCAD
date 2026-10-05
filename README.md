@@ -6,11 +6,8 @@ rebuilds OCCT B-Rep geometry from parameters, and provides direct viewer
 interaction for selection, transformation, snapping, visibility, spatial
 inspection, section clipping, and saved views.
 
-Projects use the native editable `.pcad` JSON format.
-
-The Phase B IFC core can import native OCCT geometry when configured with the
-pinned IfcOpenShell adapter; IFC import UI integration is not part of this
-phase.
+Projects use the native editable `.pcad` format. New files are portable
+compressed containers; legacy JSON projects remain readable.
 
 ## Current capabilities
 
@@ -74,16 +71,29 @@ metadata, not modeling features.
 
 ### Project format
 
-`.pcad` is UTF-8 JSON, currently format version 1. It stores canonical feature
-parameters, stable IDs, dependencies, placement, persistent feature
-visibility, visibility groups/filters/presets, and saved views. Geometry is
-rebuilt from parameters. Imported IFC features also carry a portable OCCT
-B-Rep payload so the source IFC is not required after saving. Undo history is
-not stored. Legacy Box/Cylinder input is converted to canonical Body features.
+`.pcad` has logical schema version 1 and uses a ZIP-compatible container for
+new saves. `manifest.json` stores canonical feature parameters, stable IDs,
+dependencies, placement, persistent feature visibility, visibility
+groups/filters/presets, and saved views; imported B-Rep geometry is stored in
+compressed `geometry/` entries. Legacy plain JSON files, including embedded
+ImportedFeature payloads, remain readable. Geometry is rebuilt from parameters
+where applicable, and imported IFC geometry remains available without the
+source IFC. Undo history is not stored. Legacy Box/Cylinder input is converted
+to canonical Body features.
 
 The loader validates a temporary model before replacing the active project.
 Files without newer optional metadata remain valid. See
 [docs/PCAD_FORMAT.md](docs/PCAD_FORMAT.md).
+
+### IFC import
+
+IFC-enabled builds expose `File -> Import IFC...`. Parsing and geometry
+conversion run in a worker thread with cooperative cancellation and progress;
+the prepared result is committed to the current Body in one bulk, undoable
+operation. Imported products are read-only `ImportedFeature` objects and use
+the normal viewer, selection, visibility, and `.pcad` persistence paths. IFC
+support is optional; builds without the pinned IfcOpenShell dependency omit
+the action. See [docs/IFC_IMPORT.md](docs/IFC_IMPORT.md).
 
 ### Performance
 

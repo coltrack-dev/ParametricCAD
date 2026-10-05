@@ -142,6 +142,8 @@ public:
         const std::string& currentId = {}
     ) override;
     ModelingResult deleteFeature(const std::string& featureId) override;
+    ModelingResult importFeatures(
+        std::vector<cad::parametric::ParametricFeature::Ptr> features);
     ModelingResult setFeatureVisibility(
         const std::vector<std::string>& featureIds, bool visible) override;
     ModelingResult showAllFeatures() override;

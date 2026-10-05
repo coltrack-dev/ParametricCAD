@@ -16,6 +16,7 @@ public:
     using FeaturePtr = ParametricFeature::Ptr;
 
     void addFeature(const FeaturePtr& feature);
+    void appendFeatures(const std::vector<FeaturePtr>& features);
     void insertFeature(std::size_t position, const FeaturePtr& feature);
     bool canRemoveFeature(const std::string& featureId) const;
     bool removeFeature(const std::string& featureId);

@@ -28,6 +28,20 @@ private:
     std::size_t position_;
 };
 
+class ImportFeaturesCommand final : public QUndoCommand
+{
+public:
+    ImportFeaturesCommand(parametric::Body& body,
+                          std::vector<parametric::ParametricFeature::Ptr> features,
+                          const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    parametric::Body& body_;
+    std::vector<parametric::ParametricFeature::Ptr> features_;
+};
+
 class AddSketchEntityCommand final : public QUndoCommand
 {
 public:

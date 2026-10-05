@@ -1,10 +1,44 @@
-# IFC import (Phase B)
+# IFC import (Phases B and C1)
 
 Phase B provides a non-UI import core:
 
 ```text
 IFC -> IfcOpenShellAdapter -> IfcImportProduct -> ImportedFeature -> Body -> .pcad
 ```
+
+## End-user import workflow
+
+In an IFC-enabled build, `File -> Import IFC...` starts an application-level
+asynchronous task. The worker performs file parsing, IfcGeom iteration, shape
+conversion, filtering, and metadata extraction. It reports application-neutral
+progress and observes a cooperative cancellation token; it never accesses
+widgets, Body, CadViewer, AIS, or SelectionAdapter.
+
+```text
+MainWindow
+  -> IfcImporter::prepare (worker thread)
+  -> prepared IfcImportResult
+  -> IfcImporter::makeFeatures (GUI thread)
+  -> ModelingController bulk command
+  -> one model/presentation refresh
+  -> CadViewer
+```
+
+The active project remains unchanged while preparation is running. Cancellation
+or a fatal error discards the prepared result. Product-level warnings do not
+discard a partially successful import. A completed import is one
+`ImportFeaturesCommand`; undo removes the imported feature batch and redo reuses
+the prepared feature objects without reparsing IFC. The model is marked dirty
+through the normal `QUndoStack` path. The final viewer update performs one
+`FitAll`; no viewer or geometry operation runs in the worker.
+
+The DTO boundary transfers native OCCT `TopoDS_Shape` handles produced by the
+validated IfcOpenShell build. No OCCT operations are performed on those shapes
+in the worker after conversion, and model/AIS ownership remains on the GUI
+thread. Application shutdown requests cancellation and waits for the worker.
+
+When IFC support is disabled, the core still builds without IfcOpenShell and
+the IFC menu action is omitted rather than failing at runtime.
 
 `ImportedFeature` is a read-only `ParametricFeature` whose stored shape is
 native OCCT B-Rep. IFC spatial hierarchy is retained as metadata (`building`

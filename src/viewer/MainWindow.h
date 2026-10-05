@@ -8,6 +8,9 @@
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
 #include "application/VisibilityManager.h"
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+#include "application/IfcImporter.h"
+#endif
 
 #include <atomic>
 #include <memory>
@@ -30,6 +33,12 @@ private:
     void closeEvent(QCloseEvent* event) override;
     void newDocument();
     void openDocument();
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    void importIfc();
+    void updateIfcImportProgress();
+    void finishIfcImport();
+    void abortIfcImport(const QString& error = {});
+#endif
     void startProjectLoad(const QString& path);
     void updateProjectLoadProgress();
     void finishProjectLoad();
@@ -133,6 +142,9 @@ private:
     QAction* pathPatternAction_{nullptr};
     QAction* filletAction_{nullptr};
     QAction* chamferAction_{nullptr};
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    QAction* importIfcAction_{nullptr};
+#endif
     QAction* sketchOnFaceAction_{nullptr};
     QAction* editSketchAction_{nullptr};
     QAction* sketchLineAction_{nullptr};
@@ -182,6 +194,17 @@ private:
     std::shared_ptr<std::atomic<int>> projectLoadTotal_;
     QString pendingProjectPath_;
     bool projectLoading_{false};
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>> ifcImportWatcher_;
+    QTimer ifcImportProgressTimer_;
+    QProgressDialog* ifcImportDialog_{nullptr};
+    std::shared_ptr<std::atomic<int>> ifcImportProcessed_;
+    std::shared_ptr<std::atomic<int>> ifcImportTotal_;
+    std::shared_ptr<std::atomic<int>> ifcImportStage_;
+    std::shared_ptr<std::atomic_bool> ifcImportCancelRequested_;
+    QString pendingIfcPath_;
+    bool ifcImporting_{false};
+#endif
     int lastUndoStackIndex_{0};
     std::shared_ptr<cad::application::ProjectLoadResult> projectLoadResult_;
     ProjectLoadMetrics projectLoadMetrics_;

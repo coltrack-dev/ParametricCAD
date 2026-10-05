@@ -21,6 +21,7 @@
 #include <QProgressDialog>
 #include <QTimer>
 #include <QDebug>
+#include <QHash>
 #include <QMenu>
 #include <QMenuBar>
 #include <QStatusBar>
@@ -182,12 +183,24 @@ MainWindow::MainWindow(QWidget* parent)
         this, &MainWindow::sampleProjectLoadEventLoop);
     connect(&projectLoadWatcher_, &QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>>::finished,
         this, &MainWindow::finishProjectLoad);
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    connect(&ifcImportProgressTimer_, &QTimer::timeout,
+        this, &MainWindow::updateIfcImportProgress);
+    connect(&ifcImportWatcher_, &QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>>::finished,
+        this, &MainWindow::finishIfcImport);
+#endif
     statusBar()->showMessage("Ready");
 }
 
 
 MainWindow::~MainWindow()
 {
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    if (ifcImporting_ && ifcImportCancelRequested_) {
+        ifcImportCancelRequested_->store(true, std::memory_order_relaxed);
+        ifcImportWatcher_.future().waitForFinished();
+    }
+#endif
     disconnect(&modeling_.undoStack(), nullptr, this, nullptr);
     featureEditorPanel_->setService(nullptr);
 }
@@ -901,6 +914,10 @@ void MainWindow::createActions()
     auto* openAction = fileMenu->addAction("&Open...");
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openDocument);
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    importIfcAction_ = fileMenu->addAction("Import IFC...");
+    connect(importIfcAction_, &QAction::triggered, this, &MainWindow::importIfc);
+#endif
     auto* saveAction = fileMenu->addAction("&Save");
     saveAction->setShortcut(QKeySequence::Save);
     connect(saveAction, &QAction::triggered, this, [this]() { saveDocument(); });
@@ -1699,7 +1716,11 @@ bool MainWindow::saveDocumentAs()
 
 void MainWindow::newDocument()
 {
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    if (projectLoading_ || ifcImporting_) return;
+#else
     if (projectLoading_) return;
+#endif
     if (!confirmReplacement()) return;
     project_.newProject();
     presenter_->clear();
@@ -1715,12 +1736,184 @@ void MainWindow::newDocument()
 
 void MainWindow::openDocument()
 {
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    if (projectLoading_ || ifcImporting_) return;
+#else
     if (projectLoading_) return;
+#endif
     const auto path = QFileDialog::getOpenFileName(this, "Open project", currentFile_, "ParametricCAD (*.pcad)");
     if (path.isEmpty()) return;
     if (!confirmReplacement()) return;
     startProjectLoad(path);
 }
+
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+void MainWindow::importIfc()
+{
+    if (projectLoading_ || ifcImporting_) return;
+    const auto path = QFileDialog::getOpenFileName(
+        this, "Import IFC", currentFile_, "IFC files (*.ifc);;All files (*)");
+    if (path.isEmpty()) return;
+
+    ifcImporting_ = true;
+    pendingIfcPath_ = path;
+    ifcImportProcessed_ = std::make_shared<std::atomic<int>>(0);
+    ifcImportTotal_ = std::make_shared<std::atomic<int>>(0);
+    ifcImportStage_ = std::make_shared<std::atomic<int>>(
+        static_cast<int>(cad::import::IfcImportStage::Opening));
+    ifcImportCancelRequested_ = std::make_shared<std::atomic_bool>(false);
+    ifcImportDialog_ = new QProgressDialog("Importing IFC...", "Cancel", 0, 0, this);
+    ifcImportDialog_->setWindowTitle("Import IFC");
+    ifcImportDialog_->setWindowModality(Qt::NonModal);
+    ifcImportDialog_->setAutoClose(false);
+    ifcImportDialog_->setAutoReset(false);
+    ifcImportDialog_->setMinimumDuration(0);
+    connect(ifcImportDialog_, &QProgressDialog::canceled, this, [this]() {
+        if (ifcImportCancelRequested_) {
+            ifcImportCancelRequested_->store(true, std::memory_order_relaxed);
+            ifcImportDialog_->setLabelText("Cancelling IFC import...");
+            ifcImportDialog_->setCancelButton(nullptr);
+        }
+    });
+    ifcImportDialog_->show();
+    ifcImportProgressTimer_.start(100);
+    statusBar()->showMessage("Importing IFC...");
+
+    const auto processed = ifcImportProcessed_;
+    const auto total = ifcImportTotal_;
+    const auto stage = ifcImportStage_;
+    const auto cancelled = ifcImportCancelRequested_;
+    ifcImportWatcher_.setFuture(QtConcurrent::run(
+        [path, processed, total, stage, cancelled]() {
+            auto result = std::make_shared<cad::import::IfcImportResult>();
+            cad::application::IfcImporter importer;
+            *result = importer.prepare(path,
+                [processed, total, stage](const cad::import::IfcImportProgress& progress) {
+                    processed->store(static_cast<int>(progress.processed), std::memory_order_relaxed);
+                    total->store(static_cast<int>(progress.total), std::memory_order_relaxed);
+                    stage->store(static_cast<int>(progress.stage), std::memory_order_relaxed);
+                },
+                [cancelled]() { return cancelled->load(std::memory_order_relaxed); });
+            return result;
+        }));
+}
+
+void MainWindow::updateIfcImportProgress()
+{
+    if (!ifcImporting_ || !ifcImportDialog_) return;
+    const auto stage = static_cast<cad::import::IfcImportStage>(
+        ifcImportStage_->load(std::memory_order_relaxed));
+    QString label;
+    switch (stage) {
+    case cad::import::IfcImportStage::Opening: label = "Opening IFC..."; break;
+    case cad::import::IfcImportStage::Parsing: label = "Parsing IFC..."; break;
+    case cad::import::IfcImportStage::Geometry: label = "Preparing geometry..."; break;
+    case cad::import::IfcImportStage::Finalizing: label = "Finalizing import..."; break;
+    }
+    const int processed = ifcImportProcessed_->load(std::memory_order_relaxed);
+    const int total = ifcImportTotal_->load(std::memory_order_relaxed);
+    if (total > 0) {
+        ifcImportDialog_->setRange(0, total);
+        ifcImportDialog_->setValue(std::min(processed, total));
+        label += QString(" %1 / %2").arg(processed).arg(total);
+    } else if (processed > 0) {
+        label += QString(" %1 products").arg(processed);
+    }
+    ifcImportDialog_->setLabelText(label);
+}
+
+void MainWindow::finishIfcImport()
+{
+    ifcImportProgressTimer_.stop();
+    updateIfcImportProgress();
+    const auto result = ifcImportWatcher_.result();
+    const bool cancelled = result->cancelled
+        || (ifcImportCancelRequested_ && ifcImportCancelRequested_->load(std::memory_order_relaxed));
+    const QString path = pendingIfcPath_;
+    if (ifcImportDialog_) {
+        ifcImportDialog_->close();
+        ifcImportDialog_->deleteLater();
+        ifcImportDialog_ = nullptr;
+    }
+    ifcImporting_ = false;
+    pendingIfcPath_.clear();
+    if (cancelled) {
+        statusBar()->showMessage("IFC import cancelled", 3000);
+        ifcImportProcessed_.reset();
+        ifcImportTotal_.reset();
+        ifcImportStage_.reset();
+        ifcImportCancelRequested_.reset();
+        return;
+    }
+    if (result->fatal || result->products.empty()) {
+        abortIfcImport(result->diagnostics.empty()
+            ? QStringLiteral("No importable IFC products were found")
+            : result->diagnostics.front().message);
+        return;
+    }
+
+    try {
+        cad::application::IfcImporter importer;
+        auto features = importer.makeFeatures(*result, path, modeling_.body());
+        const auto modelingResult = modeling_.importFeatures(std::move(features));
+        if (!modelingResult.success) {
+            abortIfcImport(QString::fromStdString(modelingResult.error));
+            return;
+        }
+        // The undo-stack callback performs the single model/presentation refresh.
+        viewer_->fitAll();
+        const auto& stats = result->statistics;
+        const auto seconds = static_cast<double>(stats.totalMilliseconds) / 1000.0;
+        statusBar()->showMessage(QString("Imported IFC: %1 objects, %2 skipped, %3 failed (%4 s)")
+            .arg(stats.importedCount).arg(stats.skippedCount).arg(stats.failedCount)
+            .arg(seconds, 0, 'f', 1), 6000);
+        if (stats.skippedCount > 0 || stats.failedCount > 0) {
+            QString details = QString("Imported: %1\nSkipped: %2\nFailed: %3")
+                .arg(stats.importedCount).arg(stats.skippedCount).arg(stats.failedCount);
+            QHash<QString, int> groupedDiagnostics;
+            for (const auto& diagnostic : result->diagnostics) {
+                const auto key = diagnostic.entityType + ": " + diagnostic.message;
+                ++groupedDiagnostics[key];
+            }
+            int shown = 0;
+            for (auto iterator = groupedDiagnostics.cbegin();
+                 iterator != groupedDiagnostics.cend() && shown < 20; ++iterator, ++shown) {
+                details += "\n" + iterator.key();
+                if (iterator.value() > 1) details += QString(" (%1)").arg(iterator.value());
+            }
+            if (groupedDiagnostics.size() > shown)
+                details += QString("\n... and %1 more groups")
+                    .arg(groupedDiagnostics.size() - shown);
+            QMessageBox::warning(this, "IFC import completed with warnings", details);
+        }
+    } catch (const std::exception& error) {
+        abortIfcImport(QString::fromUtf8(error.what()));
+        return;
+    }
+    ifcImportProcessed_.reset();
+    ifcImportTotal_.reset();
+    ifcImportStage_.reset();
+    ifcImportCancelRequested_.reset();
+}
+
+void MainWindow::abortIfcImport(const QString& error)
+{
+    ifcImportProgressTimer_.stop();
+    if (ifcImportDialog_) {
+        ifcImportDialog_->close();
+        ifcImportDialog_->deleteLater();
+        ifcImportDialog_ = nullptr;
+    }
+    ifcImporting_ = false;
+    const auto path = pendingIfcPath_;
+    pendingIfcPath_.clear();
+    ifcImportProcessed_.reset();
+    ifcImportTotal_.reset();
+    ifcImportStage_.reset();
+    ifcImportCancelRequested_.reset();
+    QMessageBox::critical(this, "IFC import failed", path + "\n" + error);
+}
+#endif
 
 void MainWindow::startProjectLoad(const QString& path)
 {
@@ -1960,6 +2153,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
         event->ignore();
         return;
     }
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    if (ifcImporting_) {
+        if (ifcImportCancelRequested_)
+            ifcImportCancelRequested_->store(true, std::memory_order_relaxed);
+        ifcImportWatcher_.future().waitForFinished();
+        event->accept();
+        return;
+    }
+#endif
     if (saveDocument()) event->accept();
     else event->ignore();
 }

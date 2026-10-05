@@ -94,7 +94,10 @@ int placementDepth(IfcUtil::IfcBaseClass* product)
 }
 #endif
 
-IfcImportResult IfcOpenShellAdapter::importFile(const QString& path) const
+IfcImportResult IfcOpenShellAdapter::importFile(
+    const QString& path,
+    IfcImportProgressCallback progress,
+    IfcImportCancellation cancellation) const
 {
     IfcImportResult result;
     QElapsedTimer total;
@@ -102,20 +105,30 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path) const
 
 #if !defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     Q_UNUSED(path);
+    Q_UNUSED(progress);
+    Q_UNUSED(cancellation);
     result.diagnostics.push_back({ImportSeverity::Error, {}, {},
         QStringLiteral("IfcOpenShell support is disabled. Configure a pinned v0.7.1 build "
                        "with PARAMETRIC_CAD_ENABLE_IFC=ON.")});
+    result.fatal = true;
     result.statistics.failedCount = 1;
     result.statistics.totalMilliseconds = total.elapsed();
     return result;
 #else
     try {
+        if (progress) progress({IfcImportStage::Opening, 0, 0});
+        if (cancellation && cancellation()) {
+            result.cancelled = true;
+            return result;
+        }
         QElapsedTimer parse;
         parse.start();
+        if (progress) progress({IfcImportStage::Parsing, 0, 0});
         auto file = std::make_unique<IfcParse::IfcFile>(path.toStdString());
         if (!file->good()) {
             result.diagnostics.push_back({ImportSeverity::Error, {}, {},
                 QStringLiteral("IfcOpenShell could not open the IFC file")});
+            result.fatal = true;
             result.statistics.failedCount = 1;
             return result;
         }
@@ -132,15 +145,23 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path) const
 
         QElapsedTimer geometry;
         geometry.start();
+        if (progress) progress({IfcImportStage::Geometry, 0, 0});
         IfcGeom::Iterator iterator(settings, file.get());
         if (!iterator.initialize()) {
             result.diagnostics.push_back({ImportSeverity::Error, {}, {},
                 QStringLiteral("IfcOpenShell could not initialize the geometry iterator")});
+            result.fatal = true;
             result.statistics.failedCount = 1;
             return result;
         }
 
+        std::size_t processed = 0;
         do {
+            if (cancellation && cancellation()) {
+                result.cancelled = true;
+                result.products.clear();
+                break;
+            }
             auto* element = iterator.get_native();
             if (!element) {
                 ++result.statistics.failedCount;
@@ -149,6 +170,9 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path) const
                 continue;
             }
             const QString type = QString::fromStdString(element->type());
+            ++processed;
+            if (progress && (processed == 1 || processed % 32 == 0))
+                progress({IfcImportStage::Geometry, processed, 0});
             ++result.statistics.consideredCount;
             ++result.statistics.consideredByEntity[type];
             if (excluded(type)) {
@@ -191,11 +215,13 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path) const
         } while (iterator.next());
 
         result.statistics.geometryMilliseconds = geometry.elapsed();
+        if (progress) progress({IfcImportStage::Finalizing, processed, processed});
         result.statistics.totalMilliseconds = total.elapsed();
         return result;
     } catch (const std::exception& exception) {
         result.diagnostics.push_back({ImportSeverity::Error, {}, {},
             QString::fromUtf8(exception.what())});
+        result.fatal = true;
         result.statistics.failedCount = 1;
         result.statistics.totalMilliseconds = total.elapsed();
         return result;

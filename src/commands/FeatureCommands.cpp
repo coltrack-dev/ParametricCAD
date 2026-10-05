@@ -20,6 +20,27 @@ AddFeatureCommand::AddFeatureCommand(parametric::Body& body,
     if (!feature_->recompute()) throw std::invalid_argument(feature_->error());
 }
 
+ImportFeaturesCommand::ImportFeaturesCommand(
+    parametric::Body& body,
+    std::vector<parametric::ParametricFeature::Ptr> features,
+    const QString& text)
+    : QUndoCommand(text), body_(body), features_(std::move(features))
+{
+    if (features_.empty()) throw std::invalid_argument("Import must contain at least one feature");
+}
+
+void ImportFeaturesCommand::redo()
+{
+    body_.appendFeatures(features_);
+}
+
+void ImportFeaturesCommand::undo()
+{
+    for (auto iterator = features_.rbegin(); iterator != features_.rend(); ++iterator)
+        if (!body_.removeFeature((*iterator)->id()))
+            throw std::runtime_error("Imported feature is missing during undo");
+}
+
 AddSketchEntityCommand::AddSketchEntityCommand(
     parametric::Body& body,
     std::shared_ptr<parametric::SketchFeature> sketch,

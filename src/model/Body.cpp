@@ -11,6 +11,24 @@ void Body::addFeature(const FeaturePtr& feature)
     insertFeature(features_.size(), feature);
 }
 
+void Body::appendFeatures(const std::vector<FeaturePtr>& features)
+{
+    std::unordered_set<std::string> ids;
+    ids.reserve(features_.size() + features.size());
+    for (const auto& feature : features_) ids.insert(feature->id());
+    for (const auto& feature : features) {
+        if (!feature) throw std::invalid_argument("Body feature must not be null");
+        if (!ids.insert(feature->id()).second)
+            throw std::invalid_argument("Feature with id '" + feature->id() + "' already exists");
+        for (const auto& weak : feature->dependencies()) {
+            const auto dependency = weak.lock();
+            if (!dependency || !ids.contains(dependency->id()))
+                throw std::invalid_argument("Dependencies must precede feature '" + feature->id() + "'");
+        }
+    }
+    features_.insert(features_.end(), features.begin(), features.end());
+}
+
 void Body::insertFeature(std::size_t position, const FeaturePtr& feature)
 {
     if (!feature) throw std::invalid_argument("Body feature must not be null");
