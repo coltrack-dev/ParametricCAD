@@ -14,6 +14,8 @@
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Shape.hxx>
 #include <AIS_TextLabel.hxx>
+#include <Graphic3d_ClipPlane.hxx>
+#include <Bnd_Box.hxx>
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <Aspect_DisplayConnection.hxx>
@@ -69,6 +71,21 @@ public:
         Free
     };
 
+    enum class SectionAxis
+    {
+        X,
+        Y,
+        Z
+    };
+
+    struct SectionState
+    {
+        bool active{false};
+        SectionAxis axis{SectionAxis::Z};
+        bool flipped{false};
+        gp_Pnt origin;
+    };
+
     enum class StandardView
     {
         Right,
@@ -95,6 +112,10 @@ public:
     void clearSpatialBox();
     void setSpatialBoxChangedHandler(
         std::function<void(const gp_Pnt&, const gp_Pnt&)> handler);
+    void activateSection(SectionAxis axis);
+    void flipSection();
+    void clearSection();
+    const SectionState& sectionState() const noexcept;
     cad::application::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
     void clear();
@@ -216,6 +237,9 @@ private:
     void orbitTurntable(const QPoint& currentPosition);
     int spatialBoxHandleAt(const QPoint& position) const;
     void updateSpatialBoxDrag(const QPoint& position);
+    void updateSectionPresentation();
+    int sectionHandleAt(const QPoint& position) const;
+    void updateSectionDrag(const QPoint& position);
 
     QToolBar* toolBar_{nullptr};
     QLabel* xRayStatusLabel_{nullptr};
@@ -249,6 +273,13 @@ private:
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
     std::map<QString, cad::application::VisibilityMode> featureVisibility_;
     Handle(AIS_Shape) spatialBoxObject_;
+    Handle(AIS_Shape) sectionPlaneObject_;
+    Handle(Graphic3d_ClipPlane) sectionClipPlane_;
+    SectionState sectionState_;
+    Bnd_Box sectionBounds_;
+    bool sectionDragging_{false};
+    QPoint sectionDragStart_;
+    double sectionDragPosition_{0.0};
     int bulkUpdateDepth_{0};
     bool bulkCachesInvalidated_{false};
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};

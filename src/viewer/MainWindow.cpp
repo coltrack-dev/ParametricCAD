@@ -843,6 +843,22 @@ void MainWindow::createActions()
         [this]() { activateSpatialVisibility(cad::application::VisibilityMode::Ghosted); });
     auto* clearSpatialAction = viewMenu->addAction("Clear Spatial Visibility");
     connect(clearSpatialAction, &QAction::triggered, this, &MainWindow::clearSpatialVisibility);
+    viewMenu->addSeparator();
+    auto* sectionXAction = viewMenu->addAction("Section X");
+    connect(sectionXAction, &QAction::triggered, this,
+        [this]() { viewer_->activateSection(CadViewer::SectionAxis::X); });
+    auto* sectionYAction = viewMenu->addAction("Section Y");
+    connect(sectionYAction, &QAction::triggered, this,
+        [this]() { viewer_->activateSection(CadViewer::SectionAxis::Y); });
+    auto* sectionZAction = viewMenu->addAction("Section Z");
+    connect(sectionZAction, &QAction::triggered, this,
+        [this]() { viewer_->activateSection(CadViewer::SectionAxis::Z); });
+    auto* flipSectionAction = viewMenu->addAction("Flip Section");
+    connect(flipSectionAction, &QAction::triggered, this,
+        [this]() { viewer_->flipSection(); });
+    auto* clearSectionAction = viewMenu->addAction("Clear Section");
+    connect(clearSectionAction, &QAction::triggered, this,
+        [this]() { viewer_->clearSection(); });
 
     auto* toolBar = addToolBar("Modeling");
     toolBar->addAction(deleteAction_);

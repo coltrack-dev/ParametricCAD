@@ -36,6 +36,7 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -144,6 +145,44 @@ gp_Pnt shapeCenter(const TopoDS_Shape& shape)
         (ymin + ymax) * 0.5,
         (zmin + zmax) * 0.5
     );
+}
+
+TopoDS_Shape makeSectionGrid(
+    const CadViewer::SectionAxis axis,
+    const double position,
+    const Bnd_Box& bounds)
+{
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double x0 = xmin, x1 = xmax;
+    const double y0 = ymin, y1 = ymax;
+    const double z0 = zmin, z1 = zmax;
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    const auto add = [&builder, &compound](const gp_Pnt& first, const gp_Pnt& second) {
+        builder.Add(compound, BRepBuilderAPI_MakeEdge(first, second).Edge());
+    };
+    const double thirds[] = {0.0, 0.5, 1.0};
+    for (const double fraction : thirds) {
+        if (axis == CadViewer::SectionAxis::X) {
+            const double y = y0 + (y1 - y0) * fraction;
+            const double z = z0 + (z1 - z0) * fraction;
+            add(gp_Pnt(position, y0, z), gp_Pnt(position, y1, z));
+            add(gp_Pnt(position, y, z0), gp_Pnt(position, y, z1));
+        } else if (axis == CadViewer::SectionAxis::Y) {
+            const double x = x0 + (x1 - x0) * fraction;
+            const double z = z0 + (z1 - z0) * fraction;
+            add(gp_Pnt(x0, position, z), gp_Pnt(x1, position, z));
+            add(gp_Pnt(x, position, z0), gp_Pnt(x, position, z1));
+        } else {
+            const double x = x0 + (x1 - x0) * fraction;
+            const double y = y0 + (y1 - y0) * fraction;
+            add(gp_Pnt(x0, y, position), gp_Pnt(x1, y, position));
+            add(gp_Pnt(x, y0, position), gp_Pnt(x, y1, position));
+        }
+    }
+    return compound;
 }
 
 bool transformsClose(const gp_Trsf& first, const gp_Trsf& second)
@@ -1620,6 +1659,119 @@ void CadViewer::clearSpatialBox()
     if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
 }
 
+void CadViewer::activateSection(const SectionAxis axis)
+{
+    if (!initialized_ || context_.IsNull() || view_.IsNull()) return;
+    Bnd_Box bounds;
+    for (const auto& [id, object] : featureObjects_) {
+        Q_UNUSED(id);
+        if (!object.IsNull()) BRepBndLib::Add(object->Shape(), bounds);
+    }
+    if (bounds.IsVoid()) return;
+    sectionBounds_ = bounds;
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const gp_Pnt center((xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5);
+    sectionState_.active = true;
+    sectionState_.axis = axis;
+    sectionState_.flipped = false;
+    sectionState_.origin = center;
+    sectionDragPosition_ = axis == SectionAxis::X ? center.X()
+        : axis == SectionAxis::Y ? center.Y() : center.Z();
+    if (sectionClipPlane_.IsNull()) sectionClipPlane_ = new Graphic3d_ClipPlane();
+    view_->AddClipPlane(sectionClipPlane_);
+    updateSectionPresentation();
+}
+
+void CadViewer::flipSection()
+{
+    if (!sectionState_.active) return;
+    sectionState_.flipped = !sectionState_.flipped;
+    updateSectionPresentation();
+}
+
+void CadViewer::clearSection()
+{
+    if (!sectionClipPlane_.IsNull() && !view_.IsNull())
+        view_->RemoveClipPlane(sectionClipPlane_);
+    if (!sectionPlaneObject_.IsNull() && !context_.IsNull())
+        context_->Remove(sectionPlaneObject_, Standard_False);
+    sectionClipPlane_.Nullify();
+    sectionPlaneObject_.Nullify();
+    sectionState_ = {};
+    sectionBounds_.SetVoid();
+    sectionDragging_ = false;
+    if (!view_.IsNull() && bulkUpdateDepth_ == 0) view_->Redraw();
+}
+
+const CadViewer::SectionState& CadViewer::sectionState() const noexcept
+{
+    return sectionState_;
+}
+
+void CadViewer::updateSectionPresentation()
+{
+    if (!sectionState_.active || sectionClipPlane_.IsNull() || view_.IsNull()) return;
+    gp_Dir normal;
+    if (sectionState_.axis == SectionAxis::X) normal = gp_Dir(1, 0, 0);
+    else if (sectionState_.axis == SectionAxis::Y) normal = gp_Dir(0, 1, 0);
+    else normal = gp_Dir(0, 0, 1);
+    if (sectionState_.flipped) normal.Reverse();
+    sectionClipPlane_->SetEquation(gp_Pln(sectionState_.origin, normal));
+    sectionClipPlane_->SetOn(true);
+    const auto shape = makeSectionGrid(
+        sectionState_.axis, sectionDragPosition_, sectionBounds_);
+    if (sectionPlaneObject_.IsNull()) {
+        sectionPlaneObject_ = new AIS_Shape(shape);
+        sectionPlaneObject_->SetDisplayMode(AIS_WireFrame);
+        sectionPlaneObject_->SetColor(Quantity_NOC_ORANGE);
+        sectionPlaneObject_->SetWidth(2.0);
+        context_->Display(sectionPlaneObject_, Standard_False);
+        context_->Deactivate(sectionPlaneObject_);
+    } else {
+        sectionPlaneObject_->SetShape(shape);
+        context_->Redisplay(sectionPlaneObject_, Standard_False);
+    }
+    if (bulkUpdateDepth_ == 0) view_->Redraw();
+}
+
+int CadViewer::sectionHandleAt(const QPoint& position) const
+{
+    if (!sectionState_.active || view_.IsNull()) return -1;
+    const auto screen = projectWorldPoint(view_, sectionState_.origin, width(), height());
+    const auto dx = screen.x() - position.x();
+    const auto dy = screen.y() - position.y();
+    return dx * dx + dy * dy <= 24.0 * 24.0 ? 0 : -1;
+}
+
+void CadViewer::updateSectionDrag(const QPoint& position)
+{
+    if (!sectionDragging_ || !sectionState_.active || view_.IsNull()) return;
+    const auto originScreen = projectWorldPoint(view_, sectionState_.origin, width(), height());
+    gp_Pnt axisEnd = sectionState_.origin;
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    sectionBounds_.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double lower = sectionState_.axis == SectionAxis::X ? xmin
+        : sectionState_.axis == SectionAxis::Y ? ymin : zmin;
+    const double upper = sectionState_.axis == SectionAxis::X ? xmax
+        : sectionState_.axis == SectionAxis::Y ? ymax : zmax;
+    const double length = upper - lower;
+    if (sectionState_.axis == SectionAxis::X) axisEnd.SetX(sectionState_.origin.X() + length * 0.5);
+    else if (sectionState_.axis == SectionAxis::Y) axisEnd.SetY(sectionState_.origin.Y() + length * 0.5);
+    else axisEnd.SetZ(sectionState_.origin.Z() + length * 0.5);
+    const auto axisScreen = projectWorldPoint(view_, axisEnd, width(), height()) - originScreen;
+    const double axisPixels = QPointF::dotProduct(axisScreen, axisScreen);
+    if (axisPixels <= 1.0e-9) return;
+    const QPointF mouseDelta = QPointF(position - sectionDragStart_);
+    const double delta = QPointF::dotProduct(mouseDelta, axisScreen) / axisPixels * length;
+    const double value = std::clamp(sectionDragPosition_ + delta, lower, upper);
+    sectionDragPosition_ = value;
+    if (sectionState_.axis == SectionAxis::X) sectionState_.origin.SetX(value);
+    else if (sectionState_.axis == SectionAxis::Y) sectionState_.origin.SetY(value);
+    else sectionState_.origin.SetZ(value);
+    updateSectionPresentation();
+}
+
 int CadViewer::spatialBoxHandleAt(const QPoint& position) const
 {
     if (spatialBoxObject_.IsNull() || view_.IsNull()) return -1;
@@ -1765,6 +1917,7 @@ void CadViewer::clear()
     }
 
     cancelPushPull();
+    clearSection();
     if (!sketchPreviewObject_.IsNull()) {
         context_->Remove(sketchPreviewObject_, Standard_False);
         sketchPreviewObject_.Nullify();
@@ -2629,6 +2782,11 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     }
 
     if (initialized_ && event->button() == Qt::LeftButton && !pushPullActive_) {
+        if (sectionHandleAt(lastMousePosition_) >= 0) {
+            sectionDragging_ = true;
+            sectionDragStart_ = lastMousePosition_;
+            return;
+        }
         const auto spatialHandle = spatialBoxHandleAt(lastMousePosition_);
         if (spatialHandle >= 0) {
             spatialBoxHandle_ = spatialHandle;
@@ -2784,6 +2942,16 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
+    if (sectionDragging_) {
+        if (!event->buttons().testFlag(Qt::LeftButton)) {
+            sectionDragging_ = false;
+            return;
+        }
+        updateSectionDrag(currentPosition);
+        lastMousePosition_ = currentPosition;
+        return;
+    }
+
     if (spatialBoxHandle_ >= 0) {
         if (!event->buttons().testFlag(Qt::LeftButton)) {
             spatialBoxHandle_ = -1;
@@ -2877,6 +3045,10 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
 void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (sectionDragging_ && event->button() == Qt::LeftButton) {
+        sectionDragging_ = false;
+        return;
+    }
     if (spatialBoxHandle_ >= 0 && event->button() == Qt::LeftButton) {
         spatialBoxHandle_ = -1;
         return;
