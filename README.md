@@ -127,6 +127,12 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 
 ## Build
 
+### Platform build guides
+
+- [Ubuntu/Linux](docs/CLION.md)
+- [macOS Ventura](docs/BUILD_MACOS_VENTURA.md)
+- [Windows 11](docs/BUILD_WINDOWS_11.md)
+
 ### Dependencies
 
 - CMake 3.24 or newer;
@@ -170,6 +176,8 @@ section clipping, and saved-view restoration.
 - [Parametric feature architecture](docs/PARAMETRIC_FEATURES.md)
 - [.pcad format](docs/PCAD_FORMAT.md)
 - [Performance and project loading](docs/PERFORMANCE.md)
-- [Windows 11 build](docs/WINDOWS_BUILD.md)
+- [Ubuntu/Linux build](docs/CLION.md)
+- [macOS Ventura build](docs/BUILD_MACOS_VENTURA.md)
+- [Windows 11 build](docs/BUILD_WINDOWS_11.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Undo/Redo](docs/UNDO_REDO.md)
