@@ -49,6 +49,7 @@ add_library(model_test_support STATIC
     ../src/application/SelectionResolver.cpp
     ../src/application/ProjectController.cpp
     ../src/application/IfcImporter.cpp
+    ../src/application/BimNavigationModel.cpp
     ../src/application/VisibilityManager.cpp
     ../src/model/ProjectFile.cpp
     ../src/commands/FeatureCommands.cpp
@@ -125,6 +126,11 @@ add_executable(model_tests model_tests.cpp)
 target_link_libraries(model_tests PRIVATE model_test_support Qt6::Test)
 add_test(NAME model_tests COMMAND model_tests)
 set_tests_properties(model_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
+
+add_executable(bim_navigation_tests bim_navigation_tests.cpp)
+target_link_libraries(bim_navigation_tests PRIVATE model_test_support Qt6::Test)
+add_test(NAME bim_navigation_tests COMMAND bim_navigation_tests)
+set_tests_properties(bim_navigation_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
 
 add_executable(sketch_face_tests sketch_face_tests.cpp)
 target_link_libraries(sketch_face_tests PRIVATE model_test_support Qt6::Test)

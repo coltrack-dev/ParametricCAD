@@ -1,6 +1,7 @@
 #include "viewer/MainWindow.h"
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
+#include "viewer/BimNavigationPanel.h"
 #include "viewer/ModelPresenter.h"
 #include "commands/FeatureCommands.h"
 #include "model/FeatureVisibility.h"
@@ -9,6 +10,7 @@
 #include "operations/SketchConstraintSolver.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QCloseEvent>
 #include <QDir>
 #include <QFileDialog>
@@ -61,6 +63,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     createActions();
     createParametricPanel();
+    createBimPanel();
     featureEditorPanel_->setSketchConstraintSelectionHandler(
         [this](const QString& id) { selectSketchConstraint(id); });
     featureEditorPanel_->setSketchConstraintEditHandler(
@@ -470,6 +473,50 @@ void MainWindow::createParametricPanel()
     );
 }
 
+void MainWindow::createBimPanel()
+{
+    auto* dockWidget = new QDockWidget("BIM", this);
+    dockWidget->setObjectName("BimNavigationDock");
+    dockWidget->setMinimumWidth(ModelPanelWidth);
+    bimNavigationPanel_ = new BimNavigationPanel(dockWidget);
+    dockWidget->setWidget(bimNavigationPanel_);
+
+    bimNavigationPanel_->setFeatureSelectedHandler(
+        [this](const QStringList& ids) { applySelection(ids); });
+    bimNavigationPanel_->setShowHideHandler(
+        [this](const QStringList& ids, const bool visible) {
+            std::vector<std::string> featureIds;
+            for (const auto& id : ids) featureIds.push_back(id.toStdString());
+            const auto result = modeling_.setFeatureVisibility(featureIds, visible);
+            if (!result.success)
+                statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+        });
+    bimNavigationPanel_->setIsolateHandler(
+        [this](const QStringList& ids) {
+            std::vector<std::string> featureIds;
+            for (const auto& id : ids) featureIds.push_back(id.toStdString());
+            visibilityManager_.setIsolatedFeatures(featureIds);
+            refreshVisibilityView();
+        });
+    bimNavigationPanel_->setClearIsolationHandler(
+        [this]() {
+            visibilityManager_.clearIsolation();
+            refreshVisibilityView();
+        });
+    addDockWidget(Qt::RightDockWidgetArea, dockWidget);
+    refreshBimNavigation();
+}
+
+void MainWindow::refreshBimNavigation()
+{
+    if (!bimNavigationPanel_) return;
+    bimNavigationModel_.rebuild(modeling_.body());
+    std::map<QString, cad::application::VisibilityMode> modes;
+    for (const auto& state : visibilityManager_.projection(modeling_.body()))
+        modes.emplace(QString::fromStdString(state.featureId), state.mode);
+    bimNavigationPanel_->setNavigation(bimNavigationModel_, modes);
+}
+
 void MainWindow::commitVisibilityGroups(
     std::vector<cad::application::VisibilityGroup> before,
     std::vector<cad::application::VisibilityGroup> after,
@@ -513,6 +560,7 @@ void MainWindow::refreshModelView(const bool fitView)
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
     featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
+    refreshBimNavigation();
     // ModelPresenter restores the OCCT selection, including topology
     // references. Do not select feature objects again here: that would
     // discard restored face/edge/vertex selection.
@@ -534,6 +582,12 @@ void MainWindow::refreshVisibilityView()
     featureEditorPanel_->updateVisibilityPresentation(
         modeling_.features(), visibilityManager_.groups(),
         visibilityManager_.filters(), visibilityManager_.presets());
+    if (bimNavigationPanel_) {
+        std::map<QString, cad::application::VisibilityMode> modes;
+        for (const auto& state : visibilityManager_.projection(modeling_.body()))
+            modes.emplace(QString::fromStdString(state.featureId), state.mode);
+        bimNavigationPanel_->updateVisibility(modes);
+    }
     applySelectionSnapshot(viewer_->selectionSnapshot(), false);
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     if (!activeSketchId_.empty()) {
@@ -850,6 +904,7 @@ void MainWindow::applySelection(
     }
     selectedObjectIds_ = featureIds;
     featureEditorPanel_->selectFeatures(featureIds);
+    if (bimNavigationPanel_) bimNavigationPanel_->selectFeatures(featureIds);
     updateActionState();
 }
 
@@ -869,6 +924,7 @@ void MainWindow::applySelectionSnapshot(
     }
     selectedObjectIds_ = ids;
     featureEditorPanel_->selectFeatures(ids);
+    if (bimNavigationPanel_) bimNavigationPanel_->selectFeatures(ids);
     updateActionState();
 }
 
@@ -979,6 +1035,23 @@ void MainWindow::createActions()
     auto* clearSectionAction = viewMenu->addAction("Clear Section");
     connect(clearSectionAction, &QAction::triggered, this,
         [this]() { viewer_->clearSection(); });
+    viewMenu->addSeparator();
+    auto* displayModeMenu = viewMenu->addMenu("Display Mode");
+    auto* displayModes = new QActionGroup(this);
+    displayModes->setExclusive(true);
+    const auto addDisplayMode = [this, displayModeMenu, displayModes](
+        const QString& label, const CadViewer::DisplayMode mode) {
+        auto* action = displayModeMenu->addAction(label);
+        action->setCheckable(true);
+        action->setChecked(viewer_->displayMode() == mode);
+        displayModes->addAction(action);
+        connect(action, &QAction::triggered, this, [this, mode]() {
+            viewer_->setDisplayMode(mode);
+        });
+    };
+    addDisplayMode("Shaded", CadViewer::DisplayMode::Shaded);
+    addDisplayMode("Shaded with Edges", CadViewer::DisplayMode::ShadedWithEdges);
+    addDisplayMode("Wireframe", CadViewer::DisplayMode::Wireframe);
     viewMenu->addSeparator();
     auto* saveViewAction = viewMenu->addAction("Save Current View");
     connect(saveViewAction, &QAction::triggered, this, &MainWindow::saveCurrentView);
@@ -1671,6 +1744,7 @@ void MainWindow::clearDocument()
     modeling_.clearProject();
     applySelection({});
     featureEditorPanel_->refresh();
+    refreshBimNavigation();
 }
 
 void MainWindow::updateTitle()
@@ -1729,6 +1803,7 @@ void MainWindow::newDocument()
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
     featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
+    refreshBimNavigation();
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
     currentFile_.clear();
     updateTitle();
@@ -2086,6 +2161,7 @@ void MainWindow::processProjectLoadPresentationChunk()
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
     featureEditorPanel_->setVisibilityPresets(visibilityManager_.presets());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
+    refreshBimNavigation();
     const auto finalSync = finalSyncTimer.elapsed();
     QElapsedTimer fitTimer;
     fitTimer.start();

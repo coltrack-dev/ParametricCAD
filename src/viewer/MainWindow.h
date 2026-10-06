@@ -8,6 +8,7 @@
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
 #include "application/VisibilityManager.h"
+#include "application/BimNavigationModel.h"
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
 #include "application/IfcImporter.h"
 #endif
@@ -19,6 +20,7 @@
 
 class CadViewer;
 class FeatureEditorPanel;
+class BimNavigationPanel;
 namespace cad::viewer { class ModelPresenter; }
 
 class MainWindow final : public QMainWindow
@@ -53,6 +55,8 @@ private:
     void updateTitle();
     void createActions();
     void createParametricPanel();
+    void createBimPanel();
+    void refreshBimNavigation();
     void refreshModelView(bool fitView = false);
     void refreshVisibilityView();
     void activateSpatialVisibility(
@@ -185,6 +189,8 @@ private:
     cad::application::SelectionSnapshot currentSelection_;
     CadViewer* viewer_{nullptr};
     FeatureEditorPanel* featureEditorPanel_{nullptr};
+    BimNavigationPanel* bimNavigationPanel_{nullptr};
+    cad::application::BimNavigationModel bimNavigationModel_;
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;
     QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>> projectLoadWatcher_;
     QTimer projectLoadProgressTimer_;

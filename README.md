@@ -1,5 +1,7 @@
 # ParametricCAD
 
+For IFC BIM navigation, see [docs/BIM_NAVIGATION.md](docs/BIM_NAVIGATION.md).
+
 ParametricCAD is a desktop parametric CAD application written in C++20 with
 Qt 6 and Open CASCADE Technology (OCCT). It keeps an editable feature history,
 rebuilds OCCT B-Rep geometry from parameters, and provides direct viewer

@@ -333,6 +333,11 @@ CadViewer::CadViewer(QWidget* parent)
     performanceDiagnostics_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_PERF");
     snapDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SNAP");
     selectionDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SELECTION");
+    const auto configuredDisplayMode = qEnvironmentVariable("PARAMETRIC_CAD_DISPLAY_MODE");
+    if (configuredDisplayMode.compare("wireframe", Qt::CaseInsensitive) == 0)
+        displayMode_ = DisplayMode::Wireframe;
+    else if (configuredDisplayMode.compare("shaded", Qt::CaseInsensitive) == 0)
+        displayMode_ = DisplayMode::Shaded;
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_PaintOnScreen);
     setAttribute(Qt::WA_NoSystemBackground);
@@ -1482,20 +1487,10 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
         new AIS_Shape(shape);
 
     if (!shape.IsNull()) {
-        const auto displayMode = qEnvironmentVariable("PARAMETRIC_CAD_DISPLAY_MODE");
-        if (displayMode.compare("wireframe", Qt::CaseInsensitive) == 0) {
-            interactiveShape->SetDisplayMode(AIS_WireFrame);
-        } else if (featureId.startsWith("sketch-")) {
+        if (featureId.startsWith("sketch-")) {
             configureSketchPresentation(interactiveShape, featureId);
-        } else if (shape.ShapeType() == TopAbs_FACE || TopExp_Explorer(shape, TopAbs_FACE).More()) {
-            interactiveShape->SetDisplayMode(AIS_Shaded);
-            const auto& drawer = interactiveShape->Attributes();
-            const bool drawEdges = displayMode.compare("shaded", Qt::CaseInsensitive) != 0;
-            drawer->SetFaceBoundaryDraw(drawEdges ? Standard_True : Standard_False);
-            drawer->SetFaceBoundaryAspect(
-                new Prs3d_LineAspect(Quantity_NOC_BLACK, Aspect_TOL_SOLID, 1.2));
-        } else if (shape.ShapeType() == TopAbs_WIRE) {
-            interactiveShape->SetDisplayMode(AIS_WireFrame);
+        } else {
+            applyDisplayMode(interactiveShape, shape);
         }
     }
 
@@ -1520,6 +1515,39 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
     if (fitView) {
         fitAll();
     }
+}
+
+void CadViewer::applyDisplayMode(const Handle(AIS_Shape)& object,
+                                  const TopoDS_Shape& shape) const
+{
+    if (object.IsNull() || shape.IsNull()) return;
+    if (displayMode_ == DisplayMode::Wireframe || shape.ShapeType() == TopAbs_WIRE) {
+        object->SetDisplayMode(AIS_WireFrame);
+        return;
+    }
+    object->SetDisplayMode(AIS_Shaded);
+    const auto& drawer = object->Attributes();
+    drawer->SetFaceBoundaryDraw(
+        displayMode_ == DisplayMode::ShadedWithEdges ? Standard_True : Standard_False);
+    drawer->SetFaceBoundaryAspect(
+        new Prs3d_LineAspect(Quantity_NOC_BLACK, Aspect_TOL_SOLID, 1.2));
+}
+
+void CadViewer::setDisplayMode(const DisplayMode mode)
+{
+    displayMode_ = mode;
+    for (const auto& [featureId, object] : featureObjects_) {
+        Q_UNUSED(featureId);
+        if (object.IsNull()) continue;
+        applyDisplayMode(object, object->Shape());
+        object->Redisplay(Standard_False);
+    }
+    if (initialized_ && !context_.IsNull()) context_->UpdateCurrentViewer();
+}
+
+CadViewer::DisplayMode CadViewer::displayMode() const noexcept
+{
+    return displayMode_;
 }
 
 void CadViewer::beginBulkUpdate()

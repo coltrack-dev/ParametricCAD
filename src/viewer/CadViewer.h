@@ -71,6 +71,13 @@ public:
         Free
     };
 
+    enum class DisplayMode
+    {
+        Shaded,
+        ShadedWithEdges,
+        Wireframe
+    };
+
     enum class SectionAxis
     {
         X,
@@ -138,6 +145,8 @@ public:
     SelectionMode selectionMode() const;
     void setOrbitMode(OrbitMode mode);
     OrbitMode orbitMode() const noexcept;
+    void setDisplayMode(DisplayMode mode);
+    DisplayMode displayMode() const noexcept;
     cad::application::SelectionSnapshot selectionSnapshot() const;
     std::vector<cad::topology::TopologicalReference> captureTopologySelection(
         const cad::parametric::Body& body) const;
@@ -228,6 +237,8 @@ private:
     );
     void resetDetectedCycle();
     void setXRayEnabled(bool enabled);
+    void applyDisplayMode(const Handle(AIS_Shape)& object,
+                          const TopoDS_Shape& shape) const;
     void applySelectionMode();
     bool featureIsSelectable(const QString& featureId) const noexcept;
     void applyFeaturePresentation(
@@ -276,6 +287,7 @@ private:
     QPoint mousePressPosition_;
     InteractionMode interactionMode_{InteractionMode::None};
     OrbitMode orbitMode_{OrbitMode::Turntable};
+    DisplayMode displayMode_{DisplayMode::ShadedWithEdges};
     double orbitAzimuth_{0.0};
     double orbitElevation_{0.0};
     bool initialized_{false};

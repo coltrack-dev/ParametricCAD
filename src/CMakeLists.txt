@@ -12,6 +12,8 @@ set(PARAMETRIC_CAD_SOURCES
     application/VisibilityManager.h
     application/IfcImporter.cpp
     application/IfcImporter.h
+    application/BimNavigationModel.cpp
+    application/BimNavigationModel.h
     import/IfcOpenShellAdapter.cpp
     import/IfcOpenShellAdapter.h
     application/VisibilityMode.h
@@ -38,6 +40,8 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/SnapManager.h
     viewer/FeatureEditorPanel.cpp
     viewer/FeatureEditorPanel.h
+    viewer/BimNavigationPanel.cpp
+    viewer/BimNavigationPanel.h
     viewer/CadViewer.cpp
     viewer/CadViewer.h
     model/Document.cpp
