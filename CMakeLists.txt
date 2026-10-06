@@ -24,6 +24,39 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Concu
 # The official/config package normally exposes OpenCASCADE_* variables.
 find_package(OpenCASCADE REQUIRED)
 
+# Keep the OCCT toolkit composition in one place.  These interface targets
+# are shared by the application and tests that compile viewer/selection code;
+# this also keeps MSVC's static symbol resolution consistent with Unix builds.
+add_library(parametriccad_occt_modeling INTERFACE)
+target_include_directories(parametriccad_occt_modeling INTERFACE
+    ${OpenCASCADE_INCLUDE_DIR})
+if(DEFINED OpenCASCADE_LIBRARY_DIR)
+    target_link_directories(parametriccad_occt_modeling INTERFACE
+        ${OpenCASCADE_LIBRARY_DIR})
+endif()
+target_link_libraries(parametriccad_occt_modeling INTERFACE
+    TKernel
+    TKMath
+    TKG2d
+    TKG3d
+    TKGeomBase
+    TKBRep
+    TKGeomAlgo
+    TKTopAlgo
+    TKPrim
+    TKBO
+    TKFillet
+    TKOffset)
+
+add_library(parametriccad_occt_visualization INTERFACE)
+target_link_libraries(parametriccad_occt_visualization INTERFACE
+    TKService
+    TKV3d
+    TKOpenGl)
+
+add_library(ParametricCAD::OCCTModeling ALIAS parametriccad_occt_modeling)
+add_library(ParametricCAD::OCCTVisualization ALIAS parametriccad_occt_visualization)
+
 # Prefer the package target supplied by vcpkg (and other CONFIG packages). It
 # carries both the minizip include directory and its transitive dependencies.
 # Keep a small Unix fallback for distributions that only provide libminizip

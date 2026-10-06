@@ -110,15 +110,6 @@ if(PARAMETRIC_CAD_ENABLE_IFC)
     target_include_directories(ParametricCAD SYSTEM PRIVATE ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
 endif()
 
-target_include_directories(ParametricCAD
-        SYSTEM PRIVATE
-        ${OpenCASCADE_INCLUDE_DIR}
-)
-
-if(DEFINED OpenCASCADE_LIBRARY_DIR)
-    target_link_directories(ParametricCAD PRIVATE ${OpenCASCADE_LIBRARY_DIR})
-endif()
-
 target_link_libraries(ParametricCAD
         PRIVATE
         Qt6::Core
@@ -128,29 +119,8 @@ target_link_libraries(ParametricCAD
         Qt6::OpenGLWidgets
         Qt6::Concurrent
         ${PARAMETRIC_CAD_MINIZIP_TARGET}
-
-        # OCCT Foundation
-        TKernel
-        TKMath
-
-        # OCCT geometry
-        TKG2d
-        TKG3d
-        TKGeomBase
-        TKBRep
-        TKGeomAlgo
-        TKTopAlgo
-
-        # Modeling operations
-        TKPrim
-        TKBO
-        TKFillet
-        TKOffset
-
-        # 3D visualization
-        TKService
-        TKV3d
-        TKOpenGl
+        ParametricCAD::OCCTModeling
+        ParametricCAD::OCCTVisualization
 )
 
 if(PARAMETRIC_CAD_ENABLE_IFC)

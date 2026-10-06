@@ -27,12 +27,9 @@ add_executable(push_pull_drag_tests
     ../src/viewer/TransformGizmoPicking.cpp
 )
 target_include_directories(push_pull_drag_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_include_directories(push_pull_drag_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-if(DEFINED OpenCASCADE_LIBRARY_DIR)
-    target_link_directories(push_pull_drag_tests PRIVATE ${OpenCASCADE_LIBRARY_DIR})
-endif()
 target_link_libraries(push_pull_drag_tests PRIVATE Qt6::Gui
-    TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO)
+    ParametricCAD::OCCTModeling
+    ParametricCAD::OCCTVisualization)
 add_test(NAME push_pull_drag_tests COMMAND push_pull_drag_tests)
 
 add_executable(selection_tests
@@ -40,13 +37,9 @@ add_executable(selection_tests
     ../src/viewer/SelectionAdapter.cpp
 )
 target_include_directories(selection_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_include_directories(selection_tests SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-if(DEFINED OpenCASCADE_LIBRARY_DIR)
-    target_link_directories(selection_tests PRIVATE ${OpenCASCADE_LIBRARY_DIR})
-endif()
 target_link_libraries(selection_tests PRIVATE Qt6::Core Qt6::Gui
-    TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim
-    TKService TKV3d TKOpenGl)
+    ParametricCAD::OCCTModeling
+    ParametricCAD::OCCTVisualization)
 add_test(NAME selection_tests COMMAND selection_tests)
 
 find_package(Qt6 REQUIRED COMPONENTS Test)
@@ -81,13 +74,10 @@ add_library(model_test_support STATIC
     ../src/viewer/PushPullDrag.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_include_directories(model_test_support SYSTEM PUBLIC ${OpenCASCADE_INCLUDE_DIR})
-if(DEFINED OpenCASCADE_LIBRARY_DIR)
-    target_link_directories(model_test_support PUBLIC ${OpenCASCADE_LIBRARY_DIR})
-endif()
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     ${PARAMETRIC_CAD_MINIZIP_TARGET}
-    TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet TKOffset)
+    ParametricCAD::OCCTModeling
+    ParametricCAD::OCCTVisualization)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(model_test_support PUBLIC
