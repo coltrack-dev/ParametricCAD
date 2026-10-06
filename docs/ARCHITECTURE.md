@@ -120,6 +120,10 @@ world-normalized B-Rep is stored with identity placement and its IFC building,
 storey, class, and GlobalId are metadata; IFC hierarchy does not become model
 history.
 
+The read-only BIM Inspector consumes the structured IFC metadata retained by
+`ImportedFeature` (identity, type, materials, property sets, and quantities).
+It is a presentation projection and never reparses the IFC source.
+
 `Document` and legacy `Feature` remain for compatibility with old callers and
 legacy Box/Cylinder input. They are not the canonical presentation or feature
 history container.

@@ -1,4 +1,4 @@
-# IFC import (Phases B and C1)
+# IFC import (Phases B, C1 and C3)
 
 Phase B provides a non-UI import core:
 
@@ -109,6 +109,23 @@ Legacy version-1 plain JSON files, including embedded Base64
 `geometryPayload`, remain readable. The loader detects archives by their ZIP
 signature rather than by filename extension. The original IFC is not needed to
 reopen a saved `.pcad`.
+
+## BIM Inspector
+
+Selecting an `ImportedFeature` opens the read-only BIM Inspector. It reads
+semantic metadata captured during the one-time import and stored with the
+feature: identity and spatial IDs, predefined/type information, materials and
+layers, property sets, simple element quantities, and source provenance. The
+inspector never opens or reparses the IFC source file and remains usable after
+the source has been moved or deleted.
+
+The semantic boundary is:
+
+```text
+IfcOpenShellAdapter -> IfcMetadata DTO -> ImportedFeature -> .pcad -> BIM Inspector
+```
+
+No IfcOpenShell types or parsing logic are used by the Qt inspector.
 
 Measured Phase B.2 sizes:
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <TopoDS_Shape.hxx>
+#include "import/IfcMetadata.h"
 
 #include <QDateTime>
 #include <QString>
@@ -47,6 +48,7 @@ struct IfcImportProduct
     QString storeyGlobalId;
     QStringList representationTypes;
     int placementDepth{0};
+    IfcMetadata metadata;
 };
 
 struct IfcImportStatistics

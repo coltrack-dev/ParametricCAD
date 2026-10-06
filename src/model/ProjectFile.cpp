@@ -801,7 +801,8 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 o.value("ifcBuilding").toString(),
                 o.value("ifcStorey").toString(),
                 o.value("ifcBuildingGlobalId").toString(),
-                o.value("ifcStoreyGlobalId").toString());
+                o.value("ifcStoreyGlobalId").toString(),
+                cad::import::deserializeIfcMetadata(o.value("ifcMetadata").toObject()));
         }}
     };
     return registry;

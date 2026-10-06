@@ -18,13 +18,14 @@ ImportedFeature::ImportedFeature(std::string id, std::string name, TopoDS_Shape 
                                  QString sourceFormat, QString sourceFile, QString ifcGlobalId,
                                  QString ifcEntityType, QString ifcDescription,
                                  QString ifcBuilding, QString ifcStorey,
-                                 QString ifcBuildingGlobalId, QString ifcStoreyGlobalId)
+                                 QString ifcBuildingGlobalId, QString ifcStoreyGlobalId,
+                                 cad::import::IfcMetadata ifcMetadata)
     : ParametricFeature(std::move(id), std::move(name)), sourceShape_(std::move(sourceShape)),
       sourceFormat_(std::move(sourceFormat)), sourceFile_(std::move(sourceFile)),
       ifcGlobalId_(std::move(ifcGlobalId)), ifcEntityType_(std::move(ifcEntityType)),
       ifcDescription_(std::move(ifcDescription)), ifcBuilding_(std::move(ifcBuilding)),
       ifcBuildingGlobalId_(std::move(ifcBuildingGlobalId)), ifcStorey_(std::move(ifcStorey)),
-      ifcStoreyGlobalId_(std::move(ifcStoreyGlobalId))
+      ifcStoreyGlobalId_(std::move(ifcStoreyGlobalId)), ifcMetadata_(std::move(ifcMetadata))
 {
     if (sourceShape_.IsNull()) throw std::invalid_argument("Imported feature shape must not be null");
     if (!recompute()) throw std::runtime_error(error());
@@ -41,7 +42,9 @@ std::vector<FeatureProperty> ImportedFeature::properties() const
         {"ifcBuilding", "IFC building", ifcBuilding_.toStdString(), {}, {}, false},
         {"ifcBuildingGlobalId", "IFC building GlobalId", ifcBuildingGlobalId_.toStdString(), {}, {}, false},
         {"ifcStorey", "IFC storey", ifcStorey_.toStdString(), {}, {}, false},
-        {"ifcStoreyGlobalId", "IFC storey GlobalId", ifcStoreyGlobalId_.toStdString(), {}, {}, false}
+        {"ifcStoreyGlobalId", "IFC storey GlobalId", ifcStoreyGlobalId_.toStdString(), {}, {}, false},
+        {"ifcPredefinedType", "IFC predefined type", ifcMetadata_.predefinedType.toStdString(), {}, {}, false},
+        {"ifcTypeName", "IFC type name", ifcMetadata_.type.name.toStdString(), {}, {}, false}
     };
 }
 
@@ -49,7 +52,7 @@ ParametricFeature::Ptr ImportedFeature::clone(std::string newId) const
 {
     auto result = std::make_shared<ImportedFeature>(std::move(newId), name(), sourceShape_,
         sourceFormat_, sourceFile_, ifcGlobalId_, ifcEntityType_, ifcDescription_,
-        ifcBuilding_, ifcStorey_, ifcBuildingGlobalId_, ifcStoreyGlobalId_);
+        ifcBuilding_, ifcStorey_, ifcBuildingGlobalId_, ifcStoreyGlobalId_, ifcMetadata_);
     result->setUserVisible(userVisible());
     return result;
 }
@@ -64,6 +67,7 @@ const QString& ImportedFeature::ifcBuilding() const noexcept { return ifcBuildin
 const QString& ImportedFeature::ifcBuildingGlobalId() const noexcept { return ifcBuildingGlobalId_; }
 const QString& ImportedFeature::ifcStorey() const noexcept { return ifcStorey_; }
 const QString& ImportedFeature::ifcStoreyGlobalId() const noexcept { return ifcStoreyGlobalId_; }
+const cad::import::IfcMetadata& ImportedFeature::ifcMetadata() const noexcept { return ifcMetadata_; }
 
 TopoDS_Shape ImportedFeature::build() const { return sourceShape_; }
 
@@ -78,6 +82,8 @@ void ImportedFeature::writeParameters(QJsonObject& object) const
     object.insert("ifcBuildingGlobalId", ifcBuildingGlobalId_);
     object.insert("ifcStorey", ifcStorey_);
     object.insert("ifcStoreyGlobalId", ifcStoreyGlobalId_);
+    if (!ifcMetadata_.empty()) object.insert("ifcMetadata",
+        cad::import::serializeIfcMetadata(ifcMetadata_));
 }
 
 } // namespace cad::parametric

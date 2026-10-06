@@ -15,6 +15,8 @@
 #include <ifcparse/Ifc2x3.h>
 #include <ifcparse/Ifc4.h>
 #include <ifcparse/IfcFile.h>
+#include <ifcparse/IfcBaseClass.h>
+#include <ifcparse/IfcParse.h>
 #include <gp_Trsf.hxx>
 #endif
 
@@ -38,6 +40,192 @@ struct SpatialMetadata
     QString storey;
     QString storeyGlobalId;
 };
+
+QString entityAttribute(IfcUtil::IfcBaseClass* entity, const char* name)
+{
+    auto* base = entity ? entity->as<IfcUtil::IfcBaseEntity>() : nullptr;
+    if (!base) return {};
+    Argument* argument = nullptr;
+    try { argument = base->get(name); } catch (...) { return {}; }
+    if (!argument || argument->isNull()) return {};
+    return QString::fromStdString(argument->toString());
+}
+
+IfcUtil::IfcBaseClass* entityAttributeObject(IfcUtil::IfcBaseClass* entity, const char* name)
+{
+    auto* base = entity ? entity->as<IfcUtil::IfcBaseEntity>() : nullptr;
+    if (!base) return nullptr;
+    Argument* argument = nullptr;
+    try { argument = base->get(name); } catch (...) { return nullptr; }
+    if (!argument || argument->isNull()) return nullptr;
+    return static_cast<IfcUtil::IfcBaseClass*>(*argument);
+}
+
+boost::shared_ptr<aggregate_of_instance> entityAttributeList(
+    IfcUtil::IfcBaseClass* entity, const char* name)
+{
+    auto* base = entity ? entity->as<IfcUtil::IfcBaseEntity>() : nullptr;
+    if (!base) return {};
+    Argument* argument = nullptr;
+    try { argument = base->get(name); } catch (...) { return {}; }
+    if (!argument || argument->isNull()) return {};
+    return static_cast<boost::shared_ptr<aggregate_of_instance>>(*argument);
+}
+
+QString propertyValue(IfcUtil::IfcBaseClass* property)
+{
+    auto* nominal = entityAttributeObject(property, "NominalValue");
+    if (!nominal) {
+        for (const char* name : {"EnumerationValues", "ListValues", "UpperBoundValue",
+                                 "LowerBoundValue", "PropertyReference"}) {
+            const auto value = entityAttribute(property, name);
+            if (!value.isEmpty()) return value;
+        }
+        return {};
+    }
+    return QString::fromStdString(nominal->data().toString());
+}
+
+struct SemanticIndex
+{
+    std::unordered_map<uint32_t, IfcUtil::IfcBaseClass*> typeByProduct;
+    std::unordered_map<uint32_t, std::vector<IfcUtil::IfcBaseClass*>> definitionsByProduct;
+    std::unordered_map<uint32_t, std::vector<IfcUtil::IfcBaseClass*>> materialsByProduct;
+};
+
+SemanticIndex semanticIndex(IfcParse::IfcFile& file)
+{
+    SemanticIndex index;
+    const auto types = file.instances_by_type("IfcRelDefinesByType");
+    for (auto* relation : *types) {
+        auto* type = entityAttributeObject(relation, "RelatingType");
+        const auto related = entityAttributeList(relation, "RelatedObjects");
+        if (!type || !related) continue;
+        for (auto* object : *related)
+            if (object) index.typeByProduct[object->identity()] = type;
+    }
+    const auto definitions = file.instances_by_type("IfcRelDefinesByProperties");
+    for (auto* relation : *definitions) {
+        auto* definition = entityAttributeObject(relation, "RelatingPropertyDefinition");
+        const auto related = entityAttributeList(relation, "RelatedObjects");
+        if (!definition || !related) continue;
+        for (auto* object : *related)
+            if (object) index.definitionsByProduct[object->identity()].push_back(definition);
+    }
+    const auto materials = file.instances_by_type("IfcRelAssociatesMaterial");
+    for (auto* relation : *materials) {
+        auto* material = entityAttributeObject(relation, "RelatingMaterial");
+        const auto related = entityAttributeList(relation, "RelatedObjects");
+        if (!material || !related) continue;
+        for (auto* object : *related)
+            if (object) index.materialsByProduct[object->identity()].push_back(material);
+    }
+    return index;
+}
+
+IfcMetadata semanticMetadata(IfcUtil::IfcBaseClass* product, const SemanticIndex& index)
+{
+    IfcMetadata metadata;
+    metadata.predefinedType = entityAttribute(product, "PredefinedType");
+
+    if (product) {
+        const auto type = index.typeByProduct.find(product->identity());
+        if (type != index.typeByProduct.end() && type->second) {
+            metadata.type.entityType = QString::fromLatin1(type->second->declaration().name().c_str());
+            metadata.type.globalId = entityAttribute(type->second, "GlobalId");
+            metadata.type.name = entityAttribute(type->second, "Name");
+        }
+    }
+
+    const auto definitions = product ? index.definitionsByProduct.find(product->identity())
+                                     : index.definitionsByProduct.end();
+    if (definitions != index.definitionsByProduct.end()) {
+        for (auto* definition : definitions->second) {
+            if (!definition) continue;
+            const QString definitionType = QString::fromLatin1(definition->declaration().name().c_str());
+            if (definitionType == "IfcPropertySet") {
+                IfcPropertySetData set;
+                set.name = entityAttribute(definition, "Name");
+                const auto properties = entityAttributeList(definition, "HasProperties");
+                if (properties) for (auto* property : *properties) {
+                    if (!property) continue;
+                    IfcPropertyValue value;
+                    value.name = entityAttribute(property, "Name");
+                    value.value.kind = QString::fromLatin1(property->declaration().name().c_str());
+                    value.value.text = propertyValue(property);
+                    set.properties.push_back(std::move(value));
+                }
+                metadata.propertySets.push_back(std::move(set));
+            } else if (definitionType == "IfcElementQuantity") {
+                IfcQuantitySetData set;
+                set.name = entityAttribute(definition, "Name");
+                const auto quantities = entityAttributeList(definition, "Quantities");
+                if (quantities) for (auto* quantity : *quantities) {
+                    if (!quantity) continue;
+                    const QString kind = QString::fromLatin1(quantity->declaration().name().c_str())
+                        .mid(QStringLiteral("IfcQuantity").size());
+                    QString value;
+                    if (kind == "Length") value = entityAttribute(quantity, "LengthValue");
+                    else if (kind == "Area") value = entityAttribute(quantity, "AreaValue");
+                    else if (kind == "Volume") value = entityAttribute(quantity, "VolumeValue");
+                    else if (kind == "Count") value = entityAttribute(quantity, "CountValue");
+                    else if (kind == "Weight") value = entityAttribute(quantity, "WeightValue");
+                    else value = entityAttribute(quantity, "Value");
+                    IfcQuantityValue quantityValue;
+                    quantityValue.name = entityAttribute(quantity, "Name");
+                    quantityValue.kind = kind;
+                    quantityValue.value = value;
+                    set.quantities.push_back(std::move(quantityValue));
+                }
+                metadata.quantitySets.push_back(std::move(set));
+            }
+        }
+    }
+
+    const auto associations = product ? index.materialsByProduct.find(product->identity())
+                                      : index.materialsByProduct.end();
+    if (associations != index.materialsByProduct.end()) for (auto* material : associations->second) {
+        if (!material) continue;
+        IfcMaterialData data;
+        const QString type = QString::fromLatin1(material->declaration().name().c_str());
+        if (type == "IfcMaterial") {
+            data.name = entityAttribute(material, "Name");
+        } else if (type == "IfcMaterialLayerSet" || type == "IfcMaterialLayerSetUsage") {
+            data.name = entityAttribute(material, "LayerSetName");
+            auto* layerSet = type == "IfcMaterialLayerSetUsage"
+                ? entityAttributeObject(material, "ForLayerSet") : material;
+            const auto layers = entityAttributeList(layerSet, "MaterialLayers");
+            if (layers) for (auto* layer : *layers) {
+                if (!layer) continue;
+                auto* layerMaterial = entityAttributeObject(layer, "Material");
+                IfcMaterialLayerData layerData;
+                layerData.name = layerMaterial ? entityAttribute(layerMaterial, "Name") : QString{};
+                layerData.thickness = entityAttribute(layer, "LayerThickness");
+                data.layers.push_back(std::move(layerData));
+            }
+        } else if (type == "IfcMaterialList") {
+            const auto materials = entityAttributeList(material, "Materials");
+            if (materials) for (auto* item : *materials)
+                if (item) {
+                    IfcMaterialLayerData layerData;
+                    layerData.name = entityAttribute(item, "Name");
+                    data.layers.push_back(std::move(layerData));
+                }
+        } else if (type == "IfcMaterialConstituentSet") {
+            data.name = entityAttribute(material, "Name");
+            const auto constituents = entityAttributeList(material, "MaterialConstituents");
+            if (constituents) for (auto* item : *constituents) {
+                if (!item) continue;
+                auto* constituent = entityAttributeObject(item, "Material");
+                IfcMaterialLayerData layerData;
+                layerData.name = constituent ? entityAttribute(constituent, "Name") : QString{};
+                data.layers.push_back(std::move(layerData));
+            }
+        }
+        if (!data.name.isEmpty() || !data.layers.empty()) metadata.materials.push_back(std::move(data));
+    }
+    return metadata;
+}
 
 template <typename Schema>
 struct SpatialElementType;
@@ -257,6 +445,7 @@ IfcImportResult IfcOpenShellAdapter::importFile(
             return result;
         }
         const auto containment = spatialIndex(*file);
+        const auto semantic = semanticIndex(*file);
 
         std::size_t processed = 0;
         do {
@@ -314,7 +503,7 @@ IfcImportResult IfcOpenShellAdapter::importFile(
                     QString::fromStdString(element->name()), {},
                     building, buildingGlobalId, storey, storeyGlobalId,
                     representationTypes(element->product()),
-                    placementDepth(element->product())});
+                    placementDepth(element->product()), semanticMetadata(element->product(), semantic)});
                 ++result.statistics.productsWithGeometry;
                 ++result.statistics.importedCount;
                 ++result.statistics.importedByEntity[type];

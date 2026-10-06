@@ -72,6 +72,7 @@ add_library(model_test_support STATIC
     ../src/operations/PatternFeatures.cpp
     ../src/operations/ImportedFeature.cpp
     ../src/import/IfcOpenShellAdapter.cpp
+    ../src/import/IfcMetadata.cpp
     ../src/viewer/PushPullDrag.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)

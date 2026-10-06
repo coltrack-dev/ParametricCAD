@@ -123,6 +123,8 @@ int main()
             QStringLiteral(PARAMETRIC_CAD_SOURCE_DIR) + "/examples/ifc/Duplex_A_20110505.ifc",
             unavailableBody);
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+        for (const auto& diagnostic : result.diagnostics)
+            std::cerr << "IFC diagnostic: " << diagnostic.message.toStdString() << '\n';
         check(result.statistics.schema == "IFC2X3", "Duplex schema");
         check(result.statistics.importedCount > 0 && !unavailableBody.features().empty(),
               "Duplex import");
@@ -152,18 +154,32 @@ int main()
         std::map<std::string, std::shared_ptr<cad::parametric::ImportedFeature>> representatives;
         int nonNull = 0;
         int spatialMetadata = 0;
+        int semanticMetadata = 0;
+        int propertySetCount = 0;
+        int quantitySetCount = 0;
+        int materialCount = 0;
         for (const auto& feature : unavailableBody.features()) {
             auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
             if (importedFeature->shape().IsNull()) continue;
             ++nonNull;
             if (!importedFeature->ifcBuilding().isEmpty()
                 && !importedFeature->ifcStorey().isEmpty()) ++spatialMetadata;
+            if (!importedFeature->ifcMetadata().empty()) ++semanticMetadata;
+            propertySetCount += static_cast<int>(importedFeature->ifcMetadata().propertySets.size());
+            quantitySetCount += static_cast<int>(importedFeature->ifcMetadata().quantitySets.size());
+            materialCount += static_cast<int>(importedFeature->ifcMetadata().materials.size());
             ++topologyCounts[shapeKind(importedFeature->shape())];
             const auto type = importedFeature->ifcEntityType().toStdString();
             if (!representatives.contains(type)) representatives[type] = importedFeature;
         }
         check(spatialMetadata > 0, "Duplex spatial containment metadata");
         std::cout << "  products with building/storey metadata: " << spatialMetadata << '\n';
+        std::cout << "  products with semantic metadata: " << semanticMetadata << '\n'
+                  << "  property sets: " << propertySetCount
+                  << ", quantity sets: " << quantitySetCount
+                  << ", material associations: " << materialCount << '\n';
+        check(semanticMetadata > 0 && propertySetCount > 0,
+              "Duplex semantic IFC metadata");
         for (const auto& type : {std::string("IfcWall"), std::string("IfcSlab"),
                                  std::string("IfcDoor"), std::string("IfcWindow")}) {
             const auto& feature = representatives.at(type);
@@ -265,12 +281,15 @@ int main()
               "save Duplex BRep");
         std::set<QString> sourceGlobalIds;
         std::map<QString, QString> sourceSpatialIds;
+        std::map<QString, int> sourcePropertyCounts;
         for (const auto& feature : roundTripBody.features()) {
             const auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
             sourceGlobalIds.insert(importedFeature->ifcGlobalId());
             sourceSpatialIds.emplace(importedFeature->ifcGlobalId(),
                 importedFeature->ifcBuildingGlobalId() + "|"
                 + importedFeature->ifcStoreyGlobalId());
+            sourcePropertyCounts.emplace(importedFeature->ifcGlobalId(),
+                static_cast<int>(importedFeature->ifcMetadata().propertySets.size()));
         }
         const auto saveMilliseconds = saveTimer.elapsed();
         const auto pcadSize = QFileInfo(pcadPath).size();
@@ -287,15 +306,19 @@ int main()
               "roundtrip feature count");
         std::set<QString> loadedGlobalIds;
         std::map<QString, QString> loadedSpatialIds;
+        std::map<QString, int> loadedPropertyCounts;
         for (const auto& feature : reloadedBody.features()) {
             const auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
             loadedGlobalIds.insert(importedFeature->ifcGlobalId());
             loadedSpatialIds.emplace(importedFeature->ifcGlobalId(),
                 importedFeature->ifcBuildingGlobalId() + "|"
                 + importedFeature->ifcStoreyGlobalId());
+            loadedPropertyCounts.emplace(importedFeature->ifcGlobalId(),
+                static_cast<int>(importedFeature->ifcMetadata().propertySets.size()));
         }
         check(loadedGlobalIds == sourceGlobalIds, "roundtrip IFC GlobalIds");
         check(loadedSpatialIds == sourceSpatialIds, "roundtrip IFC spatial IDs");
+        check(loadedPropertyCounts == sourcePropertyCounts, "roundtrip IFC property metadata");
         check(std::abs(reloadedBounds.xmin - importedBounds.xmin) < 1.0e-5
                   && std::abs(reloadedBounds.xmax - importedBounds.xmax) < 1.0e-5,
               "roundtrip bounds");

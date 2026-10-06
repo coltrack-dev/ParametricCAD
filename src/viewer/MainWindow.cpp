@@ -2,12 +2,14 @@
 #include "viewer/CadViewer.h"
 #include "viewer/FeatureEditorPanel.h"
 #include "viewer/BimNavigationPanel.h"
+#include "viewer/BimInspectorPanel.h"
 #include "viewer/ModelPresenter.h"
 #include "commands/FeatureCommands.h"
 #include "model/FeatureVisibility.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
 #include "operations/SketchConstraintSolver.h"
+#include "operations/ImportedFeature.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -504,6 +506,12 @@ void MainWindow::createBimPanel()
             refreshVisibilityView();
         });
     addDockWidget(Qt::RightDockWidgetArea, dockWidget);
+    auto* inspectorDock = new QDockWidget("BIM Inspector", this);
+    inspectorDock->setObjectName("BimInspectorDock");
+    inspectorDock->setMinimumWidth(ModelPanelWidth);
+    bimInspectorPanel_ = new BimInspectorPanel(inspectorDock);
+    inspectorDock->setWidget(bimInspectorPanel_);
+    addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
     for (auto* action : menuBar()->actions()) {
         auto* menu = action->menu();
         if (menu && menu->title() == QStringLiteral("&View")) {
@@ -523,6 +531,22 @@ void MainWindow::refreshBimNavigation()
     for (const auto& state : visibilityManager_.projection(modeling_.body()))
         modes.emplace(QString::fromStdString(state.featureId), state.mode);
     bimNavigationPanel_->setNavigation(bimNavigationModel_, modes);
+}
+
+void MainWindow::updateBimInspector(const QStringList& featureIds)
+{
+    if (!bimInspectorPanel_) return;
+    if (featureIds.size() != 1) {
+        bimInspectorPanel_->clear();
+        return;
+    }
+    const auto feature = modeling_.body().findFeature(featureIds.front().toStdString());
+    if (!feature || std::string(feature->typeId()) != "IfcImported") {
+        bimInspectorPanel_->clear();
+        return;
+    }
+    bimInspectorPanel_->setFeature(
+        static_cast<const cad::parametric::ImportedFeature*>(feature.get()));
 }
 
 void MainWindow::commitVisibilityGroups(
@@ -913,6 +937,7 @@ void MainWindow::applySelection(
     selectedObjectIds_ = featureIds;
     featureEditorPanel_->selectFeatures(featureIds);
     if (bimNavigationPanel_) bimNavigationPanel_->selectFeatures(featureIds);
+    updateBimInspector(featureIds);
     updateActionState();
 }
 
@@ -933,6 +958,7 @@ void MainWindow::applySelectionSnapshot(
     selectedObjectIds_ = ids;
     featureEditorPanel_->selectFeatures(ids);
     if (bimNavigationPanel_) bimNavigationPanel_->selectFeatures(ids);
+    updateBimInspector(ids);
     updateActionState();
 }
 

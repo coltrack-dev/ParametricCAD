@@ -97,6 +97,10 @@ the normal viewer, selection, visibility, and `.pcad` persistence paths. IFC
 support is optional; builds without the pinned IfcOpenShell dependency omit
 the action. See [docs/IFC_IMPORT.md](docs/IFC_IMPORT.md).
 
+Selecting an imported IFC product also exposes a read-only BIM Inspector with
+stored identity, type, material, property-set, quantity, spatial, and source
+metadata. It does not require the original IFC file.
+
 ### Performance
 
 Large project Open uses a worker phase for file parsing and temporary model

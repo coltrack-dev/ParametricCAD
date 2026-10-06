@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ParametricFeature.h"
+#include "import/IfcMetadata.h"
 
 #include <TopoDS_Shape.hxx>
 
@@ -16,7 +17,8 @@ public:
                     QString sourceFormat, QString sourceFile, QString ifcGlobalId,
                     QString ifcEntityType, QString ifcDescription,
                     QString ifcBuilding, QString ifcStorey,
-                    QString ifcBuildingGlobalId = {}, QString ifcStoreyGlobalId = {});
+                    QString ifcBuildingGlobalId = {}, QString ifcStoreyGlobalId = {},
+                    cad::import::IfcMetadata ifcMetadata = {});
 
     const char* typeId() const noexcept override;
     FeatureRole role() const noexcept override;
@@ -33,6 +35,7 @@ public:
     const QString& ifcBuildingGlobalId() const noexcept;
     const QString& ifcStorey() const noexcept;
     const QString& ifcStoreyGlobalId() const noexcept;
+    const cad::import::IfcMetadata& ifcMetadata() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -49,6 +52,7 @@ private:
     QString ifcBuildingGlobalId_;
     QString ifcStorey_;
     QString ifcStoreyGlobalId_;
+    cad::import::IfcMetadata ifcMetadata_;
 };
 
 } // namespace cad::parametric

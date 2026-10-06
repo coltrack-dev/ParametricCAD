@@ -21,6 +21,7 @@
 class CadViewer;
 class FeatureEditorPanel;
 class BimNavigationPanel;
+class BimInspectorPanel;
 namespace cad::viewer { class ModelPresenter; }
 
 class MainWindow final : public QMainWindow
@@ -56,6 +57,7 @@ private:
     void createActions();
     void createParametricPanel();
     void createBimPanel();
+    void updateBimInspector(const QStringList& featureIds);
     void refreshBimNavigation();
     void refreshModelView(bool fitView = false);
     void refreshVisibilityView();
@@ -190,6 +192,7 @@ private:
     CadViewer* viewer_{nullptr};
     FeatureEditorPanel* featureEditorPanel_{nullptr};
     BimNavigationPanel* bimNavigationPanel_{nullptr};
+    BimInspectorPanel* bimInspectorPanel_{nullptr};
     cad::application::BimNavigationModel bimNavigationModel_;
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;
     QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>> projectLoadWatcher_;

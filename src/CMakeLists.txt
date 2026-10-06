@@ -16,6 +16,8 @@ set(PARAMETRIC_CAD_SOURCES
     application/BimNavigationModel.h
     import/IfcOpenShellAdapter.cpp
     import/IfcOpenShellAdapter.h
+    import/IfcMetadata.cpp
+    import/IfcMetadata.h
     application/VisibilityMode.h
     commands/FeatureCommands.cpp
     commands/FeatureCommands.h
@@ -42,6 +44,8 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/FeatureEditorPanel.h
     viewer/BimNavigationPanel.cpp
     viewer/BimNavigationPanel.h
+    viewer/BimInspectorPanel.cpp
+    viewer/BimInspectorPanel.h
     viewer/CadViewer.cpp
     viewer/CadViewer.h
     model/Document.cpp
