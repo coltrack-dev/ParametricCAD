@@ -36,7 +36,17 @@ QString zipError(const char* operation, const QString& name = {})
 bool replaceFile(const QString& temporary, const QString& destination, QString& error)
 {
     std::error_code code;
-    std::filesystem::rename(temporary.toStdString(), destination.toStdString(), code);
+    // std::string is not a safe representation for non-ASCII Windows paths.
+    // Use the wide filesystem path there; UTF-8 is the native narrow path
+    // representation on the Unix platforms supported by the project.
+#ifdef _WIN32
+    const std::filesystem::path temporaryPath(temporary.toStdWString());
+    const std::filesystem::path destinationPath(destination.toStdWString());
+#else
+    const std::filesystem::path temporaryPath(temporary.toUtf8().constData());
+    const std::filesystem::path destinationPath(destination.toUtf8().constData());
+#endif
+    std::filesystem::rename(temporaryPath, destinationPath, code);
     if (!code) return true;
 
     // std::filesystem::rename replaces an existing file on POSIX, but not on

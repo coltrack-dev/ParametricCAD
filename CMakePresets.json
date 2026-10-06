@@ -1,0 +1,37 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows 11 MSVC Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-win",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_PREFIX_PATH": "$env{Qt6_ROOT};$env{OpenCASCADE_DIR}",
+        "OpenCASCADE_DIR": "$env{OpenCASCADE_DIR}",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_MODE": "OFF",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "PARAMETRIC_CAD_BUILD_TESTS": "ON",
+        "PARAMETRIC_CAD_ENABLE_IFC": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release",
+      "verbose": true
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

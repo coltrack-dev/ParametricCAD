@@ -23,9 +23,38 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Concu
 # Open CASCADE package naming differs between distributions.
 # The official/config package normally exposes OpenCASCADE_* variables.
 find_package(OpenCASCADE REQUIRED)
-find_library(PARAMETRIC_CAD_MINIZIP_LIBRARY NAMES minizip)
-if(NOT PARAMETRIC_CAD_MINIZIP_LIBRARY)
-    message(FATAL_ERROR "libminizip is required for portable .pcad containers")
+
+# Prefer the package target supplied by vcpkg (and other CONFIG packages). It
+# carries both the minizip include directory and its transitive dependencies.
+# Keep a small Unix fallback for distributions that only provide libminizip
+# and headers, without making pkg-config or a platform-specific path required.
+set(PARAMETRIC_CAD_MINIZIP_TARGET "")
+find_package(unofficial-minizip CONFIG QUIET)
+if(TARGET unofficial::minizip::minizip)
+    set(PARAMETRIC_CAD_MINIZIP_TARGET unofficial::minizip::minizip)
+elseif(TARGET unofficial::minizip::minizip-static)
+    set(PARAMETRIC_CAD_MINIZIP_TARGET unofficial::minizip::minizip-static)
+endif()
+
+if(NOT PARAMETRIC_CAD_MINIZIP_TARGET)
+    if(WIN32)
+        message(FATAL_ERROR
+            "minizip was not found as the CONFIG target "
+            "unofficial::minizip::minizip. Install the vcpkg minizip port "
+            "for the active triplet and configure with its vcpkg toolchain.")
+    endif()
+
+    find_path(PARAMETRIC_CAD_MINIZIP_INCLUDE_DIR
+        NAMES minizip/unzip.h minizip/zip.h)
+    find_library(PARAMETRIC_CAD_MINIZIP_LIBRARY NAMES minizip)
+    if(NOT PARAMETRIC_CAD_MINIZIP_INCLUDE_DIR OR NOT PARAMETRIC_CAD_MINIZIP_LIBRARY)
+        message(FATAL_ERROR "minizip headers and library are required for portable .pcad containers")
+    endif()
+    add_library(ParametricCAD::minizip UNKNOWN IMPORTED)
+    set_target_properties(ParametricCAD::minizip PROPERTIES
+        IMPORTED_LOCATION "${PARAMETRIC_CAD_MINIZIP_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${PARAMETRIC_CAD_MINIZIP_INCLUDE_DIR}")
+    set(PARAMETRIC_CAD_MINIZIP_TARGET ParametricCAD::minizip)
 endif()
 
 if(PARAMETRIC_CAD_ENABLE_IFC)

@@ -170,5 +170,6 @@ section clipping, and saved-view restoration.
 - [Parametric feature architecture](docs/PARAMETRIC_FEATURES.md)
 - [.pcad format](docs/PCAD_FORMAT.md)
 - [Performance and project loading](docs/PERFORMANCE.md)
+- [Windows 11 build](docs/WINDOWS_BUILD.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Undo/Redo](docs/UNDO_REDO.md)

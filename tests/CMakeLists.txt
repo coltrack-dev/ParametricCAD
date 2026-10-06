@@ -86,7 +86,7 @@ if(DEFINED OpenCASCADE_LIBRARY_DIR)
     target_link_directories(model_test_support PUBLIC ${OpenCASCADE_LIBRARY_DIR})
 endif()
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
-    ${PARAMETRIC_CAD_MINIZIP_LIBRARY}
+    ${PARAMETRIC_CAD_MINIZIP_TARGET}
     TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet TKOffset)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)

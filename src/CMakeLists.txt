@@ -95,6 +95,12 @@ target_include_directories(ParametricCAD
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+if(WIN32)
+    # OCCT's native WNT window headers include Windows SDK declarations;
+    # prevent min/max macros from colliding with the C++/Qt code.
+    target_compile_definitions(ParametricCAD PRIVATE NOMINMAX)
+endif()
+
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(ParametricCAD PRIVATE
         PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
@@ -121,7 +127,7 @@ target_link_libraries(ParametricCAD
         Qt6::OpenGL
         Qt6::OpenGLWidgets
         Qt6::Concurrent
-        ${PARAMETRIC_CAD_MINIZIP_LIBRARY}
+        ${PARAMETRIC_CAD_MINIZIP_TARGET}
 
         # OCCT Foundation
         TKernel
