@@ -42,7 +42,9 @@ struct IfcImportProduct
     QString name;
     QString description;
     QString building;
+    QString buildingGlobalId;
     QString storey;
+    QString storeyGlobalId;
     QStringList representationTypes;
     int placementDepth{0};
 };

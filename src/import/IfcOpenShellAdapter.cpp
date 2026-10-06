@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
 #include <BRepBuilderAPI_Transform.hxx>
@@ -29,13 +31,113 @@ bool excluded(const QString& type)
         || type == "IfcBuildingStorey";
 }
 
-QString parentValue(const IfcGeom::Element& element, const char* requestedType)
+struct SpatialMetadata
 {
-    for (const auto* parent : element.parents()) {
-        if (parent && parent->type() == requestedType)
-            return QString::fromStdString(parent->name());
+    QString building;
+    QString buildingGlobalId;
+    QString storey;
+    QString storeyGlobalId;
+};
+
+template <typename Schema>
+struct SpatialElementType;
+
+template <>
+struct SpatialElementType<Ifc2x3>
+{
+    using type = Ifc2x3::IfcSpatialStructureElement;
+};
+
+template <>
+struct SpatialElementType<Ifc4>
+{
+    using type = Ifc4::IfcSpatialElement;
+};
+
+template <typename Object>
+QString objectLabel(const Object* object, const char* fallbackPrefix)
+{
+    if (!object) return {};
+    const auto name = object->Name();
+    if (name && !name->empty()) return QString::fromStdString(*name);
+    const auto globalId = object->GlobalId();
+    if (!globalId.empty()) {
+        return QStringLiteral("%1 %2").arg(QString::fromLatin1(fallbackPrefix),
+                                            QString::fromStdString(globalId.substr(0, 8)));
     }
-    return {};
+    return QString::fromLatin1(fallbackPrefix);
+}
+
+template <typename Schema>
+void buildSpatialIndex(IfcParse::IfcFile& file,
+                       std::unordered_map<uint32_t, SpatialMetadata>& index)
+{
+    using SpatialElement = typename SpatialElementType<Schema>::type;
+    using ObjectDefinition = typename Schema::IfcObjectDefinition;
+
+    std::unordered_map<uint32_t, SpatialElement*> containedBy;
+    const auto containment = file.instances_by_type<
+        typename Schema::IfcRelContainedInSpatialStructure>();
+    for (auto it = containment->begin(); it != containment->end(); ++it) {
+        auto* relationship = *it;
+        if (!relationship || !relationship->RelatingStructure()) continue;
+        const auto elements = relationship->RelatedElements();
+        if (!elements) continue;
+        for (auto elementIt = elements->begin(); elementIt != elements->end(); ++elementIt) {
+            if (*elementIt)
+                containedBy[(*elementIt)->identity()] = relationship->RelatingStructure();
+        }
+    }
+
+    std::unordered_map<uint32_t, ObjectDefinition*> decomposedBy;
+    const auto aggregates = file.instances_by_type<typename Schema::IfcRelAggregates>();
+    for (auto it = aggregates->begin(); it != aggregates->end(); ++it) {
+        auto* relationship = *it;
+        if (!relationship || !relationship->RelatingObject()) continue;
+        const auto parts = relationship->RelatedObjects();
+        if (!parts) continue;
+        for (auto partIt = parts->begin(); partIt != parts->end(); ++partIt) {
+            if (*partIt)
+                decomposedBy[(*partIt)->identity()] = relationship->RelatingObject();
+        }
+    }
+
+    for (const auto& [productIdentity, initialStructure] : containedBy) {
+        auto* current = initialStructure;
+        typename Schema::IfcBuildingStorey* storey = nullptr;
+        typename Schema::IfcBuilding* building = nullptr;
+        std::unordered_set<uint32_t> visited;
+        while (current && visited.insert(current->identity()).second) {
+            if (!storey) storey = current->template as<typename Schema::IfcBuildingStorey>();
+            if (!building) building = current->template as<typename Schema::IfcBuilding>();
+            const auto parent = decomposedBy.find(current->identity());
+            if (parent == decomposedBy.end()) break;
+            current = parent->second->template as<SpatialElement>();
+        }
+        if (!storey && !building) continue;
+
+        SpatialMetadata metadata;
+        if (building) {
+            metadata.building = objectLabel(building, "IfcBuilding");
+            metadata.buildingGlobalId = QString::fromStdString(building->GlobalId());
+        }
+        if (storey) {
+            metadata.storey = objectLabel(storey, "IfcBuildingStorey");
+            metadata.storeyGlobalId = QString::fromStdString(storey->GlobalId());
+        }
+        index.emplace(productIdentity, std::move(metadata));
+    }
+}
+
+std::unordered_map<uint32_t, SpatialMetadata> spatialIndex(IfcParse::IfcFile& file)
+{
+    std::unordered_map<uint32_t, SpatialMetadata> result;
+    const auto schema = QString::fromStdString(file.schema()->name());
+    if (schema.contains(QStringLiteral("2X3"), Qt::CaseInsensitive))
+        buildSpatialIndex<Ifc2x3>(file, result);
+    else
+        buildSpatialIndex<Ifc4>(file, result);
+    return result;
 }
 
 template <typename Schema>
@@ -154,6 +256,7 @@ IfcImportResult IfcOpenShellAdapter::importFile(
             result.statistics.failedCount = 1;
             return result;
         }
+        const auto containment = spatialIndex(*file);
 
         std::size_t processed = 0;
         do {
@@ -195,11 +298,21 @@ IfcImportResult IfcOpenShellAdapter::importFile(
                 shape = BRepBuilderAPI_Transform(shape, scale, true).Shape();
                 if (shape.IsNull()) throw std::runtime_error("normalized shape is null");
 
+                QString building;
+                QString buildingGlobalId;
+                QString storey;
+                QString storeyGlobalId;
+                if (const auto found = containment.find(element->product()->identity());
+                    found != containment.end()) {
+                    building = found->second.building;
+                    buildingGlobalId = found->second.buildingGlobalId;
+                    storey = found->second.storey;
+                    storeyGlobalId = found->second.storeyGlobalId;
+                }
                 result.products.push_back({std::move(shape),
                     QString::fromStdString(element->guid()), type,
                     QString::fromStdString(element->name()), {},
-                    parentValue(*element, "IfcBuilding"),
-                    parentValue(*element, "IfcBuildingStorey"),
+                    building, buildingGlobalId, storey, storeyGlobalId,
                     representationTypes(element->product()),
                     placementDepth(element->product())});
                 ++result.statistics.productsWithGeometry;

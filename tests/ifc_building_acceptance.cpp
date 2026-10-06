@@ -1,4 +1,5 @@
 #include "application/IfcImporter.h"
+#include "application/BimNavigationModel.h"
 #include "model/Body.h"
 #include "model/Document.h"
 #include "model/Feature.h"
@@ -93,6 +94,9 @@ int main()
         check(result.statistics.importedCount > 1000, "Building imported count");
         check(result.statistics.failedCount == 0, "Building geometry failures");
         const auto modelBounds = bounds(body);
+        cad::application::BimNavigationModel navigation;
+        navigation.rebuild(body);
+        check(!navigation.buildings().empty(), "Building BIM hierarchy");
 
         std::map<QString, int> representations;
         std::vector<const cad::import::IfcImportProduct*> mapped;
@@ -156,6 +160,20 @@ int main()
         for (const auto& diagnostic : result.diagnostics)
             std::cout << "  diagnostic " << diagnostic.entityType.toStdString()
                       << ": " << diagnostic.message.toStdString() << '\n';
+
+        std::size_t storeyCount = 0;
+        std::size_t categoryCount = 0;
+        std::cout << "  BIM buildings: " << navigation.buildings().size() << '\n';
+        for (const auto& building : navigation.buildings()) {
+            std::cout << "    Building: " << building.name << '\n';
+            storeyCount += building.storeys.size();
+            for (const auto& storey : building.storeys) {
+                categoryCount += storey.categories.size();
+                std::cout << "      Storey: " << storey.name << " ("
+                          << storey.categories.size() << " categories)\n";
+            }
+        }
+        check(storeyCount > 0 && categoryCount > 0, "Building BIM storeys/categories");
 
         check(QFile::remove(temporaryIfc), "remove source IFC");
         const auto pcadPath = directory.filePath("building.pcad");

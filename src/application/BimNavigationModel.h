@@ -14,7 +14,9 @@ struct BimFeatureEntry
     std::string globalId;
     std::string entityType;
     std::string building;
+    std::string buildingGlobalId;
     std::string storey;
+    std::string storeyGlobalId;
     std::string category;
 };
 
@@ -27,12 +29,14 @@ struct BimCategoryEntry
 struct BimStoreyEntry
 {
     std::string name;
+    std::string globalId;
     std::vector<BimCategoryEntry> categories;
 };
 
 struct BimBuildingEntry
 {
     std::string name;
+    std::string globalId;
     std::vector<BimStoreyEntry> storeys;
 };
 

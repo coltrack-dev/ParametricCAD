@@ -1,4 +1,5 @@
 #include "application/IfcImporter.h"
+#include "application/BimNavigationModel.h"
 #include "model/Body.h"
 #include "model/Document.h"
 #include "model/Feature.h"
@@ -150,13 +151,41 @@ int main()
         std::map<std::string, int> topologyCounts;
         std::map<std::string, std::shared_ptr<cad::parametric::ImportedFeature>> representatives;
         int nonNull = 0;
+        int spatialMetadata = 0;
         for (const auto& feature : unavailableBody.features()) {
             auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
             if (importedFeature->shape().IsNull()) continue;
             ++nonNull;
+            if (!importedFeature->ifcBuilding().isEmpty()
+                && !importedFeature->ifcStorey().isEmpty()) ++spatialMetadata;
             ++topologyCounts[shapeKind(importedFeature->shape())];
             const auto type = importedFeature->ifcEntityType().toStdString();
             if (!representatives.contains(type)) representatives[type] = importedFeature;
+        }
+        check(spatialMetadata > 0, "Duplex spatial containment metadata");
+        std::cout << "  products with building/storey metadata: " << spatialMetadata << '\n';
+        for (const auto& type : {std::string("IfcWall"), std::string("IfcSlab"),
+                                 std::string("IfcDoor"), std::string("IfcWindow")}) {
+            const auto& feature = representatives.at(type);
+            std::cout << "  spatial " << type << " "
+                      << feature->ifcGlobalId().toStdString() << " building='"
+                      << feature->ifcBuilding().toStdString() << "' storey='"
+                      << feature->ifcStorey().toStdString() << "'\n";
+            check(!feature->ifcBuilding().isEmpty() && !feature->ifcStorey().isEmpty(),
+                  "representative spatial metadata");
+        }
+        cad::application::BimNavigationModel navigation;
+        navigation.rebuild(unavailableBody);
+        check(!navigation.buildings().empty(), "Duplex BIM buildings");
+        std::cout << "  BIM hierarchy:\n";
+        for (const auto& building : navigation.buildings()) {
+            std::cout << "    Building: " << building.name << '\n';
+            for (const auto& storey : building.storeys) {
+                std::cout << "      Storey: " << storey.name << '\n';
+                for (const auto& category : storey.categories)
+                    std::cout << "        " << category.name << ": "
+                              << category.features.size() << '\n';
+            }
         }
         std::cout << "  non-null shapes: " << nonNull << '\n';
         for (const auto& [kind, count] : topologyCounts)
@@ -235,9 +264,13 @@ int main()
         check(ProjectFile::save(pcadPath, roundTripDocument, roundTripBody, roundTripError),
               "save Duplex BRep");
         std::set<QString> sourceGlobalIds;
+        std::map<QString, QString> sourceSpatialIds;
         for (const auto& feature : roundTripBody.features()) {
             const auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
             sourceGlobalIds.insert(importedFeature->ifcGlobalId());
+            sourceSpatialIds.emplace(importedFeature->ifcGlobalId(),
+                importedFeature->ifcBuildingGlobalId() + "|"
+                + importedFeature->ifcStoreyGlobalId());
         }
         const auto saveMilliseconds = saveTimer.elapsed();
         const auto pcadSize = QFileInfo(pcadPath).size();
@@ -253,11 +286,16 @@ int main()
         check(reloadedBody.features().size() == roundTripBody.features().size(),
               "roundtrip feature count");
         std::set<QString> loadedGlobalIds;
+        std::map<QString, QString> loadedSpatialIds;
         for (const auto& feature : reloadedBody.features()) {
             const auto importedFeature = std::static_pointer_cast<cad::parametric::ImportedFeature>(feature);
             loadedGlobalIds.insert(importedFeature->ifcGlobalId());
+            loadedSpatialIds.emplace(importedFeature->ifcGlobalId(),
+                importedFeature->ifcBuildingGlobalId() + "|"
+                + importedFeature->ifcStoreyGlobalId());
         }
         check(loadedGlobalIds == sourceGlobalIds, "roundtrip IFC GlobalIds");
+        check(loadedSpatialIds == sourceSpatialIds, "roundtrip IFC spatial IDs");
         check(std::abs(reloadedBounds.xmin - importedBounds.xmin) < 1.0e-5
                   && std::abs(reloadedBounds.xmax - importedBounds.xmax) < 1.0e-5,
               "roundtrip bounds");

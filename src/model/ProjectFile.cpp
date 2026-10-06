@@ -799,7 +799,9 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 o.value("ifcEntityType").toString(),
                 o.value("ifcDescription").toString(),
                 o.value("ifcBuilding").toString(),
-                o.value("ifcStorey").toString());
+                o.value("ifcStorey").toString(),
+                o.value("ifcBuildingGlobalId").toString(),
+                o.value("ifcStoreyGlobalId").toString());
         }}
     };
     return registry;

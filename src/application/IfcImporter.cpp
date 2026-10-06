@@ -39,7 +39,8 @@ std::vector<cad::parametric::ParametricFeature::Ptr> IfcImporter::makeFeatures(
                                                        : product.name.toStdString(),
             product.shape, QStringLiteral("IFC"), path,
             product.globalId, product.entityType, product.description,
-            product.building, product.storey));
+            product.building, product.storey,
+            product.buildingGlobalId, product.storeyGlobalId));
     }
     return features;
 }

@@ -15,7 +15,8 @@ public:
     ImportedFeature(std::string id, std::string name, TopoDS_Shape sourceShape,
                     QString sourceFormat, QString sourceFile, QString ifcGlobalId,
                     QString ifcEntityType, QString ifcDescription,
-                    QString ifcBuilding, QString ifcStorey);
+                    QString ifcBuilding, QString ifcStorey,
+                    QString ifcBuildingGlobalId = {}, QString ifcStoreyGlobalId = {});
 
     const char* typeId() const noexcept override;
     FeatureRole role() const noexcept override;
@@ -29,7 +30,9 @@ public:
     const QString& ifcEntityType() const noexcept;
     const QString& ifcDescription() const noexcept;
     const QString& ifcBuilding() const noexcept;
+    const QString& ifcBuildingGlobalId() const noexcept;
     const QString& ifcStorey() const noexcept;
+    const QString& ifcStoreyGlobalId() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -43,7 +46,9 @@ private:
     QString ifcEntityType_;
     QString ifcDescription_;
     QString ifcBuilding_;
+    QString ifcBuildingGlobalId_;
     QString ifcStorey_;
+    QString ifcStoreyGlobalId_;
 };
 
 } // namespace cad::parametric

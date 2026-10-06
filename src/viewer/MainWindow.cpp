@@ -504,6 +504,14 @@ void MainWindow::createBimPanel()
             refreshVisibilityView();
         });
     addDockWidget(Qt::RightDockWidgetArea, dockWidget);
+    for (auto* action : menuBar()->actions()) {
+        auto* menu = action->menu();
+        if (menu && menu->title() == QStringLiteral("&View")) {
+            menu->addSeparator();
+            menu->addAction(dockWidget->toggleViewAction());
+            break;
+        }
+    }
     refreshBimNavigation();
 }
 

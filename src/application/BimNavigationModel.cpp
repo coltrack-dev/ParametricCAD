@@ -55,16 +55,25 @@ void BimNavigationModel::rebuild(const cad::parametric::Body& body)
                                                     : feature->name(),
             imported.ifcGlobalId().toStdString(), imported.ifcEntityType().toStdString(),
             valueOr(imported.ifcBuilding(), "<No Building>"),
+            imported.ifcBuildingGlobalId().toStdString(),
             valueOr(imported.ifcStorey(), "<Unassigned Storey>"),
+            imported.ifcStoreyGlobalId().toStdString(),
             friendlyCategory(imported.ifcEntityType().toStdString())};
-        index[entry.building][entry.storey][entry.category].push_back(std::move(entry));
+        const auto buildingKey = entry.buildingGlobalId.empty()
+            ? "name:" + entry.building : "id:" + entry.buildingGlobalId;
+        const auto storeyKey = entry.storeyGlobalId.empty()
+            ? "name:" + entry.storey : "id:" + entry.storeyGlobalId;
+        index[buildingKey][storeyKey][entry.category].push_back(std::move(entry));
     }
 
     buildings_.clear();
-    for (auto& [buildingName, storeys] : index) {
-        BimBuildingEntry building{buildingName, {}};
-        for (auto& [storeyName, categories] : storeys) {
-            BimStoreyEntry storey{storeyName, {}};
+    for (auto& [buildingKey, storeys] : index) {
+        const auto& firstFeature = storeys.begin()->second.begin()->second.front();
+        BimBuildingEntry building{firstFeature.building, firstFeature.buildingGlobalId, {}};
+        for (auto& [storeyKey, categories] : storeys) {
+            const auto& firstStoreyFeature = categories.begin()->second.front();
+            BimStoreyEntry storey{firstStoreyFeature.storey,
+                                  firstStoreyFeature.storeyGlobalId, {}};
             for (auto& [categoryName, features] : categories) {
                 BimCategoryEntry category{categoryName, std::move(features)};
                 sortFeatures(category);
