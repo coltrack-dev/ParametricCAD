@@ -272,9 +272,24 @@ std::vector<cad::topology::TopologicalReference> legacyReferences(
     result.reserve(indices.size());
     for (const int index : indices) {
         result.push_back({featureId, cad::topology::TopologicalKind::Edge, index, std::nullopt,
-                          std::nullopt});
+                          std::nullopt, std::nullopt});
     }
     return result;
+}
+
+void upgradeLegacyReferences(
+    const ParametricFeature::Ptr& base,
+    std::vector<cad::topology::TopologicalReference>& references)
+{
+    if (!base || base->shape().IsNull()) return;
+    TopTools_IndexedMapOfShape edges;
+    TopExp::MapShapes(base->shape(), TopAbs_EDGE, edges);
+    for (auto& reference : references) {
+        if (reference.signature || !reference.transientIndex
+            || *reference.transientIndex <= 0 || *reference.transientIndex > edges.Extent()) continue;
+        reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            base->id(), base->shape(), edges(*reference.transientIndex));
+    }
 }
 
 } // namespace
@@ -1818,6 +1833,7 @@ FilletFeature::FilletFeature(
     if (!std::isfinite(radius_) || radius_ <= 0.001) {
         throw std::invalid_argument("Fillet radius must be positive");
     }
+    upgradeLegacyReferences(base_, references_);
     validateReferences(references_, base_->id());
     addDependency(base_);
 }
@@ -1945,6 +1961,7 @@ ChamferFeature::ChamferFeature(
     if (!std::isfinite(distance_) || distance_ <= 0.001) {
         throw std::invalid_argument("Chamfer distance must be positive");
     }
+    upgradeLegacyReferences(base_, references_);
     validateReferences(references_, base_->id());
     addDependency(base_);
 }

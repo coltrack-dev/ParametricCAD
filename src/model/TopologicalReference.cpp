@@ -11,6 +11,7 @@
 #include <GProp_GProps.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
 
@@ -21,6 +22,7 @@
 #include <limits>
 #include <stdexcept>
 #include <tuple>
+#include <sstream>
 
 namespace cad::topology {
 
@@ -204,6 +206,11 @@ FaceSignature makeFaceSignature(const TopoDS_Face& face)
     result.area = properties.Mass();
     result.boundingBox = Bnd_Box();
     BRepBndLib::Add(face, result.boundingBox);
+    for (TopExp_Explorer explorer(face, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+        ++result.boundaryEdgeCount;
+        result.boundaryCurveKinds.push_back(curveKind(BRepAdaptor_Curve(
+            TopoDS::Edge(explorer.Current())).GetType()));
+    }
     if (result.surfaceKind == SurfaceKind::Plane) {
         gp_Dir normal = surface.Plane().Axis().Direction();
         if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
@@ -246,18 +253,151 @@ EdgeSignature makeEdgeSignature(const TopoDS_Edge& edge)
     return result;
 }
 
-TopologicalSignature makeSignature(const TopoDS_Shape& shape)
+void addAdjacency(const TopoDS_Shape& owner, const TopoDS_Shape& subshape,
+                  TopologicalSignature& signature)
 {
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(owner, TopAbs_FACE, faces);
+    if (auto* face = std::get_if<FaceSignature>(&signature)) {
+        for (int index = 1; index <= faces.Extent(); ++index) {
+            const auto candidate = TopoDS::Face(faces(index));
+            for (TopExp_Explorer explorer(candidate, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+                if (explorer.Current().IsSame(subshape)) {
+                    ++face->adjacentFaceCount;
+                    break;
+                }
+            }
+        }
+    } else if (auto* edge = std::get_if<EdgeSignature>(&signature)) {
+        for (int index = 1; index <= faces.Extent(); ++index) {
+            const auto candidate = TopoDS::Face(faces(index));
+            for (TopExp_Explorer explorer(candidate, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+                if (explorer.Current().IsSame(subshape)) {
+                    ++edge->adjacentFaceCount;
+                    edge->adjacentSurfaceKinds.push_back(
+                        surfaceKind(BRepAdaptor_Surface(candidate, Standard_True).GetType()));
+                    break;
+                }
+            }
+        }
+    } else if (auto* vertex = std::get_if<VertexSignature>(&signature)) {
+        TopTools_IndexedMapOfShape edges;
+        TopExp::MapShapes(owner, TopAbs_EDGE, edges);
+        for (int index = 1; index <= edges.Extent(); ++index) {
+            const auto edge = TopoDS::Edge(edges(index));
+            for (TopExp_Explorer explorer(edge, TopAbs_VERTEX); explorer.More(); explorer.Next()) {
+                if (explorer.Current().IsSame(subshape)) {
+                    ++vertex->connectedEdgeCount;
+                    break;
+                }
+            }
+        }
+        vertex->connectedFaceCount = 0;
+        for (int index = 1; index <= faces.Extent(); ++index) {
+            const auto face = TopoDS::Face(faces(index));
+            for (TopExp_Explorer explorer(face, TopAbs_VERTEX); explorer.More(); explorer.Next()) {
+                if (explorer.Current().IsSame(subshape)) {
+                    ++vertex->connectedFaceCount;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+bool isBoxLike(const TopoDS_Shape& owner)
+{
+    TopTools_IndexedMapOfShape faces, edges, vertices;
+    TopExp::MapShapes(owner, TopAbs_FACE, faces);
+    TopExp::MapShapes(owner, TopAbs_EDGE, edges);
+    TopExp::MapShapes(owner, TopAbs_VERTEX, vertices);
+    return faces.Extent() == 6 && edges.Extent() == 12 && vertices.Extent() == 8;
+}
+
+std::optional<std::string> boxFaceSemantic(const TopoDS_Shape& owner, const TopoDS_Face& face)
+{
+    if (!isBoxLike(owner)) return {};
+    BRepAdaptor_Surface surface(face, Standard_True);
+    if (surface.GetType() != GeomAbs_Plane) return {};
+    gp_Dir normal = surface.Plane().Axis().Direction();
+    if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+    const char* axis = nullptr;
+    double sign = 0.0;
+    if (std::abs(normal.X()) > 0.99) { axis = "X"; sign = normal.X(); }
+    else if (std::abs(normal.Y()) > 0.99) { axis = "Y"; sign = normal.Y(); }
+    else if (std::abs(normal.Z()) > 0.99) { axis = "Z"; sign = normal.Z(); }
+    if (!axis) return {};
+    std::ostringstream value;
+    value << "Box.Face:" << (sign >= 0.0 ? "+" : "-") << axis;
+    return value.str();
+}
+
+std::optional<std::string> primitiveSemanticId(const TopoDS_Shape& owner, const TopoDS_Shape& subshape)
+{
+    if (subshape.ShapeType() == TopAbs_FACE) {
+        if (const auto result = boxFaceSemantic(owner, TopoDS::Face(subshape))) return result;
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(owner, TopAbs_FACE, faces);
+        int cylindricalFaces = 0;
+        for (int index = 1; index <= faces.Extent(); ++index) {
+            if (BRepAdaptor_Surface(TopoDS::Face(faces(index)), Standard_True).GetType()
+                == GeomAbs_Cylinder) ++cylindricalFaces;
+        }
+        if (faces.Extent() == 3 && cylindricalFaces == 1) {
+            const auto type = BRepAdaptor_Surface(TopoDS::Face(subshape), Standard_True).GetType();
+            if (type == GeomAbs_Cylinder) return "Cylinder.Face:Lateral";
+            GProp_GProps props;
+            BRepGProp::SurfaceProperties(TopoDS::Face(subshape), props);
+            Bnd_Box bounds;
+            BRepBndLib::Add(owner, bounds);
+            Standard_Real xMin, yMin, zMin, xMax, yMax, zMax;
+            bounds.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+            return props.CentreOfMass().Z() > (zMin + zMax) * 0.5
+                ? "Cylinder.Face:Top" : "Cylinder.Face:Bottom";
+        }
+    }
+    if (subshape.ShapeType() == TopAbs_EDGE && isBoxLike(owner)) {
+        const auto edge = TopoDS::Edge(subshape);
+        BRepAdaptor_Curve curve(edge);
+        if (curve.GetType() != GeomAbs_Line) return {};
+        Standard_Real xMin, yMin, zMin, xMax, yMax, zMax;
+        Bnd_Box bounds;
+        BRepBndLib::Add(owner, bounds);
+        bounds.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+        const gp_Dir direction = curve.Line().Direction();
+        const gp_Pnt midpoint = curve.Value(curve.FirstParameter()
+            + (curve.LastParameter() - curve.FirstParameter()) * 0.5);
+        const auto side = [](const double value, const double low, const double high) {
+            return std::abs(value - low) <= std::abs(value - high) ? 0 : 1;
+        };
+        std::ostringstream value;
+        if (std::abs(direction.X()) > 0.99)
+            value << "Box.Edge:X:" << side(midpoint.Y(), yMin, yMax) << ':' << side(midpoint.Z(), zMin, zMax);
+        else if (std::abs(direction.Y()) > 0.99)
+            value << "Box.Edge:Y:" << side(midpoint.X(), xMin, xMax) << ':' << side(midpoint.Z(), zMin, zMax);
+        else if (std::abs(direction.Z()) > 0.99)
+            value << "Box.Edge:Z:" << side(midpoint.X(), xMin, xMax) << ':' << side(midpoint.Y(), yMin, yMax);
+        else return {};
+        return value.str();
+    }
+    return {};
+}
+
+TopologicalSignature makeSignature(const TopoDS_Shape& shape, const TopoDS_Shape& owner)
+{
+    TopologicalSignature result;
     switch (shape.ShapeType()) {
-    case TopAbs_FACE: return makeFaceSignature(TopoDS::Face(shape));
-    case TopAbs_EDGE: return makeEdgeSignature(TopoDS::Edge(shape));
+    case TopAbs_FACE: result = makeFaceSignature(TopoDS::Face(shape)); break;
+    case TopAbs_EDGE: result = makeEdgeSignature(TopoDS::Edge(shape)); break;
     case TopAbs_VERTEX: {
-        VertexSignature result{BRep_Tool::Pnt(TopoDS::Vertex(shape)), Bnd_Box()};
-        BRepBndLib::Add(shape, result.boundingBox);
-        return result;
+        result = VertexSignature{BRep_Tool::Pnt(TopoDS::Vertex(shape)), Bnd_Box()};
+        BRepBndLib::Add(shape, std::get<VertexSignature>(result).boundingBox);
+        break;
     }
     default: throw std::invalid_argument("Unsupported topological shape type");
     }
+    addAdjacency(owner, shape, result);
+    return result;
 }
 
 double boxDiagonal(const Bnd_Box& box)
@@ -287,6 +427,9 @@ double signatureScore(const TopologicalSignature& reference,
         const auto& b = std::get<FaceSignature>(candidate);
         if (a->surfaceKind != b.surfaceKind || !closeOrientedDirection(a->normal, b.normal, tolerance))
             return std::numeric_limits<double>::infinity();
+        if ((a->boundaryEdgeCount > 0 && a->boundaryEdgeCount != b.boundaryEdgeCount)
+            || (a->adjacentFaceCount > 0 && a->adjacentFaceCount != b.adjacentFaceCount))
+            return std::numeric_limits<double>::infinity();
         return pointScore(a->centroid, b.centroid, a->boundingBox)
             + std::abs(a->area - b.area) / std::max(1.0, std::abs(a->area));
     }
@@ -299,12 +442,17 @@ double signatureScore(const TopologicalSignature& reference,
             a->firstPoint.Distance(b.lastPoint) + a->lastPoint.Distance(b.firstPoint));
         if (a->radius && (!b.radius || !closeRelative(*a->radius, *b.radius, tolerance.radius)))
             return std::numeric_limits<double>::infinity();
+        if (a->adjacentFaceCount > 0 && a->adjacentFaceCount != b.adjacentFaceCount)
+            return std::numeric_limits<double>::infinity();
         return endpointDistance / boxDiagonal(a->boundingBox)
             + pointScore(a->midpoint, b.midpoint, a->boundingBox)
             + std::abs(a->length - b.length) / std::max(1.0, std::abs(a->length));
     }
     const auto& a = std::get<VertexSignature>(reference);
     const auto& b = std::get<VertexSignature>(candidate);
+    if ((a.connectedEdgeCount > 0 && a.connectedEdgeCount != b.connectedEdgeCount)
+        || (a.connectedFaceCount > 0 && a.connectedFaceCount != b.connectedFaceCount))
+        return std::numeric_limits<double>::infinity();
     return pointScore(a.point, b.point, a.boundingBox);
 }
 
@@ -312,7 +460,9 @@ TopologicalSignature signatureFromJson(const QJsonObject& object, const Topologi
 {
     if (kind == TopologicalKind::Vertex)
         return VertexSignature{pointFromJson(object.value("point")),
-                               boxFromJson(object.value("boundingBox"))};
+                               boxFromJson(object.value("boundingBox")),
+                               object.value("connectedEdgeCount").toInt(),
+                               object.value("connectedFaceCount").toInt()};
     if (kind == TopologicalKind::Edge) {
         EdgeSignature result;
         result.curveKind = curveKindFromJson(object.value("curveKind").toString());
@@ -324,12 +474,15 @@ TopologicalSignature signatureFromJson(const QJsonObject& object, const Topologi
             result.direction = directionFromJson(object.value("direction"));
         if (object.contains("radius")) result.radius = object.value("radius").toDouble();
         result.boundingBox = boxFromJson(object.value("boundingBox"));
+        result.adjacentFaceCount = object.value("adjacentFaceCount").toInt();
         return result;
     }
     FaceSignature result;
     result.surfaceKind = surfaceKindFromJson(object.value("surfaceKind").toString());
     result.centroid = pointFromJson(object.value("centroid"));
     result.area = object.value("area").toDouble();
+    result.boundaryEdgeCount = object.value("boundaryEdgeCount").toInt();
+    result.adjacentFaceCount = object.value("adjacentFaceCount").toInt();
     if (object.contains("normal")) result.normal = directionFromJson(object.value("normal"));
     if (object.contains("radius")) result.radius = object.value("radius").toDouble();
     result.boundingBox = boxFromJson(object.value("boundingBox"));
@@ -357,8 +510,16 @@ TopologicalReference TopologicalSignatureBuilder::createReference(
     case TopAbs_VERTEX: result.kind = TopologicalKind::Vertex; break;
     default: throw std::invalid_argument("Unsupported topological reference shape type");
     }
-    result.signature = makeSignature(subshape);
+    result.signature = makeSignature(subshape, ownerShape);
+    result.semanticId = primitiveSemanticId(ownerShape, subshape);
     return result;
+}
+
+std::optional<std::string> TopologicalSignatureBuilder::semanticId(
+    const TopoDS_Shape& ownerShape, const TopoDS_Shape& subshape)
+{
+    if (ownerShape.IsNull() || subshape.IsNull()) return {};
+    return primitiveSemanticId(ownerShape, subshape);
 }
 
 TopologicalReferenceResolver::TopologicalReferenceResolver(
@@ -387,11 +548,27 @@ TopologicalResolveResult TopologicalReferenceResolver::resolveAgainstShape(
     }
 
     std::vector<std::tuple<double, int, TopoDS_Shape>> matches;
+    std::vector<std::tuple<double, int, TopoDS_Shape>> semanticMatches;
     for (int index = 1; index <= map.Extent(); ++index) {
         const auto candidate = map(index);
-        const auto score = signatureScore(*reference.signature, makeSignature(candidate), tolerance);
+        const auto candidateSemantic = primitiveSemanticId(currentShape, candidate);
+        if (reference.semanticId && candidateSemantic && *reference.semanticId == *candidateSemantic)
+            semanticMatches.emplace_back(0.0, index, candidate);
+        const auto score = signatureScore(*reference.signature,
+            makeSignature(candidate, currentShape), tolerance);
+        // Geometry fallback remains deliberately conservative. Large changes
+        // must use semantic naming or be reported as missing/ambiguous.
         if (std::isfinite(score) && score <= 1.5)
             matches.emplace_back(score, index, candidate);
+    }
+    if (reference.semanticId) {
+        if (semanticMatches.size() == 1)
+            return {ResolveStatus::Resolved, std::get<2>(semanticMatches.front()),
+                    std::get<1>(semanticMatches.front()), {}, 1, 0.0};
+        if (semanticMatches.size() > 1)
+            return {ResolveStatus::Ambiguous, std::nullopt, std::nullopt,
+                    "Semantic topology reference is ambiguous",
+                    static_cast<int>(semanticMatches.size()), 0.0};
     }
     if (matches.empty())
     {
@@ -433,6 +610,8 @@ QJsonObject toJson(const TopologicalReference& reference)
     if (reference.transientIndex) object.insert("transientIndex", *reference.transientIndex);
     if (reference.persistentId)
         object.insert("persistentId", QString::fromStdString(*reference.persistentId));
+    if (reference.semanticId)
+        object.insert("semanticId", QString::fromStdString(*reference.semanticId));
     if (!reference.signature) return object;
     QJsonObject signature;
     if (const auto* face = std::get_if<FaceSignature>(&*reference.signature)) {
@@ -442,6 +621,8 @@ QJsonObject toJson(const TopologicalReference& reference)
         if (face->normal) signature.insert("normal", directionJson(*face->normal));
         if (face->radius) signature.insert("radius", *face->radius);
         signature.insert("boundingBox", boxJson(face->boundingBox));
+        signature.insert("boundaryEdgeCount", face->boundaryEdgeCount);
+        signature.insert("adjacentFaceCount", face->adjacentFaceCount);
     } else if (const auto* edge = std::get_if<EdgeSignature>(&*reference.signature)) {
         signature.insert("curveKind", QString::fromStdString(enumName(edge->curveKind)));
         signature.insert("midpoint", pointJson(edge->midpoint));
@@ -451,10 +632,13 @@ QJsonObject toJson(const TopologicalReference& reference)
         if (edge->direction) signature.insert("direction", directionJson(*edge->direction));
         if (edge->radius) signature.insert("radius", *edge->radius);
         signature.insert("boundingBox", boxJson(edge->boundingBox));
+        signature.insert("adjacentFaceCount", edge->adjacentFaceCount);
     } else {
         const auto& vertex = std::get<VertexSignature>(*reference.signature);
         signature.insert("point", pointJson(vertex.point));
         signature.insert("boundingBox", boxJson(vertex.boundingBox));
+        signature.insert("connectedEdgeCount", vertex.connectedEdgeCount);
+        signature.insert("connectedFaceCount", vertex.connectedFaceCount);
     }
     object.insert("signature", signature);
     return object;
@@ -470,6 +654,8 @@ TopologicalReference topologicalReferenceFromJson(const QJsonObject& object)
     if (object.contains("transientIndex")) result.transientIndex = object.value("transientIndex").toInt();
     if (object.value("persistentId").isString())
         result.persistentId = object.value("persistentId").toString().toStdString();
+    if (object.value("semanticId").isString())
+        result.semanticId = object.value("semanticId").toString().toStdString();
     if (object.contains("signature"))
         result.signature = signatureFromJson(object.value("signature").toObject(), result.kind);
     return result;

@@ -29,6 +29,9 @@ struct FaceSignature {
     double area{0.0};
     std::optional<double> radius;
     Bnd_Box boundingBox;
+    int boundaryEdgeCount{0};
+    std::vector<CurveKind> boundaryCurveKinds;
+    int adjacentFaceCount{0};
 };
 
 struct EdgeSignature {
@@ -40,11 +43,15 @@ struct EdgeSignature {
     std::optional<gp_Dir> direction;
     std::optional<double> radius;
     Bnd_Box boundingBox;
+    int adjacentFaceCount{0};
+    std::vector<SurfaceKind> adjacentSurfaceKinds;
 };
 
 struct VertexSignature {
     gp_Pnt point;
     Bnd_Box boundingBox;
+    int connectedEdgeCount{0};
+    int connectedFaceCount{0};
 };
 
 using TopologicalSignature = std::variant<FaceSignature, EdgeSignature, VertexSignature>;
@@ -54,7 +61,9 @@ struct TopologicalReference {
     TopologicalKind kind{TopologicalKind::Edge};
     std::optional<int> transientIndex;
     std::optional<TopologicalSignature> signature;
-    // Reserved for a future kernel/application persistent naming scheme.
+    // Feature-aware semantic names are stable intent, not OCCT identity.
+    std::optional<std::string> semanticId;
+    // Optional application/kernel provenance identifier.
     std::optional<std::string> persistentId;
 
     bool isLegacy() const noexcept { return !signature.has_value(); }
@@ -90,6 +99,11 @@ class TopologicalSignatureBuilder final
 public:
     static TopologicalReference createReference(
         const std::string& featureId,
+        const TopoDS_Shape& ownerShape,
+        const TopoDS_Shape& subshape
+    );
+
+    static std::optional<std::string> semanticId(
         const TopoDS_Shape& ownerShape,
         const TopoDS_Shape& subshape
     );
