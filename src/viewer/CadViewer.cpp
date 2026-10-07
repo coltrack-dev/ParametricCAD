@@ -1407,6 +1407,7 @@ void CadViewer::initializeOcc()
     view_->MustBeResized();
 
     initialized_ = true;
+    selectionActivationDirty_ = true;
     if (bulkUpdateDepth_ == 0) applySelectionMode();
 }
 
@@ -1513,6 +1514,7 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
     }
     invalidateSnapReferenceCache("MODEL_CHANGED: feature added");
     selectionState_.hovered.reset();
+    selectionActivationDirty_ = true;
 
     if (bulkUpdateDepth_ == 0) applySelectionMode();
     if (fitView) {
@@ -1686,6 +1688,7 @@ void CadViewer::setFeatureVisibilityModes(
     }
     if (!changed) return;
 
+    selectionActivationDirty_ = true;
     if (selectedFeatureUnavailable) {
         if (transformDragging_) cancelTransform();
         if (pushPullActive_) cancelPushPull();
@@ -1733,6 +1736,7 @@ void CadViewer::applyVisibilityChanges(
     }
     if (!changed) return;
 
+    selectionActivationDirty_ = true;
     if (selectedFeatureUnavailable) {
         if (transformDragging_) cancelTransform();
         if (pushPullActive_) cancelPushPull();
@@ -2152,6 +2156,7 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         changed = true;
     }
     if (changed) {
+        selectionActivationDirty_ = true;
         invalidateSnapReferenceCache("MODEL_CHANGED: features retained");
         resetDetectedCycle();
         selectionState_.hovered.reset();
@@ -2178,6 +2183,7 @@ void CadViewer::clear()
     displayedShapes_.clear();
     featureObjects_.clear();
     featureVisibility_.clear();
+    selectionActivationDirty_ = true;
     invalidateSnapReferenceCache("MODEL_CHANGED: viewer cleared");
     resetDetectedCycle();
     selectionState_ = {};
@@ -2211,6 +2217,7 @@ void CadViewer::setSelectionMode(SelectionMode mode)
     pushPullArmed_ = false;
     unsetCursor();
     selectionMode_ = mode;
+    selectionActivationDirty_ = true;
 
     if (initialized_) {
         clearSelection();
@@ -2405,6 +2412,13 @@ void CadViewer::applySelectionMode()
         return;
     }
 
+    // Redisplaying a shape does not change the active AIS selection mode.
+    // Avoid tearing down the selector for every parametric model refresh;
+    // OCCT can reject a global Deactivate while its selector is transitioning.
+    if (!selectionActivationDirty_) {
+        return;
+    }
+
     QElapsedTimer timer;
     timer.start();
     context_->Deactivate();
@@ -2440,6 +2454,7 @@ void CadViewer::applySelectionMode()
     context_->UpdateCurrentViewer();
     lastViewerUpdateMilliseconds_ = updateTimer.elapsed();
     lastSelectionActivationMilliseconds_ = timer.elapsed();
+    selectionActivationDirty_ = false;
     if (performanceDiagnostics_) {
         qInfo().noquote() << "CadViewer selection activation: mode="
                           << static_cast<int>(selectionMode_)

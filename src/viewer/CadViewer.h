@@ -298,6 +298,7 @@ private:
     double orbitElevation_{0.0};
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
+    bool selectionActivationDirty_{true};
 
     bool xRayEnabled_{false};
     bool detectedCycleActive_{false};

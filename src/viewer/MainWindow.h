@@ -240,6 +240,8 @@ private:
     bool ifcImporting_{false};
 #endif
     int lastUndoStackIndex_{0};
+    bool historyRefreshScheduled_{false};
+    bool historyVisibilityRefreshPending_{false};
     std::shared_ptr<cad::application::ProjectLoadResult> projectLoadResult_;
     ProjectLoadMetrics projectLoadMetrics_;
     std::size_t projectLoadRecomputeIndex_{0};

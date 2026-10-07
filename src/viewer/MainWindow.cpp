@@ -179,9 +179,20 @@ MainWindow::MainWindow(QWidget* parent)
         const bool visibilityChanged = currentIndex != lastUndoStackIndex_
             && modeling_.isVisibilityCommandAt(changedIndex);
         lastUndoStackIndex_ = currentIndex;
-        if (visibilityChanged) refreshVisibilityView();
-        else refreshModelView();
-        featureEditorPanel_->scheduleRefresh();
+        // QUndoStack::indexChanged can be emitted from a mouse callback while
+        // OCCT is still processing selection. Defer presenter/AIS changes
+        // until the event returns to avoid re-entering the viewer context.
+        historyVisibilityRefreshPending_ |= visibilityChanged;
+        if (historyRefreshScheduled_) return;
+        historyRefreshScheduled_ = true;
+        QTimer::singleShot(0, this, [this]() {
+            historyRefreshScheduled_ = false;
+            const bool refreshVisibility = historyVisibilityRefreshPending_;
+            historyVisibilityRefreshPending_ = false;
+            if (refreshVisibility) refreshVisibilityView();
+            else refreshModelView();
+            featureEditorPanel_->scheduleRefresh();
+        });
     });
     connect(&modeling_.undoStack(), &QUndoStack::cleanChanged, this, [this](bool) { updateTitle(); });
     connect(&projectLoadProgressTimer_, &QTimer::timeout,
@@ -1764,8 +1775,6 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     if (!result.success) {
         QMessageBox::warning(this, "Sketch entity failed",
             QString::fromStdString(result.error));
-    } else {
-        refreshModelView(false);
     }
 }
 

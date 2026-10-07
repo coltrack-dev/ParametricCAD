@@ -951,6 +951,29 @@ private slots:
             RevolveAxisType::ModelEdge);
     }
 
+    void faceAttachedSketchRepeatedLineInsertionKeepsStableEntities()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto sketch = controller.createSketchOnFace(SelectionSnapshot{{
+            {box.id, SelectionKind::Face, 1}}});
+        QVERIFY(sketch.success);
+
+        for (int index = 0; index < 100; ++index) {
+            QVERIFY(controller.addSketchLine(sketch.id,
+                {static_cast<double>(index), 0.0},
+                {static_cast<double>(index), 10.0}).success);
+        }
+        const auto feature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketch.id));
+        QVERIFY(feature);
+        QCOMPARE(feature->entityCount(), std::size_t(100));
+        for (const auto& entity : feature->entities()) {
+            QVERIFY(std::visit([](const auto& value) { return !value.id.empty(); }, entity));
+        }
+    }
+
     void shellUsesPersistentFaceReferencesAfterResize()
     {
         auto base = std::make_shared<BoxParametricFeature>("shell-base", 100.0, 70.0, 30.0);

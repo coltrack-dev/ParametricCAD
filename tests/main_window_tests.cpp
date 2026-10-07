@@ -80,6 +80,35 @@ private slots:
         QVERIFY(window.operationSession_.active());
         window.operationSession_.cancel();
     }
+
+    void faceAttachedSketchLineToolSurvivesRepeatedLines()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()
+            || qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen") {
+            QSKIP("Native OCCT viewer is required for this MainWindow regression test");
+        }
+        MainWindow window;
+        const auto box = window.modeling_.createBox();
+        QVERIFY(box.success);
+        const auto sketch = window.modeling_.createSketchOnFace({{
+            {box.id, cad::application::SelectionKind::Face, 1}}});
+        QVERIFY(sketch.success);
+
+        window.enterSketchEditing(sketch.id);
+        window.handleSketchPoint({0.0, 0.0}, 0.1);
+        window.handleSketchPoint({20.0, 0.0}, 0.1);
+        window.handleSketchPoint({20.0, 0.0}, 0.1);
+        window.handleSketchPoint({20.0, 10.0}, 0.1);
+
+        const auto feature = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(feature);
+        QCOMPARE(feature->entityCount(), std::size_t(2));
+        QVERIFY(std::visit([](const auto& entity) { return !entity.id.empty(); },
+            feature->entities()[0]));
+        QVERIFY(std::visit([](const auto& entity) { return !entity.id.empty(); },
+            feature->entities()[1]));
+    }
 };
 
 QTEST_MAIN(MainWindowTests)
