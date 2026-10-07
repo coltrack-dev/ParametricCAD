@@ -53,9 +53,23 @@ runtime model.
 
 Supported serialized feature records depend on the current registry. The core
 records include Box, Cylinder, Cone, Sphere, Torus, Hexagon, Boolean, Sketch,
-Face, and Extrude; newer feature classes may have limited or pending
-persistence coverage. See `src/model/ProjectFile.cpp` for the authoritative
-registry.
+Face, Extrude, and Revolve. See `src/model/ProjectFile.cpp` for the
+authoritative registry.
+
+Revolve records contain `sourceFeatureId`, `angleDegrees`, and a typed `axis`
+object. Global axes use `GlobalX`, `GlobalY`, or `GlobalZ`; a Sketch-line axis
+stores `sketchFeatureId` and stable `entityId`; a model-edge axis stores its
+owning `featureId` and serialized `TopologicalReference`. The older Revolve
+form containing `axisOrigin*`, `axis*`, and `angleDegrees` remains readable.
+
+```json
+{
+  "type": "Revolve",
+  "sourceFeatureId": "sketch-1",
+  "axis": { "type": "SketchLine", "sketchFeatureId": "sketch-1", "entityId": "line-7" },
+  "angleDegrees": 270.0
+}
+```
 
 `IfcImported` records contain generic provenance fields (`sourceFormat`,
 `sourceFile`, `ifcGlobalId`, `ifcEntityType`, `ifcBuilding`, and `ifcStorey`)

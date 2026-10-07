@@ -9,6 +9,7 @@
 #include "application/ProjectController.h"
 #include "application/VisibilityManager.h"
 #include "application/BimNavigationModel.h"
+#include "application/InteractiveOperation.h"
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
 #include "application/IfcImporter.h"
 #endif
@@ -116,6 +117,13 @@ private:
     void createPathPattern();
     void createFillet();
     void createChamfer();
+    void createShell();
+    void createRevolve();
+    bool beginOperation(
+        cad::application::InteractiveOperationKind kind,
+        const std::vector<std::string>& sourceFeatureIds);
+    void cancelOperation();
+    bool commitOperation();
     void deleteFeature();
     void clearDocument();
     void commitVisibilityGroups(
@@ -136,6 +144,7 @@ private:
         const QString& text);
 
     cad::application::ModelingController modeling_;
+    cad::application::InteractiveOperationSession operationSession_;
     cad::application::VisibilityManager visibilityManager_;
     cad::application::ProjectController project_;
     QString currentFile_;
@@ -148,6 +157,8 @@ private:
     QAction* pathPatternAction_{nullptr};
     QAction* filletAction_{nullptr};
     QAction* chamferAction_{nullptr};
+    QAction* shellAction_{nullptr};
+    QAction* revolveAction_{nullptr};
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     QAction* importIfcAction_{nullptr};
 #endif

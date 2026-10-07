@@ -13,6 +13,7 @@
 #include <gp_Vec.hxx>
 
 #include <string>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -436,8 +437,8 @@ public:
     const char* typeId() const noexcept override { return "Extrude"; }
     Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
-    bool setNumericProperty(const std::string& key, double value) override;
     bool setProperty(const std::string& key, const PropertyValue& value) override;
+    bool setNumericProperty(const std::string& key, double value) override;
     std::vector<std::string> hiddenDependencyIds() const override;
 
     void setVector(gp_Vec vector);
@@ -529,6 +530,24 @@ private:
     double distance_;
 };
 
+enum class RevolveAxisType
+{
+    GlobalX,
+    GlobalY,
+    GlobalZ,
+    SketchLine,
+    ModelEdge
+};
+
+struct RevolveAxisDefinition
+{
+    RevolveAxisType type{RevolveAxisType::GlobalY};
+    std::string sketchFeatureId;
+    SketchEntityId sketchLineId;
+    std::string edgeFeatureId;
+    std::optional<cad::topology::TopologicalReference> edgeReference;
+};
+
 class RevolveFeature final : public ParametricFeature
 {
 public:
@@ -538,8 +557,19 @@ public:
         gp_Ax1 axis,
         double angleRadians
     );
+    RevolveFeature(
+        std::string id,
+        const std::shared_ptr<SketchFeature>& sketch,
+        RevolveAxisDefinition axis,
+        double angleRadians,
+        const Ptr& axisSource = {}
+    );
     const char* typeId() const noexcept override { return "Revolve"; }
     Ptr clone(std::string newId) const override;
+    std::vector<FeatureProperty> properties() const override;
+    bool setProperty(const std::string& key, const PropertyValue& value) override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    std::vector<std::string> hiddenDependencyIds() const override;
 
     void setAxis(gp_Ax1 axis);
     void setAngleRadians(double angleRadians);
@@ -547,6 +577,7 @@ public:
     const Ptr& profile() const noexcept;
     const gp_Ax1& axis() const noexcept;
     double angleRadians() const noexcept;
+    const RevolveAxisDefinition& axisDefinition() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -556,6 +587,8 @@ private:
     Ptr profile_;
     gp_Ax1 axis_;
     double angleRadians_;
+    RevolveAxisDefinition axisDefinition_;
+    Ptr axisSource_;
 };
 
 enum class BooleanOperation

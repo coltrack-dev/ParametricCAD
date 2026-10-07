@@ -110,7 +110,9 @@ public:
         Top
     };
 
-    explicit CadViewer(QWidget* parent = nullptr);
+    explicit CadViewer(
+        QWidget* parent = nullptr,
+        cad::application::InteractiveOperationSession* operationSession = nullptr);
 
     void display(const TopoDS_Shape& shape, const QString& featureId = {}, bool fitView = true);
     void beginBulkUpdate();
@@ -182,6 +184,7 @@ public:
         std::function<void(const QString&, const cad::topology::TopologicalReference&,
                            const gp_Vec&, double)> handler
     );
+    void cancelActiveOperation();
     void setTransformCommittedHandler(
         std::function<void(const QString&, const gp_Trsf&)> handler
     );
@@ -331,7 +334,8 @@ private:
 
     bool pushPullArmed_{false};
     bool pushPullActive_{false};
-    cad::application::InteractiveOperationSession pushPullOperation_;
+    cad::application::InteractiveOperationSession localOperationSession_;
+    cad::application::InteractiveOperationSession* operationSession_{nullptr};
     double pushPullDistance_{0.0};
     TopoDS_Face pushPullFace_;
     TopoDS_Shape pushPullBaseShape_;

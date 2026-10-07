@@ -106,6 +106,15 @@ public:
         const SelectionSnapshot& selection,
         double depth = 10.0
     );
+    ModelingResult createShell(
+        const SelectionSnapshot& selection,
+        double thickness = 1.0
+    );
+    ModelingResult createRevolve(
+        const SelectionSnapshot& selection,
+        cad::parametric::RevolveAxisDefinition axis,
+        double angleDegrees = 360.0
+    );
     ModelingResult createLinearPattern(const std::vector<std::string>& selection);
     ModelingResult createPathPattern(const std::vector<std::string>& selection);
     ModelingResult createFillet(

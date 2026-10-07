@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QStringList>
 #include "application/FeatureEditingService.h"
+#include "application/InteractiveOperation.h"
 #include "application/VisibilityManager.h"
 #include "operations/ParametricFeatures.h"
 
@@ -29,6 +30,7 @@ public:
     explicit FeatureEditorPanel(QWidget* parent = nullptr);
 
     void setService(cad::application::FeatureEditingService* service);
+    void setOperationSession(cad::application::InteractiveOperationSession* session);
     void setFeatures(std::vector<cad::application::FeatureDescriptor> features);
     void setVisibilityGroups(std::vector<cad::application::VisibilityGroup> groups);
     void setVisibilityFilters(cad::application::VisibilityFilterState filters);
@@ -107,6 +109,10 @@ private:
     void clearProperties();
 
     void reportResult(const cad::application::ModelingResult& result);
+    void applyPropertyChange(
+        const std::string& featureId,
+        const cad::parametric::FeatureProperty& property,
+        const cad::parametric::PropertyValue& value);
 
     bool propertyMatchesCurrentValue(
         const std::string& featureId,
@@ -120,6 +126,7 @@ private:
     );
 
     cad::application::FeatureEditingService* service_{nullptr};
+    cad::application::InteractiveOperationSession* operationSession_{nullptr};
     std::vector<cad::application::FeatureDescriptor> features_;
     std::vector<cad::application::VisibilityGroup> groups_;
     cad::application::VisibilityFilterState filters_;

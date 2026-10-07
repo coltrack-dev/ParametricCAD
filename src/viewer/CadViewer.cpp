@@ -327,8 +327,11 @@ TopoDS_Shape makeTrimPreviewShape(
 }
 }
 
-CadViewer::CadViewer(QWidget* parent)
-    : QWidget(parent)
+CadViewer::CadViewer(
+    QWidget* parent,
+    cad::application::InteractiveOperationSession* operationSession)
+    : QWidget(parent),
+      operationSession_(operationSession ? operationSession : &localOperationSession_)
 {
     performanceDiagnostics_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_PERF");
     snapDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SNAP");
@@ -2375,6 +2378,12 @@ void CadViewer::setPushPullCommittedHandler(
     pushPullCommittedHandler_ = std::move(handler);
 }
 
+void CadViewer::cancelActiveOperation()
+{
+    if (pushPullActive_) cancelPushPull();
+    if (transformDragging_) cancelTransform();
+}
+
 void CadViewer::clearSelection()
 {
     if (!initialized_) {
@@ -2635,9 +2644,9 @@ bool CadViewer::beginPushPull()
     pushPullFaceReference_ = faceReference;
     pushPullObject_ = selectedObject;
     pushPullDistance_ = 0.0;
-    if (!pushPullOperation_.begin({
+    if (!operationSession_->beginCreate(
             cad::application::InteractiveOperationKind::PushPull,
-            {featureId.toStdString()}, {}, {}})) {
+            {featureId.toStdString()})) {
         return false;
     }
     pushPullActive_ = true;
@@ -2706,7 +2715,7 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
         return;
     }
     pushPullDistance_ = *distance;
-    pushPullOperation_.updatePreview("distance", pushPullDistance_);
+    operationSession_->updatePreview("distance", pushPullDistance_);
 
     if (std::abs(pushPullDistance_) <= PushPullTolerance) {
         if (!pushPullPreview_.IsNull()) {
@@ -2769,7 +2778,7 @@ void CadViewer::commitPushPull()
         pushPullPreview_.Nullify();
     }
 
-    const auto operation = pushPullOperation_.commit();
+    const auto operation = operationSession_->commit();
     if (!operation) {
         return;
     }
@@ -2807,7 +2816,7 @@ void CadViewer::cancelPushPull()
         return;
     }
 
-    pushPullOperation_.cancel();
+    operationSession_->cancel();
 
     if (!pushPullPreview_.IsNull()) {
         context_->Remove(pushPullPreview_, Standard_False);

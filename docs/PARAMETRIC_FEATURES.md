@@ -25,6 +25,26 @@ world-normalized native OCCT shape with identity ParametricCAD placement and
 generic IFC provenance metadata. Its B-Rep payload is serialized by the
 persistence layer, so reopening a `.pcad` does not require the source IFC.
 
+## Revolve
+
+`RevolveFeature` consumes a validated closed `SketchFeature` profile and stores
+an angle in degrees, with sign carrying direction. Partial angles and a full
+360-degree revolution are supported. Profile faces are rebuilt from the
+current Sketch frame during recompute, so global-plane and face-attached
+Sketches use the same local-to-world transformation path as Extrude and
+Pocket.
+
+The typed persistent axis can be global X/Y/Z, a stable `SketchEntityId` for a
+line in the source Sketch, or a linear model Edge represented by a
+`TopologicalReference` and owning feature ID. Missing Sketch lines,
+unresolved references, and non-linear model Edges fail deterministically rather
+than selecting a replacement. The generated B-Rep is only a result.
+
+Revolve creation and editing use `InteractiveOperationSession` and the
+controller command boundary. The current UI stages global-axis and angle
+choices before one persistent AddFeature command. Angle and global-axis edits
+use the standard FeatureEditorPanel and one Undo/Redo command per edit.
+
 ## Placement and transforms
 
 Placement is a `gp_Trsf` stored on `ParametricFeature`. The transform gizmo and
@@ -32,6 +52,31 @@ Placement is a `gp_Trsf` stored on `ParametricFeature`. The transform gizmo and
 Preview is not a model mutation. On commit, `ModelingController` pushes a
 placement command to `QUndoStack`; the command updates feature placement and
 the resulting placement is serialized in `.pcad`.
+
+## Interactive operation lifecycle
+
+Extrude, Pocket, Push/Pull, Fillet, Chamfer, and Shell use the shared
+`InteractiveOperationSession` for transient operation state. MainWindow and
+CadViewer share the session, while feature-specific code retains ownership of
+profile, edge, and face geometry construction.
+
+Creation follows:
+
+```text
+begin -> updatePreview -> ModelingController add command -> commit
+```
+
+Property editing follows the same boundary through
+`ChangeParametricPropertyCommand`. A staged edit records the original feature
+ID and parameters; cancel leaves that feature untouched, while commit updates
+the existing feature with one undoable command. Repeated preview updates never
+create history entries.
+
+Push/Pull has the current lightweight AIS preview. The other operation dialogs
+stage and validate their numeric input before commit; they do not recompute the
+Body for every keystroke. Shell creation accepts a selected solid and optional
+current Face selections, and stores only canonical `TopologicalReference`
+values for its openings.
 
 ## Selection and snapping boundary
 

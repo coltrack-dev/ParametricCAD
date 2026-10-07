@@ -7,6 +7,7 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Builder.hxx>
 #include <GProp_GProps.hxx>
@@ -41,6 +42,38 @@ namespace cad::parametric {
 namespace {
 
 constexpr double sketchTwoPi = 6.283185307179586476925286766559;
+
+const char* revolveAxisTypeName(const RevolveAxisType type)
+{
+    switch (type) {
+    case RevolveAxisType::GlobalX: return "GlobalX";
+    case RevolveAxisType::GlobalY: return "GlobalY";
+    case RevolveAxisType::GlobalZ: return "GlobalZ";
+    case RevolveAxisType::SketchLine: return "SketchLine";
+    case RevolveAxisType::ModelEdge: return "ModelEdge";
+    }
+    return "GlobalY";
+}
+
+std::optional<RevolveAxisType> revolveAxisTypeFromName(const std::string& name)
+{
+    if (name == "GlobalX") return RevolveAxisType::GlobalX;
+    if (name == "GlobalY") return RevolveAxisType::GlobalY;
+    if (name == "GlobalZ") return RevolveAxisType::GlobalZ;
+    if (name == "SketchLine") return RevolveAxisType::SketchLine;
+    if (name == "ModelEdge") return RevolveAxisType::ModelEdge;
+    return std::nullopt;
+}
+
+gp_Dir globalRevolveDirection(const RevolveAxisType type)
+{
+    switch (type) {
+    case RevolveAxisType::GlobalX: return {1.0, 0.0, 0.0};
+    case RevolveAxisType::GlobalY: return {0.0, 1.0, 0.0};
+    case RevolveAxisType::GlobalZ: return {0.0, 0.0, 1.0};
+    default: throw std::invalid_argument("Revolve axis is not global");
+    }
+}
 
 SketchEntityId entityId(const SketchEntity& entity)
 {
@@ -1740,6 +1773,45 @@ RevolveFeature::RevolveFeature(
       angleRadians_(angleRadians)
 {
     requireFeature(profile_, "profile");
+    if (!std::isfinite(angleRadians_) || std::abs(angleRadians_) <= 1.0e-12
+        || std::abs(angleRadians_) > sketchTwoPi + 1.0e-9) {
+        throw std::invalid_argument("Revolve angle must be between -360 and 360 degrees");
+    }
+    addDependency(profile_);
+}
+
+RevolveFeature::RevolveFeature(
+    std::string id,
+    const std::shared_ptr<SketchFeature>& sketch,
+    RevolveAxisDefinition axis,
+    const double angleRadians,
+    const Ptr& axisSource
+)
+    : ParametricFeature(std::move(id), "Revolve"),
+      profile_(sketch),
+      angleRadians_(angleRadians),
+      axisDefinition_(std::move(axis)),
+      axisSource_(axisSource)
+{
+    requireFeature(profile_, "Sketch profile");
+    if (!std::isfinite(angleRadians_) || std::abs(angleRadians_) <= 1.0e-12
+        || std::abs(angleRadians_) > sketchTwoPi + 1.0e-9) {
+        throw std::invalid_argument("Revolve angle must be between -360 and 360 degrees");
+    }
+    if (axisDefinition_.type == RevolveAxisType::SketchLine
+        && axisDefinition_.sketchFeatureId != sketch->id()) {
+        throw std::invalid_argument("Revolve Sketch line axis must belong to the profile Sketch");
+    }
+    if (axisDefinition_.type == RevolveAxisType::ModelEdge) {
+        requireFeature(axisSource_, "Revolve axis feature");
+        if (!axisDefinition_.edgeReference
+            || axisDefinition_.edgeFeatureId != axisSource_->id()) {
+            throw std::invalid_argument("Revolve model Edge axis reference is invalid");
+        }
+        addDependency(axisSource_);
+    } else if (axisDefinition_.type == RevolveAxisType::SketchLine) {
+        axisDefinition_.sketchFeatureId = sketch->id();
+    }
     addDependency(profile_);
 }
 
@@ -1774,8 +1846,119 @@ double RevolveFeature::angleRadians() const noexcept
     return angleRadians_;
 }
 
+const RevolveAxisDefinition& RevolveFeature::axisDefinition() const noexcept
+{
+    return axisDefinition_;
+}
+
+std::vector<FeatureProperty> RevolveFeature::properties() const
+{
+    return {textProperty("sourceFeatureId", "Profile", profile_->name()),
+            {"angleDegrees", "Angle",
+                angleRadians_ * 180.0 / std::acos(-1.0), -360.0, 360.0, true},
+            FeatureProperty{"axisType", "Axis", std::string(revolveAxisTypeName(axisDefinition_.type)),
+                std::nullopt, std::nullopt, true},
+            textProperty("axisIdentifier", "Axis Identifier",
+                axisDefinition_.type == RevolveAxisType::SketchLine
+                    ? axisDefinition_.sketchLineId
+                    : axisDefinition_.type == RevolveAxisType::ModelEdge
+                        ? axisDefinition_.edgeFeatureId : "Global")};
+}
+
+bool RevolveFeature::setProperty(const std::string& key, const PropertyValue& value)
+{
+    if (key != "axisType") return ParametricFeature::setProperty(key, value);
+    const auto name = std::get_if<std::string>(&value);
+    if (!name) return false;
+    const auto type = revolveAxisTypeFromName(*name);
+    if (!type || (*type != RevolveAxisType::GlobalX
+                  && *type != RevolveAxisType::GlobalY
+                  && *type != RevolveAxisType::GlobalZ)) return false;
+    axisDefinition_.type = *type;
+    axisDefinition_.sketchFeatureId.clear();
+    axisDefinition_.sketchLineId.clear();
+    axisDefinition_.edgeFeatureId.clear();
+    axisDefinition_.edgeReference.reset();
+    axis_ = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), globalRevolveDirection(*type));
+    markDirty();
+    return true;
+}
+
+bool RevolveFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key != "angleDegrees" || !std::isfinite(value)
+        || std::abs(value) <= 1.0e-9 || std::abs(value) > 360.0) return false;
+    angleRadians_ = value * std::acos(-1.0) / 180.0;
+    markDirty();
+    return true;
+}
+
+std::vector<std::string> RevolveFeature::hiddenDependencyIds() const
+{
+    std::vector<std::string> result{profile_->id()};
+    if (axisSource_ && axisSource_->id() != profile_->id()) result.push_back(axisSource_->id());
+    return result;
+}
+
 TopoDS_Shape RevolveFeature::build() const
 {
+    if (const auto sketch = std::dynamic_pointer_cast<SketchFeature>(profile_)) {
+        gp_Ax1 resolvedAxis;
+        switch (axisDefinition_.type) {
+        case RevolveAxisType::GlobalX:
+        case RevolveAxisType::GlobalY:
+        case RevolveAxisType::GlobalZ:
+            resolvedAxis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0),
+                globalRevolveDirection(axisDefinition_.type));
+            break;
+        case RevolveAxisType::SketchLine: {
+            const auto line = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+                [this](const auto& entity) {
+                    const auto* candidate = std::get_if<SketchLine>(&entity);
+                    return candidate && candidate->id == axisDefinition_.sketchLineId;
+                });
+            if (line == sketch->entities().end()) {
+                throw std::runtime_error("Revolve Sketch line axis could not be resolved");
+            }
+            const auto& sketchLine = std::get<SketchLine>(*line);
+            const auto frame = sketch->currentFrame();
+            gp_Pnt start = worldPoint(frame, sketchLine.start);
+            gp_Pnt end = worldPoint(frame, sketchLine.end);
+            const gp_Vec direction(start, end);
+            if (direction.Magnitude() <= 1.0e-9)
+                throw std::runtime_error("Revolve Sketch line axis has zero length");
+            resolvedAxis = gp_Ax1(start, gp_Dir(direction));
+            break;
+        }
+        case RevolveAxisType::ModelEdge: {
+            if (!axisSource_ || !axisDefinition_.edgeReference)
+                throw std::runtime_error("Revolve model Edge axis reference is missing");
+            const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+                *axisDefinition_.edgeReference, axisSource_->shape());
+            if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+                || resolved.shape->ShapeType() != TopAbs_EDGE) {
+                throw std::runtime_error("Revolve model Edge axis could not be resolved");
+            }
+            const TopoDS_Edge edge = TopoDS::Edge(*resolved.shape);
+            BRepAdaptor_Curve curve(edge);
+            if (curve.GetType() != GeomAbs_Line)
+                throw std::runtime_error("Revolve model Edge axis must be linear");
+            const auto line = curve.Line();
+            resolvedAxis = gp_Ax1(line.Location(), line.Direction());
+            break;
+        }
+        }
+        const auto profile = cad::operations::SketchProfileBuilder::build(*sketch);
+        std::vector<TopoDS_Shape> solids;
+        solids.reserve(profile.faces.size());
+        for (const auto& face : profile.faces) {
+            if (face.IsNull() || face.ShapeType() != TopAbs_FACE)
+                throw std::runtime_error("Revolve requires closed Sketch profiles");
+            solids.push_back(cad::modeling::BasicFeatures::revolve(
+                face, resolvedAxis, angleRadians_));
+        }
+        return compoundOf(solids);
+    }
     return cad::modeling::BasicFeatures::revolve(
         profile_->shape(),
         axis_,
@@ -1786,6 +1969,18 @@ TopoDS_Shape RevolveFeature::build() const
 void RevolveFeature::writeParameters(QJsonObject& object) const
 {
     object.insert("sourceFeatureId", QString::fromStdString(profile_->id()));
+    if (std::dynamic_pointer_cast<SketchFeature>(profile_)) {
+        QJsonObject axis;
+        axis.insert("type", QString::fromLatin1(revolveAxisTypeName(axisDefinition_.type)));
+        if (axisDefinition_.type == RevolveAxisType::SketchLine) {
+            axis.insert("sketchFeatureId", QString::fromStdString(axisDefinition_.sketchFeatureId));
+            axis.insert("entityId", QString::fromStdString(axisDefinition_.sketchLineId));
+        } else if (axisDefinition_.type == RevolveAxisType::ModelEdge) {
+            axis.insert("featureId", QString::fromStdString(axisDefinition_.edgeFeatureId));
+            axis.insert("reference", cad::topology::toJson(*axisDefinition_.edgeReference));
+        }
+        object.insert("axis", axis);
+    }
     object.insert("axisOriginX", axis_.Location().X());
     object.insert("axisOriginY", axis_.Location().Y());
     object.insert("axisOriginZ", axis_.Location().Z());
@@ -2618,8 +2813,12 @@ ParametricFeature::Ptr PushPullFeature::clone(std::string newId) const
 
 ParametricFeature::Ptr RevolveFeature::clone(std::string newId) const
 {
-    auto copy = std::make_shared<RevolveFeature>(
-        std::move(newId), profile(), axis_, angleRadians_);
+    auto copy = std::dynamic_pointer_cast<SketchFeature>(profile_)
+        ? std::make_shared<RevolveFeature>(std::move(newId),
+            std::dynamic_pointer_cast<SketchFeature>(profile_), axisDefinition_,
+            angleRadians_, axisSource_)
+        : std::make_shared<RevolveFeature>(
+            std::move(newId), profile(), axis_, angleRadians_);
     copyPlacementTo(copy);
     return copy;
 }

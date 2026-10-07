@@ -3,6 +3,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cad::application {
@@ -14,7 +15,9 @@ enum class InteractiveOperationKind
     PushPull,
     Fillet,
     Chamfer,
-    Shell
+    Shell,
+    Revolve,
+    FeatureEdit
 };
 
 struct InteractiveOperationContext
@@ -22,6 +25,7 @@ struct InteractiveOperationContext
     InteractiveOperationKind kind;
     std::vector<std::string> sourceFeatureIds;
     std::string editingFeatureId;
+    std::map<std::string, double> originalParameters;
     std::map<std::string, double> parameters;
 
     bool editingExisting() const noexcept { return !editingFeatureId.empty(); }
@@ -40,6 +44,22 @@ public:
         active_ = true;
         previewing_ = true;
         return true;
+    }
+
+    bool beginCreate(
+        InteractiveOperationKind kind,
+        std::vector<std::string> sourceFeatureIds)
+    {
+        return begin({kind, std::move(sourceFeatureIds), {}, {}, {}});
+    }
+
+    bool beginEdit(
+        InteractiveOperationKind kind,
+        std::string featureId,
+        std::map<std::string, double> originalParameters)
+    {
+        return begin({kind, {}, std::move(featureId), originalParameters,
+                      originalParameters});
     }
 
     bool updatePreview(const std::string& key, double value)

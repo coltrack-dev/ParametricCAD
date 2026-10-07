@@ -717,6 +717,167 @@ private slots:
         QVERIFY(QString::fromStdString(pushPull->error()).contains("topolog"));
     }
 
+    void revolveGlobalAxisIsParametricAndUndoable()
+    {
+        ModelingController controller;
+        const auto sketch = controller.createSketch();
+        QVERIFY(sketch.success);
+        const SelectionSnapshot selection{{
+            {sketch.id, SelectionKind::Object, std::nullopt}}};
+        QVERIFY(controller.actionState(selection).canRevolve);
+
+        RevolveAxisDefinition axis;
+        axis.type = RevolveAxisType::GlobalY;
+        const auto created = controller.createRevolve(selection, axis, 180.0);
+        QVERIFY2(created.success, qPrintable(QString::fromStdString(created.error)));
+        const auto feature = std::dynamic_pointer_cast<RevolveFeature>(
+            controller.body().findFeature(created.id));
+        QVERIFY(feature);
+        QCOMPARE(feature->axisDefinition().type, RevolveAxisType::GlobalY);
+        QVERIFY(!feature->shape().IsNull());
+        QVERIFY(volume(feature->shape()) > 0.0);
+
+        QVERIFY(controller.setFeatureProperty(created.id, "angleDegrees", 270.0).success);
+        QCOMPARE(feature->angleRadians(), 270.0 * std::acos(-1.0) / 180.0);
+        controller.undo();
+        QCOMPARE(feature->angleRadians(), std::acos(-1.0));
+        controller.redo();
+        QCOMPARE(feature->angleRadians(), 270.0 * std::acos(-1.0) / 180.0);
+
+        controller.undo();
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(created.id));
+        controller.redo();
+        QVERIFY(controller.body().findFeature(created.id));
+
+        QVERIFY(controller.setFeatureProperty(sketch.id, "width", 120.0).success);
+        const auto updated = std::dynamic_pointer_cast<RevolveFeature>(
+            controller.body().findFeature(created.id));
+        QVERIFY(updated && updated->state() == FeatureState::UpToDate);
+        QVERIFY(volume(updated->shape()) > 0.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("revolve-global.pcad");
+        QVERIFY2(ProjectFile::save(path, controller.document(), controller.body(), error),
+                 qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<RevolveFeature>(
+            loadedBody.findFeature(created.id));
+        QVERIFY(loaded && !loaded->shape().IsNull());
+        QCOMPARE(loaded->axisDefinition().type, RevolveAxisType::GlobalY);
+        QCOMPARE(loaded->angleRadians(), std::acos(-1.0));
+    }
+
+    void revolveSketchLineAxisUsesStableEntityIdAndRoundTrips()
+    {
+        const std::vector<SketchEntity> entities{
+            SketchLine{{0.0, 0.0}, {0.0, 20.0}, "turning-axis"},
+            SketchLine{{0.0, 20.0}, {10.0, 20.0}, "top"},
+            SketchLine{{10.0, 20.0}, {10.0, 0.0}, "side"},
+            SketchLine{{10.0, 0.0}, {0.0, 0.0}, "bottom"}};
+        auto sketch = std::make_shared<SketchFeature>(
+            "revolve-sketch", SketchSupportType::XY, 100.0, 60.0, entities);
+        RevolveAxisDefinition axis;
+        axis.type = RevolveAxisType::SketchLine;
+        axis.sketchFeatureId = sketch->id();
+        axis.sketchLineId = "turning-axis";
+        auto revolve = std::make_shared<RevolveFeature>(
+            "revolve-line", sketch, axis, 360.0 * std::acos(-1.0) / 180.0);
+        Body body;
+        body.addFeature(sketch);
+        body.addFeature(revolve);
+        QVERIFY2(body.recompute(), qPrintable(QString::fromStdString(body.lastError())));
+        QVERIFY(revolve->state() == FeatureState::UpToDate);
+        QVERIFY(!revolve->shape().IsNull());
+        QVERIFY(volume(revolve->shape()) > 0.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("revolve.pcad");
+        Document document;
+        QVERIFY2(ProjectFile::save(path, document, body, error), qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<RevolveFeature>(
+            loadedBody.findFeature("revolve-line"));
+        QVERIFY(loaded);
+        QCOMPARE(loaded->axisDefinition().type, RevolveAxisType::SketchLine);
+        QCOMPARE(loaded->axisDefinition().sketchLineId, std::string("turning-axis"));
+        QVERIFY(!loaded->shape().IsNull());
+
+        auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+            loadedBody.findFeature("revolve-sketch"));
+        QVERIFY(loadedSketch);
+        loadedSketch->replaceEntities(0, 1, {});
+        loadedBody.markDirtyFrom(loadedSketch->id());
+        QVERIFY(!loadedBody.recompute());
+        QCOMPARE(loaded->state(), FeatureState::Failed);
+        QVERIFY(QString::fromStdString(loaded->error()).contains("Sketch line"));
+    }
+
+    void revolveSupportsFaceAttachedSketchProfiles()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto sketch = controller.createSketchOnFace(SelectionSnapshot{{
+            {box.id, SelectionKind::Face, 1}}});
+        QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0.0, 0.0}, {20.0, 0.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20.0, 0.0}, {20.0, 10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20.0, 10.0}, {0.0, 10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0.0, 10.0}, {0.0, 0.0}).success);
+        const SelectionSnapshot selection{{
+            {sketch.id, SelectionKind::Object, std::nullopt}}};
+        QVERIFY(controller.actionState(selection).canRevolve);
+        RevolveAxisDefinition axis;
+        axis.type = RevolveAxisType::GlobalZ;
+        const auto result = controller.createRevolve(selection, axis, 180.0);
+        QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
+        const auto revolve = controller.body().findFeature(result.id);
+        QVERIFY(revolve && !revolve->shape().IsNull());
+    }
+
+    void revolveModelEdgeAxisIsPersistentAndLinear()
+    {
+        auto axisOwner = std::make_shared<BoxParametricFeature>(
+            "axis-owner", 20.0, 20.0, 20.0);
+        QVERIFY(axisOwner->recompute());
+        TopTools_IndexedMapOfShape edges;
+        TopExp::MapShapes(axisOwner->shape(), TopAbs_EDGE, edges);
+        QVERIFY(edges.Extent() > 0);
+        const auto edgeReference = cad::topology::TopologicalSignatureBuilder::createReference(
+            axisOwner->id(), axisOwner->shape(), TopoDS::Edge(edges.FindKey(1)));
+        const std::vector<SketchEntity> entities{
+            SketchLine{{0.0, 0.0}, {0.0, 10.0}, "a"},
+            SketchLine{{0.0, 10.0}, {8.0, 10.0}, "b"},
+            SketchLine{{8.0, 10.0}, {8.0, 0.0}, "c"},
+            SketchLine{{8.0, 0.0}, {0.0, 0.0}, "d"}};
+        auto sketch = std::make_shared<SketchFeature>(
+            "edge-axis-profile", SketchSupportType::XY, 40.0, 40.0, entities);
+        RevolveAxisDefinition axis;
+        axis.type = RevolveAxisType::ModelEdge;
+        axis.edgeFeatureId = axisOwner->id();
+        axis.edgeReference = edgeReference;
+        auto revolve = std::make_shared<RevolveFeature>(
+            "edge-axis-revolve", sketch, axis, std::acos(-1.0), axisOwner);
+        Body body;
+        body.addFeature(axisOwner);
+        body.addFeature(sketch);
+        body.addFeature(revolve);
+        QVERIFY2(body.recompute(), qPrintable(QString::fromStdString(body.lastError())));
+        QVERIFY(revolve->state() == FeatureState::UpToDate);
+        QVERIFY(!revolve->shape().IsNull());
+        QCOMPARE(revolve->axisDefinition().edgeFeatureId, axisOwner->id());
+        QVERIFY(revolve->axisDefinition().edgeReference.has_value());
+    }
+
     void shellUsesPersistentFaceReferencesAfterResize()
     {
         auto base = std::make_shared<BoxParametricFeature>("shell-base", 100.0, 70.0, 30.0);
@@ -766,6 +927,29 @@ private slots:
         QCOMPARE(shell->thickness(), 1.0);
         controller.redo();
         QCOMPARE(shell->thickness(), 2.5);
+    }
+
+    void shellCreationUsesOnePersistentCommand()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        SelectionSnapshot selection;
+        selection.items.push_back({box.id, SelectionKind::Object, std::nullopt});
+        QVERIFY(controller.actionState(selection).canShell);
+
+        const auto created = controller.createShell(selection, 1.5);
+        QVERIFY2(created.success, qPrintable(QString::fromStdString(created.error)));
+        const auto shell = std::dynamic_pointer_cast<ShellFeature>(
+            controller.body().findFeature(created.id));
+        QVERIFY(shell);
+        QCOMPARE(shell->faceReferences().size(), std::size_t{1});
+        QVERIFY(!shell->shape().IsNull());
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(created.id));
+        controller.redo();
+        QVERIFY(controller.body().findFeature(created.id));
     }
 
     void transformIsOneUndoablePlacementChange()

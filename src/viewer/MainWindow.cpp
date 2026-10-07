@@ -54,9 +54,10 @@ std::string pointRoleText(const cad::parametric::SketchPointRole role)
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
+      operationSession_(),
       visibilityManager_(),
       project_(modeling_, &visibilityManager_),
-      viewer_(new CadViewer(this)),
+      viewer_(new CadViewer(this, &operationSession_)),
       presenter_(std::make_unique<cad::viewer::ModelPresenter>(
           modeling_.body(), visibilityManager_, *viewer_))
 {
@@ -231,6 +232,7 @@ void MainWindow::createParametricPanel()
     );
 
     featureEditorPanel_->setService(&modeling_);
+    featureEditorPanel_->setOperationSession(&operationSession_);
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
 
@@ -928,6 +930,8 @@ void MainWindow::applySelection(
     const bool updateViewer
 )
 {
+    viewer_->cancelActiveOperation();
+    operationSession_.cancel();
     // This is the single MainWindow projection point for both viewer -> tree
     // and tree -> viewer selection paths. Keep the viewer update optional to
     // preserve feedback-loop suppression for featureSelectionChanged.
@@ -956,6 +960,8 @@ void MainWindow::applySelectionSnapshot(
     const bool updateViewer
 )
 {
+    viewer_->cancelActiveOperation();
+    operationSession_.cancel();
     currentSelection_ = selection;
     const auto featureIds = selection.featureIds();
     QStringList ids;
@@ -980,7 +986,10 @@ std::vector<std::string> MainWindow::selectedIds() const
 void MainWindow::updateActionState()
 {
     auto state = modeling_.actionState(currentSelection_);
-    if (!activeSketchId_.empty()) state.canExtrude = false;
+    if (!activeSketchId_.empty()) {
+        state.canExtrude = false;
+        state.canRevolve = false;
+    }
     deleteAction_->setEnabled(state.canDelete);
     if (duplicateAction_) duplicateAction_->setEnabled(selectedIds().size() == 1);
     faceAction_->setEnabled(state.canCreateFace);
@@ -993,6 +1002,8 @@ void MainWindow::updateActionState()
     if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
     if (filletAction_) filletAction_->setEnabled(state.canFillet);
     if (chamferAction_) chamferAction_->setEnabled(state.canChamfer);
+    if (shellAction_) shellAction_->setEnabled(state.canShell);
+    if (revolveAction_) revolveAction_->setEnabled(state.canRevolve);
 }
 
 void MainWindow::reportResult(const cad::application::ModelingResult& result)
@@ -1198,6 +1209,11 @@ void MainWindow::createActions()
     pocketAction_ = modelingMenu->addAction("Pocket");
     pocketAction_->setEnabled(false);
     connect(pocketAction_, &QAction::triggered, this, &MainWindow::createPocket);
+    revolveAction_ = modelingMenu->addAction("Revolve");
+    revolveAction_->setEnabled(false);
+    revolveAction_->setToolTip("Revolve a Sketch profile");
+    connect(revolveAction_, &QAction::triggered, this, &MainWindow::createRevolve);
+    toolBar->addAction(revolveAction_);
     linearPatternAction_ = modelingMenu->addAction("Linear Pattern");
     linearPatternAction_->setEnabled(false);
     linearPatternAction_->setToolTip("Create a linear pattern from the selected object");
@@ -1218,6 +1234,11 @@ void MainWindow::createActions()
     chamferAction_->setToolTip("Chamfer selected edges");
     connect(chamferAction_, &QAction::triggered, this, &MainWindow::createChamfer);
     toolBar->addAction(chamferAction_);
+    shellAction_ = modelingMenu->addAction("Shell");
+    shellAction_->setEnabled(false);
+    shellAction_->setToolTip("Shell selected solid and opening Faces");
+    connect(shellAction_, &QAction::triggered, this, &MainWindow::createShell);
+    toolBar->addAction(shellAction_);
     modelingMenu->addSeparator();
 
     auto* clearAction = new QAction("Clear", this);
@@ -1238,6 +1259,25 @@ void MainWindow::createBox()
 void MainWindow::createCylinder()
 {
     reportResult(modeling_.createCylinder());
+}
+
+bool MainWindow::beginOperation(
+    const cad::application::InteractiveOperationKind kind,
+    const std::vector<std::string>& sourceFeatureIds)
+{
+    viewer_->cancelActiveOperation();
+    operationSession_.cancel();
+    return operationSession_.beginCreate(kind, sourceFeatureIds);
+}
+
+void MainWindow::cancelOperation()
+{
+    operationSession_.cancel();
+}
+
+bool MainWindow::commitOperation()
+{
+    return operationSession_.commit().has_value();
 }
 
 void MainWindow::createRectangleSketch()
@@ -1727,6 +1767,8 @@ void MainWindow::createFace()
 void MainWindow::createExtrude()
 {
     const auto ids = selectedIds();
+    if (ids.size() != 1 || !beginOperation(
+            cad::application::InteractiveOperationKind::Extrude, ids)) return;
     if (ids.size() == 1) {
         const auto feature = modeling_.body().findFeature(ids.front());
         if (feature && feature->role() == cad::parametric::FeatureRole::Sketch) {
@@ -1734,27 +1776,39 @@ void MainWindow::createExtrude()
             const double distance = QInputDialog::getDouble(
                 this, "Extrude", "Distance:", 20.0, 0.001, 1'000'000.0,
                 3, &accepted);
-            if (!accepted) return;
+            if (!accepted) { cancelOperation(); return; }
+            operationSession_.updatePreview("distance", distance);
             const auto reverse = QMessageBox::question(
                 this, "Extrude", "Reverse direction?",
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
                 == QMessageBox::Yes;
-            reportResult(modeling_.createExtrudeFromSketch(
-                currentSelection_, distance, reverse));
+            operationSession_.updatePreview("reverse", reverse ? 1.0 : 0.0);
+            const auto result = modeling_.createExtrudeFromSketch(
+                currentSelection_, distance, reverse);
+            if (!result.success) cancelOperation(); else commitOperation();
+            reportResult(result);
             return;
         }
     }
-    reportResult(modeling_.createExtrude(ids));
+    const auto result = modeling_.createExtrude(ids);
+    if (!result.success) cancelOperation(); else commitOperation();
+    reportResult(result);
 }
 
 void MainWindow::createPocket()
 {
+    const auto ids = selectedIds();
+    if (ids.size() != 1 || !beginOperation(
+            cad::application::InteractiveOperationKind::Pocket, ids)) return;
     bool accepted = false;
     const double depth = QInputDialog::getDouble(
         this, "Pocket", "Depth:", 10.0, 0.001, 1'000'000.0,
         3, &accepted);
-    if (!accepted) return;
-    reportResult(modeling_.createPocketFromSketch(currentSelection_, depth));
+    if (!accepted) { cancelOperation(); return; }
+    operationSession_.updatePreview("depth", depth);
+    const auto result = modeling_.createPocketFromSketch(currentSelection_, depth);
+    if (!result.success) cancelOperation(); else commitOperation();
+    reportResult(result);
 }
 
 void MainWindow::createLinearPattern()
@@ -1769,12 +1823,72 @@ void MainWindow::createPathPattern()
 
 void MainWindow::createFillet()
 {
-    reportResult(modeling_.createFillet(currentSelection_));
+    const auto ids = currentSelection_.featureIds();
+    if (ids.empty() || !beginOperation(
+            cad::application::InteractiveOperationKind::Fillet, ids)) return;
+    bool accepted = false;
+    const double radius = QInputDialog::getDouble(
+        this, "Fillet", "Radius:", 3.0, 0.001, 1'000'000.0, 3, &accepted);
+    if (!accepted) { cancelOperation(); return; }
+    operationSession_.updatePreview("radius", radius);
+    const auto result = modeling_.createFillet(currentSelection_, radius);
+    if (!result.success) cancelOperation(); else commitOperation();
+    reportResult(result);
 }
 
 void MainWindow::createChamfer()
 {
-    reportResult(modeling_.createChamfer(currentSelection_));
+    const auto ids = currentSelection_.featureIds();
+    if (ids.empty() || !beginOperation(
+            cad::application::InteractiveOperationKind::Chamfer, ids)) return;
+    bool accepted = false;
+    const double distance = QInputDialog::getDouble(
+        this, "Chamfer", "Distance:", 3.0, 0.001, 1'000'000.0, 3, &accepted);
+    if (!accepted) { cancelOperation(); return; }
+    operationSession_.updatePreview("distance", distance);
+    const auto result = modeling_.createChamfer(currentSelection_, distance);
+    if (!result.success) cancelOperation(); else commitOperation();
+    reportResult(result);
+}
+
+void MainWindow::createShell()
+{
+    const auto ids = currentSelection_.featureIds();
+    if (ids.empty() || !beginOperation(
+            cad::application::InteractiveOperationKind::Shell, ids)) return;
+    bool accepted = false;
+    const double thickness = QInputDialog::getDouble(
+        this, "Shell", "Thickness:", 1.0, 0.001, 1'000'000.0, 3, &accepted);
+    if (!accepted) { cancelOperation(); return; }
+    operationSession_.updatePreview("thickness", thickness);
+    const auto result = modeling_.createShell(currentSelection_, thickness);
+    if (!result.success) cancelOperation(); else commitOperation();
+    reportResult(result);
+}
+
+void MainWindow::createRevolve()
+{
+    const auto ids = selectedIds();
+    if (ids.size() != 1 || !beginOperation(
+            cad::application::InteractiveOperationKind::Revolve, ids)) return;
+
+    bool accepted = false;
+    const QString axisName = QInputDialog::getItem(
+        this, "Revolve", "Axis:", {"X", "Y", "Z"}, 1, false, &accepted);
+    if (!accepted) { cancelOperation(); return; }
+    const double angle = QInputDialog::getDouble(
+        this, "Revolve", "Angle (degrees):", 360.0, -360.0, 360.0,
+        3, &accepted);
+    if (!accepted || std::abs(angle) <= 1.0e-9) { cancelOperation(); return; }
+
+    cad::parametric::RevolveAxisDefinition axis;
+    if (axisName == "X") axis.type = cad::parametric::RevolveAxisType::GlobalX;
+    else if (axisName == "Z") axis.type = cad::parametric::RevolveAxisType::GlobalZ;
+    else axis.type = cad::parametric::RevolveAxisType::GlobalY;
+    operationSession_.updatePreview("angleDegrees", angle);
+    const auto result = modeling_.createRevolve(currentSelection_, axis, angle);
+    if (!result.success) cancelOperation(); else commitOperation();
+    reportResult(result);
 }
 
 void MainWindow::deleteFeature()
@@ -1794,6 +1908,8 @@ void MainWindow::deleteFeature()
 
 void MainWindow::clearDocument()
 {
+    viewer_->cancelActiveOperation();
+    operationSession_.cancel();
     modeling_.clearProject();
     applySelection({});
     featureEditorPanel_->refresh();
@@ -1849,6 +1965,8 @@ void MainWindow::newDocument()
     if (projectLoading_) return;
 #endif
     if (!confirmReplacement()) return;
+    viewer_->cancelActiveOperation();
+    operationSession_.cancel();
     project_.newProject();
     presenter_->clear();
     applySelection({});
@@ -2045,6 +2163,8 @@ void MainWindow::abortIfcImport(const QString& error)
 
 void MainWindow::startProjectLoad(const QString& path)
 {
+    viewer_->cancelActiveOperation();
+    operationSession_.cancel();
     projectLoading_ = true;
     pendingProjectPath_ = path;
     projectLoadLoaded_ = std::make_shared<std::atomic<int>>(0);

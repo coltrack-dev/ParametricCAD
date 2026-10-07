@@ -66,9 +66,18 @@ Sketch -> Face -> Extrude remains editable after loading. No undo commands are s
 - Interactive Push/Pull preview is transient; a completed drag creates one
   persistent PushPull feature and one undoable history change. Its face identity
   is stored as a persistent TopologicalReference.
+- Extrude, Pocket, Fillet, Chamfer, and Shell operation dialogs use the same
+  transient session boundary: cancelling creates no command, while accepting
+  creates exactly one feature command. Numeric property edits use one
+  `ChangeParametricPropertyCommand` per completed edit, including Shell
+  thickness.
 - Dependency order is validated on insertion; there is no arbitrary history reordering.
 - Invalid parameter edits are undoable model error states. Undo restores a valid
   earlier value; saving a failed model is rejected.
+- Revolve creation is one AddFeature command. Its Angle and supported global-axis
+  edits are one ChangeParametricProperty command each; Sketch-line and model-edge
+  axis identities remain persistent references and are re-resolved during
+  recompute.
 - Headless tests cover model/commands; panel tests use Qt offscreen, without an OCCT
   display. Camera behavior still needs a manual viewport smoke test.
 

@@ -89,6 +89,12 @@ void FeatureEditorPanel::setService(cad::application::FeatureEditingService* ser
     refresh();
 }
 
+void FeatureEditorPanel::setOperationSession(
+    cad::application::InteractiveOperationSession* session)
+{
+    operationSession_ = session;
+}
+
 void FeatureEditorPanel::setFeatures(
     std::vector<cad::application::FeatureDescriptor> features
 )
@@ -327,6 +333,42 @@ void FeatureEditorPanel::reportResult(const cad::application::ModelingResult& re
         }
         if (!resultId.isEmpty()) selectFeatures({resultId});
     });
+}
+
+void FeatureEditorPanel::applyPropertyChange(
+    const std::string& featureId,
+    const cad::parametric::FeatureProperty& property,
+    const cad::parametric::PropertyValue& value)
+{
+    if (!service_) return;
+    bool sessionStarted = false;
+    if (operationSession_) {
+        std::map<std::string, double> original;
+        if (const auto number = std::get_if<double>(&property.value)) {
+            original[property.key] = *number;
+        } else if (const auto integer = std::get_if<int>(&property.value)) {
+            original[property.key] = static_cast<double>(*integer);
+        } else if (const auto boolean = std::get_if<bool>(&property.value)) {
+            original[property.key] = *boolean ? 1.0 : 0.0;
+        }
+        sessionStarted = operationSession_->beginEdit(
+            cad::application::InteractiveOperationKind::FeatureEdit,
+            featureId, std::move(original));
+        if (sessionStarted) {
+            if (const auto number = std::get_if<double>(&value))
+                operationSession_->updatePreview(property.key, *number);
+            else if (const auto integer = std::get_if<int>(&value))
+                operationSession_->updatePreview(property.key, static_cast<double>(*integer));
+            else if (const auto boolean = std::get_if<bool>(&value))
+                operationSession_->updatePreview(property.key, *boolean ? 1.0 : 0.0);
+        }
+    }
+    const auto result = service_->setFeatureProperty(featureId, property.key, value);
+    if (sessionStarted) {
+        if (result.success) operationSession_->commit();
+        else operationSession_->cancel();
+    }
+    reportResult(result);
 }
 
 bool FeatureEditorPanel::propertyMatchesCurrentValue(
@@ -1111,8 +1153,7 @@ void FeatureEditorPanel::rebuildProperties(
                 const auto apply = [this, featureId, property, after]() {
                     if (!service_) return;
                     if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
-                    reportResult(service_->setFeatureProperty(
-                        featureId, property.key, after));
+                    applyPropertyChange(featureId, property, after);
                 };
                 if (committingPendingEdit_) apply();
                 else QTimer::singleShot(0, this, apply);
@@ -1142,8 +1183,7 @@ void FeatureEditorPanel::rebuildProperties(
                     const auto apply = [this, featureId, property, after]() {
                         if (!service_) return;
                         if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
-                        reportResult(service_->setFeatureProperty(
-                            featureId, property.key, after));
+                        applyPropertyChange(featureId, property, after);
                     };
                     if (committingPendingEdit_) apply();
                     else QTimer::singleShot(0, this, apply);
@@ -1160,17 +1200,20 @@ void FeatureEditorPanel::rebuildProperties(
                     QTimer::singleShot(0, this, [this, featureId, property, checked]() {
                         if (!service_) return;
                         if (propertyMatchesCurrentValue(featureId, property.key, checked)) return;
-                        reportResult(service_->setFeatureProperty(
-                            featureId, property.key, checked));
+                        applyPropertyChange(featureId, property, checked);
                     });
                 });
         } else if (property.editable && std::holds_alternative<std::string>(property.value)
-                   && (property.key == "distribution" || property.key == "orientation")) {
+                   && (property.key == "distribution" || property.key == "orientation"
+                       || property.key == "axisType")) {
             auto* editor = new QComboBox(propertiesWidget_);
             if (property.key == "distribution") {
                 editor->addItems({QStringLiteral("FixedSpacing"), QStringLiteral("FitCount")});
-            } else {
+            } else if (property.key == "orientation") {
                 editor->addItems({QStringLiteral("Fixed"), QStringLiteral("Tangent")});
+            } else {
+                editor->addItems({QStringLiteral("GlobalX"), QStringLiteral("GlobalY"),
+                    QStringLiteral("GlobalZ")});
             }
             editor->setCurrentText(QString::fromStdString(std::get<std::string>(property.value)));
             const QString label = QString::fromStdString(property.label);
@@ -1183,8 +1226,7 @@ void FeatureEditorPanel::rebuildProperties(
                     QTimer::singleShot(0, this, [this, featureId, property, after]() {
                         if (!service_) return;
                         if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
-                        reportResult(service_->setFeatureProperty(
-                            featureId, property.key, after));
+                        applyPropertyChange(featureId, property, after);
                     });
                 });
         } else {

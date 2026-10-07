@@ -96,12 +96,15 @@ begin -> updatePreview -> commit or cancel
 ```
 
 `InteractiveOperationSession` owns the transient operation context: operation
-kind, source IDs, optional edit target, and temporary parameters. It does not
+kind, source IDs, optional edit target, original parameters, and temporary
+parameters. It does not
 own a `TopoDS_Shape`, `Body`, or AIS object. Viewer tools may keep operation-
 specific transient presentation caches for performance, but those caches are
 discarded by cancel and are never written to the parametric model.
 
 Creation commits go through `ModelingController` and an add-feature command.
+MainWindow and CadViewer share one session instance, so switching tools,
+selection, Esc, and project replacement cancel the same transient operation.
 Editing an existing feature goes through the same controller boundary and
 `ChangeParametricPropertyCommand`, so one completed edit produces one undo
 entry and marks only the affected dependency branch dirty. The
@@ -118,8 +121,16 @@ After commit or property edit, the normal path is:
 ModelingController -> Body dirty/recompute -> ModelPresenter -> CadViewer
 ```
 
-This keeps preview responsive while making persistent results, selection, and
-Undo/Redo use one model refresh pipeline.
+Extrude, Pocket, Fillet, Chamfer, Shell, and Revolve use the session for staged numeric
+operation input; Push/Pull additionally uses it for its lightweight AIS drag
+preview. Their geometry construction remains in the corresponding feature and
+controller code. This keeps preview responsive while making persistent results,
+selection, and Undo/Redo use one model refresh pipeline.
+
+Revolve's axis identity remains in the model layer: global axes are enum values,
+Sketch axes use stable entity IDs, and model-edge axes use persistent topology
+references. The UI stages the angle and global-axis choice but never stores a
+transient OCCT axis as history.
 
 ## Parametric model
 

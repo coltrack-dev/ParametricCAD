@@ -697,6 +697,32 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
         {"Revolve", [](const QJsonObject& o, const Body& body) {
             const auto profile = body.findFeature(string(o, "sourceFeatureId"));
             require(static_cast<bool>(profile), "Revolve references missing profile");
+            if (o.value("axis").isObject()) {
+                const auto axisObject = o.value("axis").toObject();
+                const auto axisName = axisObject.value("type").toString().toStdString();
+                RevolveAxisDefinition axis;
+                if (axisName == "GlobalX") axis.type = RevolveAxisType::GlobalX;
+                else if (axisName == "GlobalY") axis.type = RevolveAxisType::GlobalY;
+                else if (axisName == "GlobalZ") axis.type = RevolveAxisType::GlobalZ;
+                else if (axisName == "SketchLine") axis.type = RevolveAxisType::SketchLine;
+                else if (axisName == "ModelEdge") axis.type = RevolveAxisType::ModelEdge;
+                else throw std::runtime_error("Invalid Revolve axis type");
+                const auto sketch = std::dynamic_pointer_cast<SketchFeature>(profile);
+                require(static_cast<bool>(sketch), "Revolve axis requires a Sketch profile");
+                std::shared_ptr<ParametricFeature> axisSource;
+                if (axis.type == RevolveAxisType::SketchLine) {
+                    axis.sketchFeatureId = string(axisObject, "sketchFeatureId");
+                    axis.sketchLineId = string(axisObject, "entityId");
+                } else if (axis.type == RevolveAxisType::ModelEdge) {
+                    axis.edgeFeatureId = string(axisObject, "featureId");
+                    axis.edgeReference = cad::topology::topologicalReferenceFromJson(
+                        axisObject.value("reference").toObject());
+                    axisSource = body.findFeature(axis.edgeFeatureId);
+                    require(static_cast<bool>(axisSource), "Revolve axis feature is missing");
+                }
+                return std::make_shared<RevolveFeature>(string(o, "id"), sketch, axis,
+                    number(o, "angleDegrees") * std::acos(-1.0) / 180.0, axisSource);
+            }
             const gp_Pnt origin(number(o, "axisOriginX"), number(o, "axisOriginY"),
                 number(o, "axisOriginZ"));
             const gp_Dir direction(number(o, "axisX"), number(o, "axisY"),

@@ -10,6 +10,8 @@
 #include "operations/SketchConstraintSolver.h"
 
 #include <TopoDS.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <GeomAbs_CurveType.hxx>
 #include <TopExp.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <QUuid>
@@ -782,6 +784,109 @@ ModelingResult ModelingController::createPocketFromSketch(
     }
 }
 
+ModelingResult ModelingController::createShell(
+    const SelectionSnapshot& selection,
+    const double thickness)
+{
+    const auto featureIds = selection.featureIds();
+    if (featureIds.size() != 1) {
+        return {false, {}, "Shell requires one solid and its opening Faces"};
+    }
+    const auto source = body_.findFeature(featureIds.front());
+    if (!source) return {false, {}, "Shell source feature does not exist"};
+
+    try {
+        SelectionResolver resolver(body_);
+        std::vector<cad::topology::TopologicalReference> references;
+        for (const auto& item : selection.items) {
+            if (item.kind != SelectionKind::Face || !item.subshapeIndex
+                || item.featureId != source->id()) continue;
+            const auto face = resolver.resolve(item);
+            if (!face || face->ShapeType() != TopAbs_FACE) {
+                return {false, {}, "Shell opening Face is invalid"};
+            }
+            references.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+                source->id(), source->shape(), *face));
+        }
+        if (references.empty()) {
+            TopTools_IndexedMapOfShape faces;
+            TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
+            if (faces.Extent() == 0) return {false, {}, "Shell source has no removable Face"};
+            references.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+                source->id(), source->shape(), TopoDS::Face(faces.FindKey(1))));
+        }
+        return addFeature(std::make_shared<cad::parametric::ShellFeature>(
+            id("shell"), source, std::move(references), thickness));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::createRevolve(
+    const SelectionSnapshot& selection,
+    cad::parametric::RevolveAxisDefinition axis,
+    const double angleDegrees)
+{
+    if (selection.items.size() != 1 || selection.items.front().kind != SelectionKind::Object) {
+        return {false, {}, "Revolve requires exactly one Sketch object"};
+    }
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(selection.items.front().featureId));
+    if (!sketch) return {false, {}, "Revolve requires a Sketch profile"};
+    std::string profileError;
+    if (!validateSketchProfile(*sketch, profileError)) return {false, {}, profileError};
+    if (!std::isfinite(angleDegrees) || std::abs(angleDegrees) <= 1.0e-9
+        || std::abs(angleDegrees) > 360.0) {
+        return {false, {}, "Revolve angle must be between -360 and 360 degrees"};
+    }
+    if (axis.type == cad::parametric::RevolveAxisType::SketchLine) {
+        if (axis.sketchFeatureId != sketch->id() || axis.sketchLineId.empty()) {
+            return {false, {}, "Revolve Sketch line axis is invalid"};
+        }
+        const auto found = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+            [&axis](const auto& entity) {
+                const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+                return line && line->id == axis.sketchLineId;
+            });
+        if (found == sketch->entities().end()) {
+            return {false, {}, "Revolve Sketch line axis could not be resolved"};
+        }
+    }
+    if (axis.type == cad::parametric::RevolveAxisType::ModelEdge) {
+        const auto axisSource = body_.findFeature(axis.edgeFeatureId);
+        if (!axisSource || !axis.edgeReference) {
+            return {false, {}, "Revolve model Edge axis is invalid"};
+        }
+        if (axis.edgeReference->featureId != axisSource->id()
+            || axis.edgeReference->kind != cad::topology::TopologicalKind::Edge) {
+            return {false, {}, "Revolve model Edge reference is invalid"};
+        }
+        try {
+            const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+                *axis.edgeReference, axisSource->shape());
+            if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+                || resolved.shape->ShapeType() != TopAbs_EDGE) {
+                return {false, {}, "Revolve model Edge axis could not be resolved"};
+            }
+            BRepAdaptor_Curve curve(TopoDS::Edge(*resolved.shape));
+            if (curve.GetType() != GeomAbs_Line)
+                return {false, {}, "Revolve model Edge axis must be linear"};
+        } catch (const std::exception& error) {
+            return failure(error);
+        }
+        return addFeature(std::make_shared<cad::parametric::RevolveFeature>(
+            id("revolve"), sketch, std::move(axis),
+            angleDegrees * std::acos(-1.0) / 180.0, axisSource));
+    }
+    try {
+        return addFeature(std::make_shared<cad::parametric::RevolveFeature>(
+            id("revolve"), sketch, std::move(axis),
+            angleDegrees * std::acos(-1.0) / 180.0));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::createLinearPattern(
     const std::vector<std::string>& selection
 )
@@ -1202,6 +1307,18 @@ ModelingActionState ModelingController::actionState(
             });
         state.canFillet = sameSource;
         state.canChamfer = sameSource;
+        if (selection.featureIds().size() == 1) {
+            const auto source = body_.findFeature(selection.featureIds().front());
+        state.canShell = source && !source->shape().IsNull()
+                && source->role() != cad::parametric::FeatureRole::Sketch;
+        }
+        const auto feature = body_.findFeature(selection.featureIds().front());
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+        if (sketch && selection.items.size() == 1
+            && selection.items.front().kind == SelectionKind::Object) {
+            std::string profileError;
+            state.canRevolve = validateSketchProfile(*sketch, profileError);
+        }
         if (selection.items.size() == 1 && first.kind == SelectionKind::Face
             && first.subshapeIndex && !first.featureId.empty()) {
             const auto feature = body_.findFeature(first.featureId);
