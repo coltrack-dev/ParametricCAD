@@ -9,6 +9,7 @@
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
 #include "operations/SketchConstraintSolver.h"
+#include "operations/SketchProfileBuilder.h"
 #include "operations/ImportedFeature.h"
 
 #include <QAction>
@@ -933,7 +934,16 @@ void MainWindow::applySelection(
     // preserve feedback-loop suppression for featureSelectionChanged.
     if (updateViewer) {
         viewer_->selectFeatures(featureIds);
-        currentSelection_ = viewer_->selectionSnapshot();
+        // Tree selection is always feature/object selection. Do not
+        // reinterpret it through a stale viewport Face/Edge mode.
+        currentSelection_.items.clear();
+        currentSelection_.items.reserve(featureIds.size());
+        for (const auto& featureId : featureIds) {
+            currentSelection_.items.push_back({
+                featureId.toStdString(),
+                cad::application::SelectionKind::Object,
+                std::nullopt});
+        }
     }
     selectedObjectIds_ = featureIds;
     featureEditorPanel_->selectFeatures(featureIds);
@@ -1311,6 +1321,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
 
 void MainWindow::finishSketch()
 {
+    const QString finishedSketchId = QString::fromStdString(activeSketchId_);
     viewer_->exitSketchMode();
     activeSketchId_.clear();
     sketchTool_ = SketchTool::None;
@@ -1341,6 +1352,13 @@ void MainWindow::finishSketch()
     updateActionState();
     statusBar()->showMessage("Ready");
     refreshModelView(false);
+    if (!finishedSketchId.isEmpty()) {
+        // exitSketchMode() restores the previous viewport selection mode and
+        // clears AIS selection. Re-project the finished Sketch as an object
+        // selection so tree selection and feature actions do not depend on
+        // the stale pre-edit Face selection.
+        applySelection({finishedSketchId});
+    }
 }
 
 void MainWindow::selectSketchLineTool()

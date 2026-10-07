@@ -152,6 +152,28 @@ target_link_libraries(undo_panel_tests PRIVATE model_test_support Qt6::Test Qt6:
 add_test(NAME undo_panel_tests COMMAND undo_panel_tests)
 set_tests_properties(undo_panel_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
 
+add_executable(main_window_tests
+    main_window_tests.cpp
+    ../src/viewer/MainWindow.cpp
+    ../src/viewer/ModelPresenter.cpp
+    ../src/viewer/PushPullDrag.cpp
+    ../src/viewer/TransformMath.cpp
+    ../src/viewer/TransformGizmo.cpp
+    ../src/viewer/TransformGizmoPicking.cpp
+    ../src/viewer/SnapManager.cpp
+    ../src/viewer/SelectionAdapter.cpp
+    ../src/viewer/FeatureEditorPanel.cpp
+    ../src/viewer/BimNavigationPanel.cpp
+    ../src/viewer/BimInspectorPanel.cpp
+    ../src/viewer/CadViewer.cpp
+)
+target_link_libraries(main_window_tests PRIVATE
+    model_test_support Qt6::Test Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets
+    Qt6::Concurrent ParametricCAD::OCCTVisualization)
+add_test(NAME main_window_tests COMMAND main_window_tests)
+set_tests_properties(main_window_tests PROPERTIES
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
+
 add_executable(controller_tests controller_tests.cpp)
 target_link_libraries(controller_tests PRIVATE model_test_support Qt6::Test)
 add_test(NAME controller_tests COMMAND controller_tests)
