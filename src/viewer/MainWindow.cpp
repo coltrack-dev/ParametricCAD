@@ -9,7 +9,6 @@
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
 #include "operations/SketchConstraintSolver.h"
-#include "operations/SketchProfileBuilder.h"
 #include "operations/ImportedFeature.h"
 
 #include <QAction>

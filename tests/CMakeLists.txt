@@ -32,6 +32,10 @@ target_link_libraries(push_pull_drag_tests PRIVATE Qt6::Gui
     ParametricCAD::OCCTVisualization)
 add_test(NAME push_pull_drag_tests COMMAND push_pull_drag_tests)
 
+add_executable(interactive_operation_tests interactive_operation_tests.cpp)
+target_include_directories(interactive_operation_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME interactive_operation_tests COMMAND interactive_operation_tests)
+
 add_executable(selection_tests
     selection_tests.cpp
     ../src/viewer/SelectionAdapter.cpp

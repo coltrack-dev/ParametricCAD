@@ -743,6 +743,31 @@ private slots:
         QCOMPARE(shell->faceReferences().size(), std::size_t{1});
     }
 
+    void shellThicknessEditUsesCommonUndoPipeline()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto source = controller.body().findFeature(box.id);
+        QVERIFY(source);
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
+        const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            box.id, source->shape(), TopoDS::Face(faces.FindKey(1)));
+        auto shell = std::make_shared<ShellFeature>(
+            "shell", std::dynamic_pointer_cast<ParametricFeature>(source),
+            std::vector<cad::topology::TopologicalReference>{reference}, 1.0);
+        controller.body().addFeature(shell);
+        QVERIFY(controller.body().recompute());
+
+        QVERIFY(controller.setFeatureProperty(shell->id(), "thickness", 2.5).success);
+        QCOMPARE(shell->thickness(), 2.5);
+        controller.undo();
+        QCOMPARE(shell->thickness(), 1.0);
+        controller.redo();
+        QCOMPARE(shell->thickness(), 2.5);
+    }
+
     void transformIsOneUndoablePlacementChange()
     {
         ModelingController controller;

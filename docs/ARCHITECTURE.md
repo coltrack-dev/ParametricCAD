@@ -87,6 +87,40 @@ visibility/group/filter/preset changes are command-driven. Temporary isolation,
 Ghost Others, spatial visibility, section clipping, camera state, and saved-view
 restore are presentation state and are not modeling features.
 
+## Interactive parametric operations
+
+Interactive modeling tools use the same four-phase lifecycle:
+
+```text
+begin -> updatePreview -> commit or cancel
+```
+
+`InteractiveOperationSession` owns the transient operation context: operation
+kind, source IDs, optional edit target, and temporary parameters. It does not
+own a `TopoDS_Shape`, `Body`, or AIS object. Viewer tools may keep operation-
+specific transient presentation caches for performance, but those caches are
+discarded by cancel and are never written to the parametric model.
+
+Creation commits go through `ModelingController` and an add-feature command.
+Editing an existing feature goes through the same controller boundary and
+`ChangeParametricPropertyCommand`, so one completed edit produces one undo
+entry and marks only the affected dependency branch dirty. The
+`FeatureEditorPanel` does not mutate feature geometry directly.
+
+Input validation belongs to the modeling/operation layer and is reused by
+action-state checks and commit paths. Persistent topology identity belongs to
+feature parameters (`TopologicalReference`); transient OCCT subshapes are
+valid only while building a preview or resolving the current result.
+
+After commit or property edit, the normal path is:
+
+```text
+ModelingController -> Body dirty/recompute -> ModelPresenter -> CadViewer
+```
+
+This keeps preview responsive while making persistent results, selection, and
+Undo/Redo use one model refresh pipeline.
+
 ## Parametric model
 
 `Body` is the canonical ordered history owner. It contains shared

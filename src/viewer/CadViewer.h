@@ -32,6 +32,7 @@
 #include "viewer/TransformMath.h"
 #include "viewer/SelectionAdapter.h"
 #include "application/VisibilityMode.h"
+#include "application/InteractiveOperation.h"
 #include "application/VisibilityManager.h"
 #include "operations/ParametricFeatures.h"
 #include "model/TopologicalReference.h"
@@ -330,6 +331,7 @@ private:
 
     bool pushPullArmed_{false};
     bool pushPullActive_{false};
+    cad::application::InteractiveOperationSession pushPullOperation_;
     double pushPullDistance_{0.0};
     TopoDS_Face pushPullFace_;
     TopoDS_Shape pushPullBaseShape_;

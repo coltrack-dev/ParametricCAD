@@ -47,6 +47,23 @@ bool containsVisibilityCommand(const QUndoCommand* command)
     }
     return false;
 }
+
+bool validateSketchProfile(
+    const cad::parametric::SketchFeature& sketch,
+    std::string& error)
+{
+    try {
+        const auto profile = cad::operations::SketchProfileBuilder::build(sketch);
+        if (profile.faces.empty()) {
+            error = "Sketch does not contain a closed profile";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        return false;
+    }
+}
 }
 
 cad::parametric::Body& ModelingController::body() noexcept { return body_; }
@@ -728,8 +745,9 @@ ModelingResult ModelingController::createExtrudeFromSketch(
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
         body_.findFeature(selection.items.front().featureId));
     if (!sketch) return {false, {}, "Selected feature is not a Sketch"};
+    std::string profileError;
+    if (!validateSketchProfile(*sketch, profileError)) return {false, {}, profileError};
     try {
-        (void)cad::operations::SketchProfileBuilder::build(*sketch);
         return addFeature(std::make_shared<cad::parametric::ExtrudeFeature>(
             id("extrude"), sketch, distance, reversed));
     } catch (const std::exception& error) {
@@ -754,8 +772,9 @@ ModelingResult ModelingController::createPocketFromSketch(
     }
     const auto target = body_.findFeature(sketch->faceReference()->featureId);
     if (!target) return {false, {}, "Pocket target feature does not exist"};
+    std::string profileError;
+    if (!validateSketchProfile(*sketch, profileError)) return {false, {}, profileError};
     try {
-        (void)cad::operations::SketchProfileBuilder::build(*sketch);
         return addFeature(std::make_shared<cad::parametric::PocketFeature>(
             id("pocket"), target, sketch, depth));
     } catch (const std::exception& error) {
@@ -1148,20 +1167,13 @@ ModelingActionState ModelingController::actionState(
         state.canExtrude = feature && feature->role() == cad::parametric::FeatureRole::Face;
         if (feature && feature->role() == cad::parametric::FeatureRole::Sketch) {
             const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
-            try {
-                if (sketch) {
-                    (void)cad::operations::SketchProfileBuilder::build(*sketch);
-                    state.canExtrude = true;
-                }
-            } catch (const std::exception&) {
-                state.canExtrude = false;
-            }
+            std::string profileError;
+            state.canExtrude = sketch && validateSketchProfile(*sketch, profileError);
             state.canPocket = sketch && sketch->supportType() == cad::parametric::SketchSupportType::Face
                 && sketch->faceReference()
                 && body_.findFeature(sketch->faceReference()->featureId);
             if (state.canPocket) {
-                try { (void)cad::operations::SketchProfileBuilder::build(*sketch); }
-                catch (const std::exception&) { state.canPocket = false; }
+                state.canPocket = validateSketchProfile(*sketch, profileError);
             }
         }
     }

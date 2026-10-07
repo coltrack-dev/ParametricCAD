@@ -718,6 +718,9 @@ public:
     );
     const char* typeId() const noexcept override { return "Shell"; }
     Ptr clone(std::string newId) const override;
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    std::vector<std::string> hiddenDependencyIds() const override;
 
     void setFacesToRemove(std::vector<TopoDS_Face> faces);
     void setThickness(double thickness);

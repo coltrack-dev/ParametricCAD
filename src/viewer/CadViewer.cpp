@@ -2635,6 +2635,11 @@ bool CadViewer::beginPushPull()
     pushPullFaceReference_ = faceReference;
     pushPullObject_ = selectedObject;
     pushPullDistance_ = 0.0;
+    if (!pushPullOperation_.begin({
+            cad::application::InteractiveOperationKind::PushPull,
+            {featureId.toStdString()}, {}, {}})) {
+        return false;
+    }
     pushPullActive_ = true;
 
     context_->UpdateCurrentViewer();
@@ -2701,6 +2706,7 @@ void CadViewer::updatePushPullPreview(const QPoint& position)
         return;
     }
     pushPullDistance_ = *distance;
+    pushPullOperation_.updatePreview("distance", pushPullDistance_);
 
     if (std::abs(pushPullDistance_) <= PushPullTolerance) {
         if (!pushPullPreview_.IsNull()) {
@@ -2763,6 +2769,11 @@ void CadViewer::commitPushPull()
         pushPullPreview_.Nullify();
     }
 
+    const auto operation = pushPullOperation_.commit();
+    if (!operation) {
+        return;
+    }
+
     if (!pushPullObject_.IsNull()) {
         applyFeaturePresentation(pushPullFeatureId_, pushPullObject_);
     }
@@ -2795,6 +2806,8 @@ void CadViewer::cancelPushPull()
     if (!pushPullActive_) {
         return;
     }
+
+    pushPullOperation_.cancel();
 
     if (!pushPullPreview_.IsNull()) {
         context_->Remove(pushPullPreview_, Standard_False);

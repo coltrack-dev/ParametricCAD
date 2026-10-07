@@ -63,7 +63,9 @@ Sketch -> Face -> Extrude remains editable after loading. No undo commands are s
 
 ## Limits
 
-- Experimental viewer-only Push/Pull is still outside the parametric model/history.
+- Interactive Push/Pull preview is transient; a completed drag creates one
+  persistent PushPull feature and one undoable history change. Its face identity
+  is stored as a persistent TopologicalReference.
 - Dependency order is validated on insertion; there is no arbitrary history reordering.
 - Invalid parameter edits are undoable model error states. Undo restores a valid
   earlier value; saving a failed model is rejected.

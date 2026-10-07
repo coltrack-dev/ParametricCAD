@@ -2236,6 +2236,25 @@ double ShellFeature::thickness() const noexcept
     return thickness_;
 }
 
+std::vector<FeatureProperty> ShellFeature::properties() const
+{
+    return {textProperty("sourceFeatureId", "Source", base_->name()),
+            numericProperty("thickness", "Thickness", thickness_)};
+}
+
+bool ShellFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (key != "thickness" || !std::isfinite(value) || value <= 0.001) return false;
+    thickness_ = value;
+    markDirty();
+    return true;
+}
+
+std::vector<std::string> ShellFeature::hiddenDependencyIds() const
+{
+    return {base_->id()};
+}
+
 TopoDS_Shape ShellFeature::build() const
 {
     auto faces = facesToRemove_;
