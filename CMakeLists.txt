@@ -116,12 +116,17 @@ if(PARAMETRIC_CAD_ENABLE_IFC)
               "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib64"
         NO_DEFAULT_PATH)
     if(NOT PARAMETRIC_CAD_IFC_INCLUDE_DIR OR
-       NOT PARAMETRIC_CAD_IFC_GEOM_LIBRARY OR
-       NOT PARAMETRIC_CAD_IFC_PARSE_LIBRARY OR
-       NOT PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY OR
-       NOT PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY)
+       NOT EXISTS "${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}" OR
+       NOT EXISTS "${PARAMETRIC_CAD_IFC_PARSE_LIBRARY}" OR
+       NOT EXISTS "${PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY}" OR
+       NOT EXISTS "${PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY}")
         message(FATAL_ERROR "IfcOpenShell v0.7.1 headers/libraries were not found under PARAMETRIC_CAD_IFCOPENSHELL_ROOT")
     endif()
+    # The IfcOpenShell libraries are installed outside the system linker path.
+    # Keep the runtime path next to the explicit CMake library discovery so an
+    # IFC-enabled build runs without requiring LD_LIBRARY_PATH.
+    get_filename_component(PARAMETRIC_CAD_IFC_LIBRARY_DIR
+        "${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}" DIRECTORY)
 endif()
 
 add_subdirectory(src)
@@ -129,4 +134,17 @@ add_subdirectory(src)
 if(PARAMETRIC_CAD_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(PARAMETRIC_CAD_ENABLE_IFC)
+    set(_parametriccad_ifc_rpath "${PARAMETRIC_CAD_IFC_LIBRARY_DIR}")
+    set_target_properties(ParametricCAD PROPERTIES
+        BUILD_RPATH "${_parametriccad_ifc_rpath}"
+        INSTALL_RPATH "${_parametriccad_ifc_rpath}")
+    if(TARGET model_test_support)
+        set_target_properties(model_test_support PROPERTIES
+            BUILD_RPATH "${_parametriccad_ifc_rpath}"
+            INSTALL_RPATH "${_parametriccad_ifc_rpath}")
+    endif()
+    unset(_parametriccad_ifc_rpath)
 endif()
