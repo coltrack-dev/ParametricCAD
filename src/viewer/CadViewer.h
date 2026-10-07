@@ -178,7 +178,8 @@ public:
                                       const std::string& constraintId);
     void clearSketchConstraintHighlight();
     void setPushPullCommittedHandler(
-        std::function<void(const QString&, int, const gp_Vec&, double)> handler
+        std::function<void(const QString&, const cad::topology::TopologicalReference&,
+                           const gp_Vec&, double)> handler
     );
     void setTransformCommittedHandler(
         std::function<void(const QString&, const gp_Trsf&)> handler
@@ -336,9 +337,11 @@ private:
     gp_Vec pushPullNormal_;
     QString pushPullFeatureId_;
     int pushPullFaceIndex_{0};
+    std::optional<cad::topology::TopologicalReference> pushPullFaceReference_;
     Handle(AIS_Shape) pushPullObject_;
     Handle(AIS_Shape) pushPullPreview_;
-    std::function<void(const QString&, int, const gp_Vec&, double)> pushPullCommittedHandler_;
+    std::function<void(const QString&, const cad::topology::TopologicalReference&,
+                       const gp_Vec&, double)> pushPullCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCommittedHandler_;
     std::function<void(const QString&, const gp_Trsf&)> transformCopyCommittedHandler_;
     std::function<void(const gp_Pnt&, const gp_Pnt&)> spatialBoxChangedHandler_;

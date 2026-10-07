@@ -598,6 +598,85 @@ private slots:
         QVERIFY(!pushFeature->shape().IsNull());
     }
 
+    void pushPullDistanceEditIsUndoableAndPersistent()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto pick = firstPlanarFace(controller.body().findFeature(box.id)->shape());
+        const auto created = controller.pushPull(box.id, pick.index, pick.normal, 20.0);
+        QVERIFY2(created.success, qPrintable(QString::fromStdString(created.error)));
+        const auto feature = std::dynamic_pointer_cast<PushPullFeature>(
+            controller.body().findFeature(created.id));
+        QVERIFY(feature);
+        const auto reference = feature->faceReference();
+
+        QVERIFY(controller.setFeatureProperty(created.id, "distance", 35.0).success);
+        QCOMPARE(feature->distance(), 35.0);
+        controller.undo();
+        QCOMPARE(feature->distance(), 20.0);
+        controller.redo();
+        QCOMPARE(feature->distance(), 35.0);
+        QCOMPARE(feature->faceReference().featureId, reference.featureId);
+        QVERIFY(cad::topology::toJson(feature->faceReference())
+                == cad::topology::toJson(reference));
+    }
+
+    void pushPullRoundTripsAndSurvivesSourceResize()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto pick = firstPlanarFace(controller.body().findFeature(box.id)->shape());
+        const auto created = controller.pushPull(box.id, pick.index, pick.normal, 20.0);
+        QVERIFY2(created.success, qPrintable(QString::fromStdString(created.error)));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("push-pull.pcad");
+        QVERIFY(ProjectFile::save(path, controller.document(), controller.body(), error));
+
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<PushPullFeature>(
+            loadedBody.findFeature(created.id));
+        QVERIFY(loaded);
+        QVERIFY(loaded->faceReference().signature.has_value());
+        QCOMPARE(loaded->distance(), 20.0);
+
+        const auto loadedBox = std::dynamic_pointer_cast<BoxParametricFeature>(
+            loadedBody.findFeature(box.id));
+        QVERIFY(loadedBox);
+        loadedBox->setSize(120.0, 90.0, 40.0);
+        loadedBody.markDirtyFrom(box.id);
+        QVERIFY2(loadedBody.recompute(), qPrintable(QString::fromStdString(loadedBody.lastError())));
+        QCOMPARE(loaded->state(), FeatureState::UpToDate);
+        QVERIFY(!loaded->shape().IsNull());
+    }
+
+    void pushPullFailsWhenReferencedFaceCannotBeResolved()
+    {
+        auto source = std::make_shared<BoxParametricFeature>("source", 100.0, 70.0, 30.0);
+        QVERIFY(source->recompute());
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
+        auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            source->id(), source->shape(), faces(1));
+        reference.signature.reset();
+        reference.transientIndex = 999;
+
+        auto pushPull = std::make_shared<PushPullFeature>(
+            "pushpull", source, reference, gp_Vec(0.0, 0.0, 1.0), 20.0);
+        Body body;
+        body.addFeature(source);
+        body.addFeature(pushPull);
+        QVERIFY(!body.recompute());
+        QCOMPARE(pushPull->state(), FeatureState::Failed);
+        QVERIFY(QString::fromStdString(pushPull->error()).contains("topolog"));
+    }
+
     void shellUsesPersistentFaceReferencesAfterResize()
     {
         auto base = std::make_shared<BoxParametricFeature>("shell-base", 100.0, 70.0, 30.0);

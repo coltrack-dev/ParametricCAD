@@ -73,10 +73,11 @@ MainWindow::MainWindow(QWidget* parent)
     featureEditorPanel_->setSketchConstraintDeleteHandler(
         [this](const QString& id) { deleteSketchConstraint(id); });
     viewer_->setPushPullCommittedHandler(
-        [this](const QString& featureId, const int faceIndex,
+        [this](const QString& featureId,
+               const cad::topology::TopologicalReference& faceReference,
                const gp_Vec& normal, const double distance) {
             reportResult(modeling_.pushPull(
-                featureId.toStdString(), faceIndex, normal, distance));
+                featureId.toStdString(), faceReference, normal, distance));
         }
     );
     viewer_->setTransformCommittedHandler(

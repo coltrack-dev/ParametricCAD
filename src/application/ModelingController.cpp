@@ -896,9 +896,28 @@ ModelingResult ModelingController::pushPull(
             return {false, {}, "Push/Pull face reference is invalid"};
         const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
             source->id(), source->shape(), faces(faceIndex));
-        const auto feature = std::make_shared<cad::parametric::PushPullFeature>(
-            id("pushpull"), source, reference, normal, distance);
-        return addFeature(feature);
+        return pushPull(targetId, reference, normal, distance);
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::pushPull(
+    const std::string& targetId,
+    const cad::topology::TopologicalReference& faceReference,
+    const gp_Vec& normal,
+    const double distance
+)
+{
+    const auto source = body_.findFeature(targetId);
+    if (!source) return {false, {}, "Push/Pull target does not exist"};
+    try {
+        if (faceReference.featureId != source->id()
+            || faceReference.kind != cad::topology::TopologicalKind::Face) {
+            return {false, {}, "Push/Pull face reference does not belong to the target"};
+        }
+        return addFeature(std::make_shared<cad::parametric::PushPullFeature>(
+            id("pushpull"), source, faceReference, normal, distance));
     } catch (const std::exception& error) {
         return failure(error);
     }

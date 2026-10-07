@@ -122,6 +122,12 @@ public:
         const gp_Vec& normal,
         double distance
     );
+    ModelingResult pushPull(
+        const std::string& targetId,
+        const cad::topology::TopologicalReference& faceReference,
+        const gp_Vec& normal,
+        double distance
+    );
     ModelingResult transformFeature(
         const std::string& featureId,
         const gp_Trsf& before,

@@ -1683,6 +1683,9 @@ TopoDS_Shape PushPullFeature::build() const
         throw std::runtime_error("Push/Pull source subshape is not a Face");
     }
     const TopoDS_Face face = TopoDS::Face(selectedShape);
+    if (!SketchFeature::isPlanarFace(face)) {
+        throw std::runtime_error("Push/Pull currently supports planar faces only");
+    }
     BRepPrimAPI_MakePrism prismBuilder(face, normal_ * distance_);
     prismBuilder.Build();
     if (!prismBuilder.IsDone() || prismBuilder.Shape().IsNull()) {

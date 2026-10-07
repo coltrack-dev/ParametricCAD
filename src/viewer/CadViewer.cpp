@@ -2368,7 +2368,8 @@ void CadViewer::restoreSelection(
 }
 
 void CadViewer::setPushPullCommittedHandler(
-    std::function<void(const QString&, int, const gp_Vec&, double)> handler
+    std::function<void(const QString&, const cad::topology::TopologicalReference&,
+                       const gp_Vec&, double)> handler
 )
 {
     pushPullCommittedHandler_ = std::move(handler);
@@ -2579,6 +2580,8 @@ bool CadViewer::beginPushPull()
     const TopoDS_Face selectedFace = TopoDS::Face(faceHit->shape);
     const QString featureId = faceHit->item.featureId;
     const int faceIndex = *faceHit->item.currentSubshapeIndex;
+    const auto faceReference = cad::topology::TopologicalSignatureBuilder::createReference(
+        featureId.toStdString(), selectedObject->Shape(), selectedFace);
     BRepAdaptor_Surface surface(selectedFace, Standard_True);
 
     if (surface.GetType() != GeomAbs_Plane) {
@@ -2629,6 +2632,7 @@ bool CadViewer::beginPushPull()
     pushPullNormal_ = gp_Vec(normal);
     pushPullFeatureId_ = featureId;
     pushPullFaceIndex_ = faceIndex;
+    pushPullFaceReference_ = faceReference;
     pushPullObject_ = selectedObject;
     pushPullDistance_ = 0.0;
     pushPullActive_ = true;
@@ -2745,7 +2749,7 @@ void CadViewer::commitPushPull()
 
     const bool hasChange = std::abs(pushPullDistance_) > PushPullTolerance;
     const QString featureId = pushPullFeatureId_;
-    const int faceIndex = pushPullFaceIndex_;
+    const auto faceReference = pushPullFaceReference_;
     const gp_Vec normal = pushPullNormal_;
     const double distance = pushPullDistance_;
 
@@ -2769,6 +2773,7 @@ void CadViewer::commitPushPull()
     pushPullBaseShape_.Nullify();
     pushPullFeatureId_.clear();
     pushPullFaceIndex_ = 0;
+    pushPullFaceReference_.reset();
     pushPullObject_.Nullify();
     if (pushPullArmed_) {
         setCursor(Qt::CrossCursor);
@@ -2780,8 +2785,8 @@ void CadViewer::commitPushPull()
     context_->UpdateCurrentViewer();
     syncToolBarState();
 
-    if (hasChange && pushPullCommittedHandler_) {
-        pushPullCommittedHandler_(featureId, faceIndex, normal, distance);
+    if (hasChange && pushPullCommittedHandler_ && faceReference) {
+        pushPullCommittedHandler_(featureId, *faceReference, normal, distance);
     }
 }
 
@@ -2806,6 +2811,7 @@ void CadViewer::cancelPushPull()
     pushPullBaseShape_.Nullify();
     pushPullFeatureId_.clear();
     pushPullFaceIndex_ = 0;
+    pushPullFaceReference_.reset();
     pushPullObject_.Nullify();
 
     if (pushPullArmed_) {
