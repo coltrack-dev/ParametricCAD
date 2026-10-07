@@ -119,6 +119,11 @@ private:
     void createChamfer();
     void createShell();
     void createRevolve();
+    void beginRevolveAxisPick(const QString& featureId, const QString& axisType,
+                              bool editingExisting = false);
+    void cancelRevolveAxisPick();
+    bool handleRevolveAxisSelection(
+        const cad::application::SelectionSnapshot& selection);
     bool beginOperation(
         cad::application::InteractiveOperationKind kind,
         const std::vector<std::string>& sourceFeatureIds);
@@ -159,6 +164,15 @@ private:
     QAction* chamferAction_{nullptr};
     QAction* shellAction_{nullptr};
     QAction* revolveAction_{nullptr};
+    bool revolveAxisPicking_{false};
+    bool revolveRestoringSelectionMode_{false};
+    bool revolveAxisPickEditing_{false};
+    int revolvePreviousSelectionMode_{0};
+    QString revolveAxisFeatureId_;
+    QString revolveProfileFeatureId_;
+    double revolvePendingAngleDegrees_{360.0};
+    cad::parametric::RevolveAxisType revolvePendingAxisType_{
+        cad::parametric::RevolveAxisType::GlobalY};
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     QAction* importIfcAction_{nullptr};
 #endif

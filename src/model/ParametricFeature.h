@@ -89,6 +89,7 @@ protected:
     virtual TopoDS_Shape build() const = 0;
     virtual void writeParameters(QJsonObject& object) const;
     void copyPlacementTo(const Ptr& feature) const;
+    void clearDependencies() noexcept { dependencies_.clear(); }
 
 private:
     std::string id_;

@@ -1851,18 +1851,50 @@ const RevolveAxisDefinition& RevolveFeature::axisDefinition() const noexcept
     return axisDefinition_;
 }
 
+const RevolveFeature::Ptr& RevolveFeature::axisSource() const noexcept
+{
+    return axisSource_;
+}
+
+void RevolveFeature::setAxisDefinition(
+    RevolveAxisDefinition axis, const Ptr& axisSource)
+{
+    if (axis.type == RevolveAxisType::ModelEdge) {
+        requireFeature(axisSource, "Revolve axis feature");
+        if (!axis.edgeReference || axis.edgeFeatureId != axisSource->id())
+            throw std::invalid_argument("Revolve model Edge axis reference is invalid");
+    }
+    if (axis.type == RevolveAxisType::SketchLine
+        && axis.sketchFeatureId != profile_->id()) {
+        throw std::invalid_argument("Revolve Sketch line axis must belong to the profile Sketch");
+    }
+    axisDefinition_ = std::move(axis);
+    axisSource_ = axisSource;
+    clearDependencies();
+    addDependency(profile_);
+    if (axisSource_ && axisSource_->id() != profile_->id()) addDependency(axisSource_);
+    if (axisDefinition_.type == RevolveAxisType::GlobalX
+        || axisDefinition_.type == RevolveAxisType::GlobalY
+        || axisDefinition_.type == RevolveAxisType::GlobalZ) {
+        axis_ = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), globalRevolveDirection(axisDefinition_.type));
+    }
+    markDirty();
+}
+
 std::vector<FeatureProperty> RevolveFeature::properties() const
 {
+    const auto axisIdentifier = axisDefinition_.type == RevolveAxisType::SketchLine
+        ? "Sketch Line: " + axisDefinition_.sketchLineId
+        : axisDefinition_.type == RevolveAxisType::ModelEdge
+            ? "Model Edge: " + (axisSource_ ? axisSource_->name()
+                                               : axisDefinition_.edgeFeatureId)
+            : "Global coordinate axis";
     return {textProperty("sourceFeatureId", "Profile", profile_->name()),
             {"angleDegrees", "Angle",
                 angleRadians_ * 180.0 / std::acos(-1.0), -360.0, 360.0, true},
             FeatureProperty{"axisType", "Axis", std::string(revolveAxisTypeName(axisDefinition_.type)),
                 std::nullopt, std::nullopt, true},
-            textProperty("axisIdentifier", "Axis Identifier",
-                axisDefinition_.type == RevolveAxisType::SketchLine
-                    ? axisDefinition_.sketchLineId
-                    : axisDefinition_.type == RevolveAxisType::ModelEdge
-                        ? axisDefinition_.edgeFeatureId : "Global")};
+            textProperty("axisIdentifier", "Axis Source", axisIdentifier)};
 }
 
 bool RevolveFeature::setProperty(const std::string& key, const PropertyValue& value)
@@ -1879,6 +1911,9 @@ bool RevolveFeature::setProperty(const std::string& key, const PropertyValue& va
     axisDefinition_.sketchLineId.clear();
     axisDefinition_.edgeFeatureId.clear();
     axisDefinition_.edgeReference.reset();
+    axisSource_.reset();
+    clearDependencies();
+    addDependency(profile_);
     axis_ = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), globalRevolveDirection(*type));
     markDirty();
     return true;

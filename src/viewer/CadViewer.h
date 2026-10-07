@@ -193,6 +193,7 @@ public:
     );
     void setSectionInteractionStatusHandler(
         std::function<void(const QString&)> handler);
+    void setAxisPickCancelHandler(std::function<void()> handler);
 
 signals:
     void selectionChanged(const cad::application::SelectionSnapshot& selection);
@@ -316,6 +317,7 @@ private:
     QPoint sectionDragStart_;
     double sectionDragPosition_{0.0};
     std::function<void(const QString&)> sectionInteractionStatusHandler_;
+    std::function<void()> axisPickCancelHandler_;
     int bulkUpdateDepth_{0};
     bool bulkCachesInvalidated_{false};
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};

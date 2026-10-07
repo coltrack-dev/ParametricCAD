@@ -2220,6 +2220,11 @@ void CadViewer::setSelectionMode(SelectionMode mode)
     syncToolBarState();
 }
 
+void CadViewer::setAxisPickCancelHandler(std::function<void()> handler)
+{
+    axisPickCancelHandler_ = std::move(handler);
+}
+
 CadViewer::SelectionMode CadViewer::selectionMode() const
 {
     return selectionMode_;
@@ -3474,6 +3479,12 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
     if (interactionMode_ != InteractionMode::None &&
         event->key() == Qt::Key_Escape) {
         stopMousePan();
+        return;
+    }
+
+    if (axisPickCancelHandler_ && event->key() == Qt::Key_Escape) {
+        axisPickCancelHandler_();
+        event->accept();
         return;
     }
 

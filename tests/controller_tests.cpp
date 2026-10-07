@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepGProp.hxx>
@@ -876,6 +877,78 @@ private slots:
         QVERIFY(!revolve->shape().IsNull());
         QCOMPARE(revolve->axisDefinition().edgeFeatureId, axisOwner->id());
         QVERIFY(revolve->axisDefinition().edgeReference.has_value());
+    }
+
+    void revolveAxisSelectionResolvesStableSketchAndModelReferences()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0, 0}, {20, 0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {20, 0}, {20, 10}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {20, 10}, {0, 10}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0, 10}, {0, 0}).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        QVERIFY(sketch);
+        QVERIFY(controller.body().recompute());
+
+        TopTools_IndexedMapOfShape sketchEdges;
+        TopExp::MapShapes(sketch->shape(), TopAbs_EDGE, sketchEdges);
+        QVERIFY(sketchEdges.Extent() >= 4);
+        const auto line = std::get<SketchLine>(sketch->entities().front());
+        const auto frame = sketch->currentFrame();
+        gp_Pnt start = frame.origin;
+        start.Translate(gp_Vec(frame.xDirection) * line.start.X()
+            + gp_Vec(frame.yDirection) * line.start.Y());
+        gp_Pnt end = frame.origin;
+        end.Translate(gp_Vec(frame.xDirection) * line.end.X()
+            + gp_Vec(frame.yDirection) * line.end.Y());
+        int lineIndex = 0;
+        for (int index = 1; index <= sketchEdges.Extent(); ++index) {
+            BRepAdaptor_Curve curve(TopoDS::Edge(sketchEdges.FindKey(index)));
+            if (curve.GetType() != GeomAbs_Line) continue;
+            const auto a = curve.Value(curve.FirstParameter());
+            const auto b = curve.Value(curve.LastParameter());
+            if ((a.Distance(start) < 1.0e-6 && b.Distance(end) < 1.0e-6)
+                || (a.Distance(end) < 1.0e-6 && b.Distance(start) < 1.0e-6)) {
+                lineIndex = index;
+                break;
+            }
+        }
+        QVERIFY(lineIndex > 0);
+        RevolveAxisDefinition resolvedSketchAxis;
+        QVERIFY(controller.resolveRevolveAxis(sketchResult.id,
+            SelectionSnapshot{{{sketchResult.id, SelectionKind::Edge, lineIndex}}},
+            resolvedSketchAxis).success);
+        QCOMPARE(resolvedSketchAxis.type, RevolveAxisType::SketchLine);
+        QCOMPARE(resolvedSketchAxis.sketchLineId, line.id);
+
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        RevolveAxisDefinition globalAxis;
+        globalAxis.type = RevolveAxisType::GlobalY;
+        const auto revolve = controller.createRevolve(
+            SelectionSnapshot{{{sketchResult.id, SelectionKind::Object, std::nullopt}}},
+            globalAxis, 180.0);
+        QVERIFY(revolve.success);
+        RevolveAxisDefinition modelAxis;
+        QVERIFY(controller.resolveRevolveAxis(sketchResult.id,
+            SelectionSnapshot{{{box.id, SelectionKind::Edge, 1}}}, modelAxis).success);
+        QCOMPARE(modelAxis.type, RevolveAxisType::ModelEdge);
+        QVERIFY(modelAxis.edgeReference.has_value());
+        QVERIFY(controller.updateRevolveAxis(revolve.id, modelAxis).success);
+        QCOMPARE(std::dynamic_pointer_cast<RevolveFeature>(
+            controller.body().findFeature(revolve.id))->axisDefinition().type,
+            RevolveAxisType::ModelEdge);
+        controller.undo();
+        QCOMPARE(std::dynamic_pointer_cast<RevolveFeature>(
+            controller.body().findFeature(revolve.id))->axisDefinition().type,
+            RevolveAxisType::GlobalY);
+        controller.redo();
+        QCOMPARE(std::dynamic_pointer_cast<RevolveFeature>(
+            controller.body().findFeature(revolve.id))->axisDefinition().type,
+            RevolveAxisType::ModelEdge);
     }
 
     void shellUsesPersistentFaceReferencesAfterResize()

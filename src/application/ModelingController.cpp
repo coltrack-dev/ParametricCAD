@@ -66,6 +66,21 @@ bool validateSketchProfile(
         return false;
     }
 }
+
+gp_Pnt sketchWorldPoint(const cad::parametric::SketchFrame& frame, const gp_Pnt2d& point)
+{
+    gp_Pnt result = frame.origin;
+    result.Translate(gp_Vec(frame.xDirection) * point.X()
+        + gp_Vec(frame.yDirection) * point.Y());
+    return result;
+}
+
+bool sameSegment(const gp_Pnt& a, const gp_Pnt& b, const gp_Pnt& c, const gp_Pnt& d)
+{
+    constexpr double tolerance = 1.0e-6;
+    return (a.Distance(c) <= tolerance && b.Distance(d) <= tolerance)
+        || (a.Distance(d) <= tolerance && b.Distance(c) <= tolerance);
+}
 }
 
 cad::parametric::Body& ModelingController::body() noexcept { return body_; }
@@ -882,6 +897,91 @@ ModelingResult ModelingController::createRevolve(
         return addFeature(std::make_shared<cad::parametric::RevolveFeature>(
             id("revolve"), sketch, std::move(axis),
             angleDegrees * std::acos(-1.0) / 180.0));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::resolveRevolveAxis(
+    const std::string& profileFeatureId,
+    const SelectionSnapshot& selection,
+    cad::parametric::RevolveAxisDefinition& axis) const
+{
+    if (selection.items.size() != 1
+        || selection.items.front().kind != SelectionKind::Edge
+        || !selection.items.front().subshapeIndex) {
+        return {false, {}, "Select exactly one Edge for the Revolve axis"};
+    }
+    const auto& item = selection.items.front();
+    const auto owner = body_.findFeature(item.featureId);
+    const auto profile = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(profileFeatureId));
+    if (!owner || !profile) return {false, {}, "Revolve axis source is unavailable"};
+    SelectionResolver resolver(body_);
+    const auto selected = resolver.resolve(item);
+    if (!selected || selected->ShapeType() != TopAbs_EDGE)
+        return {false, {}, "Selected Revolve axis is not an Edge"};
+    try {
+        const TopoDS_Edge edge = TopoDS::Edge(*selected);
+        BRepAdaptor_Curve curve(edge);
+        if (curve.GetType() != GeomAbs_Line)
+            return {false, {}, "Selected Revolve axis Edge must be linear"};
+        const gp_Pnt start = curve.Value(curve.FirstParameter());
+        const gp_Pnt end = curve.Value(curve.LastParameter());
+        if (start.Distance(end) <= 1.0e-9)
+            return {false, {}, "Revolve axis line has zero length"};
+
+        if (owner->id() == profile->id()) {
+            for (const auto& entity : profile->entities()) {
+                const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+                if (!line) continue;
+                const auto sketchStart = sketchWorldPoint(profile->currentFrame(), line->start);
+                const auto sketchEnd = sketchWorldPoint(profile->currentFrame(), line->end);
+                if (!sameSegment(start, end, sketchStart, sketchEnd)) continue;
+                axis = {};
+                axis.type = cad::parametric::RevolveAxisType::SketchLine;
+                axis.sketchFeatureId = profile->id();
+                axis.sketchLineId = line->id;
+                return {true, {}, {}};
+            }
+            return {false, {}, "Selected Sketch Edge is not a Sketch line entity"};
+        }
+
+        axis = {};
+        axis.type = cad::parametric::RevolveAxisType::ModelEdge;
+        axis.edgeFeatureId = owner->id();
+        axis.edgeReference = cad::topology::TopologicalSignatureBuilder::createReference(
+            owner->id(), owner->shape(), edge);
+        return {true, {}, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::updateRevolveAxis(
+    const std::string& featureId,
+    cad::parametric::RevolveAxisDefinition axis)
+{
+    const auto feature = std::dynamic_pointer_cast<cad::parametric::RevolveFeature>(
+        body_.findFeature(featureId));
+    if (!feature) return {false, {}, "Revolve feature does not exist"};
+    try {
+        cad::parametric::ParametricFeature::Ptr source;
+        if (axis.type == cad::parametric::RevolveAxisType::ModelEdge) {
+            source = body_.findFeature(axis.edgeFeatureId);
+            if (!source) return {false, {}, "Revolve axis feature does not exist"};
+        }
+        using AxisState = std::pair<cad::parametric::RevolveAxisDefinition,
+            cad::parametric::ParametricFeature::Ptr>;
+        const AxisState before{feature->axisDefinition(), feature->axisSource()};
+        const AxisState after{std::move(axis), source};
+        undoStack_.push(new cad::commands::ChangeFeatureParameterCommand<
+            cad::parametric::RevolveFeature, AxisState>(
+                body_, feature, before, after,
+                [](auto& value, const AxisState& state) {
+                    value.setAxisDefinition(state.first, state.second);
+                }, "Change Revolve Axis"));
+        return {true, featureId, {}};
     } catch (const std::exception& error) {
         return failure(error);
     }

@@ -115,6 +115,13 @@ public:
         cad::parametric::RevolveAxisDefinition axis,
         double angleDegrees = 360.0
     );
+    ModelingResult resolveRevolveAxis(
+        const std::string& profileFeatureId,
+        const SelectionSnapshot& selection,
+        cad::parametric::RevolveAxisDefinition& axis) const;
+    ModelingResult updateRevolveAxis(
+        const std::string& featureId,
+        cad::parametric::RevolveAxisDefinition axis);
     ModelingResult createLinearPattern(const std::vector<std::string>& selection);
     ModelingResult createPathPattern(const std::vector<std::string>& selection);
     ModelingResult createFillet(

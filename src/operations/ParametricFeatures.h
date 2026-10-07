@@ -578,6 +578,8 @@ public:
     const gp_Ax1& axis() const noexcept;
     double angleRadians() const noexcept;
     const RevolveAxisDefinition& axisDefinition() const noexcept;
+    const Ptr& axisSource() const noexcept;
+    void setAxisDefinition(RevolveAxisDefinition axis, const Ptr& axisSource = {});
 
 protected:
     TopoDS_Shape build() const override;

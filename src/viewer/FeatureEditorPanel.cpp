@@ -406,6 +406,12 @@ void FeatureEditorPanel::setFeatureDoubleClickedHandler(
     featureDoubleClickedHandler_ = std::move(handler);
 }
 
+void FeatureEditorPanel::setRevolveAxisPickHandler(
+    std::function<void(const QString&, const QString&)> handler)
+{
+    revolveAxisPickHandler_ = std::move(handler);
+}
+
 void FeatureEditorPanel::setVisibilityHandlers(
     std::function<void(const QStringList&)> hide,
     std::function<void(const QStringList&)> show,
@@ -1212,23 +1218,62 @@ void FeatureEditorPanel::rebuildProperties(
             } else if (property.key == "orientation") {
                 editor->addItems({QStringLiteral("Fixed"), QStringLiteral("Tangent")});
             } else {
-                editor->addItems({QStringLiteral("GlobalX"), QStringLiteral("GlobalY"),
-                    QStringLiteral("GlobalZ")});
+                editor->addItem(QStringLiteral("X"), QStringLiteral("GlobalX"));
+                editor->addItem(QStringLiteral("Y"), QStringLiteral("GlobalY"));
+                editor->addItem(QStringLiteral("Z"), QStringLiteral("GlobalZ"));
+                editor->addItem(QStringLiteral("Sketch Line"), QStringLiteral("SketchLine"));
+                editor->addItem(QStringLiteral("Model Edge"), QStringLiteral("ModelEdge"));
             }
-            editor->setCurrentText(QString::fromStdString(std::get<std::string>(property.value)));
+            if (property.key == "axisType") {
+                editor->setCurrentIndex(editor->findData(
+                    QString::fromStdString(std::get<std::string>(property.value))));
+            } else {
+                editor->setCurrentText(QString::fromStdString(std::get<std::string>(property.value)));
+            }
             const QString label = QString::fromStdString(property.label);
             const std::string featureId = feature->id;
-            propertiesLayout_->addRow(label, editor);
-            connect(editor, &QComboBox::currentTextChanged, this,
-                [this, featureId, property](const QString& value) {
+            if (property.key == "axisType") {
+                auto* row = new QWidget(propertiesWidget_);
+                auto* rowLayout = new QHBoxLayout(row);
+                rowLayout->setContentsMargins(0, 0, 0, 0);
+                rowLayout->addWidget(editor, 1);
+                auto* pick = new QPushButton("Pick Axis", row);
+                rowLayout->addWidget(pick);
+                propertiesLayout_->addRow(label, row);
+                connect(pick, &QPushButton::clicked, this,
+                    [this, featureId, editor]() {
+                        if (revolveAxisPickHandler_)
+                            revolveAxisPickHandler_(QString::fromStdString(featureId),
+                                editor->currentText());
+                    });
+            } else {
+                propertiesLayout_->addRow(label, editor);
+            }
+            const auto applyComboValue = [this, featureId, property](const QString& value) {
                     if (updatingProperties_ || refreshPending_ || !service_) return;
                     const std::string after = value.toStdString();
                     QTimer::singleShot(0, this, [this, featureId, property, after]() {
                         if (!service_) return;
                         if (propertyMatchesCurrentValue(featureId, property.key, after)) return;
+                        if (property.key == "axisType" && after != "GlobalX"
+                            && after != "GlobalY" && after != "GlobalZ") {
+                            if (revolveAxisPickHandler_)
+                                revolveAxisPickHandler_(QString::fromStdString(featureId),
+                                    QString::fromStdString(after));
+                            return;
+                        }
                         applyPropertyChange(featureId, property, after);
                     });
-                });
+                };
+            if (property.key == "axisType") {
+                connect(editor, &QComboBox::currentIndexChanged, this,
+                    [editor, applyComboValue](int) {
+                        applyComboValue(editor->currentData().toString());
+                    });
+            } else {
+                connect(editor, &QComboBox::currentTextChanged, this,
+                    [applyComboValue](const QString& value) { applyComboValue(value); });
+            }
         } else {
             const auto value = std::visit([](const auto& item) {
                 using Value = std::decay_t<decltype(item)>;

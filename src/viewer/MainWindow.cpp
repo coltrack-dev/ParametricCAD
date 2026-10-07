@@ -249,6 +249,10 @@ void MainWindow::createParametricPanel()
     );
     featureEditorPanel_->setFeatureDoubleClickedHandler(
         [this](const QString& featureId) { editSketchById(featureId); });
+    featureEditorPanel_->setRevolveAxisPickHandler(
+        [this](const QString& featureId, const QString& axisType) {
+            beginRevolveAxisPick(featureId, axisType, true);
+        });
     featureEditorPanel_->setVisibilityHandlers(
         [this](const QStringList& featureIds) {
             std::vector<std::string> ids;
@@ -467,6 +471,8 @@ void MainWindow::createParametricPanel()
 
     connect(viewer_, &CadViewer::selectionChanged, this,
         [this](const cad::application::SelectionSnapshot& selection) {
+            if (revolveRestoringSelectionMode_) return;
+            if (handleRevolveAxisSelection(selection)) return;
             applySelectionSnapshot(selection);
     });
 
@@ -930,6 +936,7 @@ void MainWindow::applySelection(
     const bool updateViewer
 )
 {
+    cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
     // This is the single MainWindow projection point for both viewer -> tree
@@ -960,6 +967,7 @@ void MainWindow::applySelectionSnapshot(
     const bool updateViewer
 )
 {
+    cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
     currentSelection_ = selection;
@@ -1265,6 +1273,7 @@ bool MainWindow::beginOperation(
     const cad::application::InteractiveOperationKind kind,
     const std::vector<std::string>& sourceFeatureIds)
 {
+    cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
     return operationSession_.beginCreate(kind, sourceFeatureIds);
@@ -1272,6 +1281,7 @@ bool MainWindow::beginOperation(
 
 void MainWindow::cancelOperation()
 {
+    cancelRevolveAxisPick();
     operationSession_.cancel();
 }
 
@@ -1874,7 +1884,8 @@ void MainWindow::createRevolve()
 
     bool accepted = false;
     const QString axisName = QInputDialog::getItem(
-        this, "Revolve", "Axis:", {"X", "Y", "Z"}, 1, false, &accepted);
+        this, "Revolve", "Axis:", {"X", "Y", "Z", "Sketch Line", "Model Edge"},
+        1, false, &accepted);
     if (!accepted) { cancelOperation(); return; }
     const double angle = QInputDialog::getDouble(
         this, "Revolve", "Angle (degrees):", 360.0, -360.0, 360.0,
@@ -1884,11 +1895,110 @@ void MainWindow::createRevolve()
     cad::parametric::RevolveAxisDefinition axis;
     if (axisName == "X") axis.type = cad::parametric::RevolveAxisType::GlobalX;
     else if (axisName == "Z") axis.type = cad::parametric::RevolveAxisType::GlobalZ;
+    else if (axisName == "Sketch Line") axis.type = cad::parametric::RevolveAxisType::SketchLine;
+    else if (axisName == "Model Edge") axis.type = cad::parametric::RevolveAxisType::ModelEdge;
     else axis.type = cad::parametric::RevolveAxisType::GlobalY;
     operationSession_.updatePreview("angleDegrees", angle);
+    if (axis.type == cad::parametric::RevolveAxisType::SketchLine
+        || axis.type == cad::parametric::RevolveAxisType::ModelEdge) {
+        revolveProfileFeatureId_ = QString::fromStdString(ids.front());
+        revolvePendingAngleDegrees_ = angle;
+        revolvePendingAxisType_ = axis.type;
+        beginRevolveAxisPick(revolveProfileFeatureId_,
+            axis.type == cad::parametric::RevolveAxisType::SketchLine
+                ? "SketchLine" : "ModelEdge");
+        return;
+    }
     const auto result = modeling_.createRevolve(currentSelection_, axis, angle);
     if (!result.success) cancelOperation(); else commitOperation();
     reportResult(result);
+}
+
+void MainWindow::beginRevolveAxisPick(
+    const QString& featureId, const QString& axisType, const bool editingExisting)
+{
+    cad::parametric::RevolveAxisType type;
+    if (axisType == "SketchLine") type = cad::parametric::RevolveAxisType::SketchLine;
+    else if (axisType == "ModelEdge") type = cad::parametric::RevolveAxisType::ModelEdge;
+    else {
+        const auto global = axisType == "GlobalX"
+            ? cad::parametric::RevolveAxisType::GlobalX
+            : axisType == "GlobalZ"
+                ? cad::parametric::RevolveAxisType::GlobalZ
+                : cad::parametric::RevolveAxisType::GlobalY;
+        const auto result = modeling_.setFeatureProperty(
+            featureId.toStdString(), "axisType", std::string(
+                global == cad::parametric::RevolveAxisType::GlobalX ? "GlobalX"
+                    : global == cad::parametric::RevolveAxisType::GlobalZ ? "GlobalZ" : "GlobalY"));
+        reportResult(result);
+        return;
+    }
+    if (editingExisting) {
+        const auto revolve = std::dynamic_pointer_cast<cad::parametric::RevolveFeature>(
+            modeling_.body().findFeature(featureId.toStdString()));
+        if (!revolve) return;
+        revolveProfileFeatureId_ = QString::fromStdString(revolve->profile()->id());
+        if (!operationSession_.active()) {
+            operationSession_.beginEdit(
+                cad::application::InteractiveOperationKind::FeatureEdit,
+                featureId.toStdString(), {});
+        }
+    }
+    revolveAxisPicking_ = true;
+    revolveAxisPickEditing_ = editingExisting;
+    revolveAxisFeatureId_ = editingExisting ? featureId : QString{};
+    revolvePendingAxisType_ = type;
+    revolvePreviousSelectionMode_ = static_cast<int>(viewer_->selectionMode());
+    viewer_->setAxisPickCancelHandler([this]() { cancelRevolveAxisPick(); });
+    viewer_->setSelectionMode(CadViewer::SelectionMode::Edge);
+    statusBar()->showMessage(
+        type == cad::parametric::RevolveAxisType::SketchLine
+            ? "Pick a line from the source Sketch"
+            : "Pick a linear model Edge for the Revolve axis");
+}
+
+void MainWindow::cancelRevolveAxisPick()
+{
+    if (!revolveAxisPicking_) return;
+    revolveRestoringSelectionMode_ = true;
+    viewer_->setAxisPickCancelHandler({});
+    viewer_->setSelectionMode(static_cast<CadViewer::SelectionMode>(
+        revolvePreviousSelectionMode_));
+    revolveAxisPicking_ = false;
+    revolveRestoringSelectionMode_ = false;
+    statusBar()->showMessage("Revolve axis pick cancelled", 2000);
+}
+
+bool MainWindow::handleRevolveAxisSelection(
+    const cad::application::SelectionSnapshot& selection)
+{
+    if (!revolveAxisPicking_) return false;
+    if (selection.items.empty()) return true;
+
+    cad::parametric::RevolveAxisDefinition axis;
+    const auto resolved = modeling_.resolveRevolveAxis(
+        revolveProfileFeatureId_.toStdString(), selection, axis);
+    if (!resolved.success) {
+        statusBar()->showMessage(QString::fromStdString(resolved.error), 3000);
+        return true;
+    }
+
+    cad::application::ModelingResult result;
+    if (revolveAxisPickEditing_) {
+        result = modeling_.updateRevolveAxis(
+            revolveAxisFeatureId_.toStdString(), std::move(axis));
+        if (result.success) operationSession_.commit();
+        else operationSession_.cancel();
+    } else {
+        const cad::application::SelectionSnapshot profileSelection{{
+            {revolveProfileFeatureId_.toStdString(),
+                cad::application::SelectionKind::Object, std::nullopt}}};
+        result = modeling_.createRevolve(
+            profileSelection, std::move(axis), revolvePendingAngleDegrees_);
+        if (!result.success) cancelOperation(); else commitOperation();
+    }
+    reportResult(result);
+    return true;
 }
 
 void MainWindow::deleteFeature()
@@ -1908,6 +2018,7 @@ void MainWindow::deleteFeature()
 
 void MainWindow::clearDocument()
 {
+    cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
     modeling_.clearProject();
@@ -1965,6 +2076,7 @@ void MainWindow::newDocument()
     if (projectLoading_) return;
 #endif
     if (!confirmReplacement()) return;
+    cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
     project_.newProject();
@@ -2163,6 +2275,7 @@ void MainWindow::abortIfcImport(const QString& error)
 
 void MainWindow::startProjectLoad(const QString& path)
 {
+    cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
     projectLoading_ = true;

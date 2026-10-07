@@ -48,6 +48,8 @@ public:
         std::function<void(const QStringList&)> handler
     );
     void setFeatureDoubleClickedHandler(std::function<void(const QString&)> handler);
+    void setRevolveAxisPickHandler(
+        std::function<void(const QString&, const QString&)> handler);
     void setVisibilityHandlers(
         std::function<void(const QStringList&)> hide,
         std::function<void(const QStringList&)> show,
@@ -156,6 +158,7 @@ private:
     std::function<void()> modelChangedHandler_;
     std::function<void(const QStringList&)> featureSelectedHandler_;
     std::function<void(const QString&)> featureDoubleClickedHandler_;
+    std::function<void(const QString&, const QString&)> revolveAxisPickHandler_;
     std::function<void(const QStringList&)> hideHandler_;
     std::function<void(const QStringList&)> showHandler_;
     std::function<void(const QStringList&)> isolateHandler_;
