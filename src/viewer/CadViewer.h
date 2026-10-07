@@ -10,6 +10,8 @@
 #include <vector>
 #include <memory>
 #include <optional>
+#include <cstdint>
+#include <fstream>
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Shape.hxx>
@@ -159,7 +161,8 @@ public:
         const std::vector<std::string>& objectFeatureIds);
     void clearSelection();
     void enterSketchMode(const gp_Pnt& origin, const gp_Dir& xDirection,
-                         const gp_Dir& yDirection, const gp_Dir& normal);
+                         const gp_Dir& yDirection, const gp_Dir& normal,
+                         const QString& featureId);
     void exitSketchMode();
     bool sketchMode() const noexcept;
     enum class SketchPreviewTool { None, Line, Circle, Rectangle, Trim, Extend };
@@ -212,6 +215,8 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
+    friend class MainWindowTests;
+    void traceSelectionLifecycle(const QString& message) const;
     void initializeOcc();
     void notifyFeatureSelection();
     void setupToolBar();
@@ -246,6 +251,10 @@ private:
     void applyDisplayMode(const Handle(AIS_Shape)& object,
                           const TopoDS_Shape& shape) const;
     void applySelectionMode();
+    void releaseManagedSelection(const QString& featureId);
+    void updateManagedShape(const QString& featureId,
+                            const Handle(AIS_Shape)& object,
+                            const TopoDS_Shape& shape);
     bool featureIsSelectable(const QString& featureId) const noexcept;
     void applyFeaturePresentation(
         const QString& featureId, const Handle(AIS_Shape)& object);
@@ -299,6 +308,8 @@ private:
     bool initialized_{false};
     SelectionMode selectionMode_{SelectionMode::Object};
     bool selectionActivationDirty_{true};
+    mutable std::uint64_t selectionTraceSequence_{0};
+    mutable std::ofstream selectionTraceFile_;
 
     bool xRayEnabled_{false};
     bool detectedCycleActive_{false};
@@ -362,6 +373,7 @@ private:
     gp_Pnt spatialBoxDragMin_;
     gp_Pnt spatialBoxDragMax_;
     bool sketchMode_{false};
+    QString editingSketchFeatureId_;
     SelectionMode sketchPreviousSelectionMode_{SelectionMode::Object};
     gp_Pnt sketchOrigin_;
     gp_Dir sketchXDirection_;

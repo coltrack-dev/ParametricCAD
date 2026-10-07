@@ -5,6 +5,7 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <cstdio>
 
 #include <QAction>
 #include <QApplication>
@@ -88,6 +89,39 @@ constexpr double AxisIndicatorArm = 0.65;
 constexpr double AxisIndicatorHitRadius = 0.30;
 constexpr double SketchTrimHitPixels = 8.0;
 constexpr Standard_Real GhostTransparency = 0.78;
+
+const char* selectionModeName(const CadViewer::SelectionMode mode)
+{
+    switch (mode) {
+    case CadViewer::SelectionMode::Object: return "Object";
+    case CadViewer::SelectionMode::Edge: return "Edge";
+    case CadViewer::SelectionMode::Face: return "Face";
+    case CadViewer::SelectionMode::Vertex: return "Vertex";
+    }
+    return "Unknown";
+}
+
+QString selectionObjectPointer(const Handle(AIS_InteractiveObject)& object)
+{
+    if (object.IsNull()) return "null";
+    return QString::asprintf("%p", static_cast<const void*>(object.operator->()));
+}
+
+QString activeSelectionModes(const Handle(AIS_InteractiveContext)& context,
+                             const Handle(AIS_InteractiveObject)& object)
+{
+    if (context.IsNull() || object.IsNull()) return "none";
+    TColStd_ListOfInteger modes;
+    context->ActivatedModes(object, modes);
+    if (modes.IsEmpty()) return "none";
+
+    QStringList result;
+    for (TColStd_ListOfInteger::Iterator iterator(modes);
+         iterator.More(); iterator.Next()) {
+        result.push_back(QString::number(iterator.Value()));
+    }
+    return result.join(',');
+}
 constexpr double Pi = 3.14159265358979323846;
 constexpr double OrbitElevationLimit = 89.0 * Pi / 180.0;
 constexpr double OrbitRadiansPerPixel = 0.01;
@@ -333,6 +367,9 @@ CadViewer::CadViewer(
     : QWidget(parent),
       operationSession_(operationSession ? operationSession : &localOperationSession_)
 {
+    selectionTraceFile_.open("/tmp/parametriccad-selection.log",
+        std::ios::out | std::ios::trunc);
+    traceSelectionLifecycle("CadViewer constructed");
     performanceDiagnostics_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_PERF");
     snapDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SNAP");
     selectionDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SELECTION");
@@ -362,6 +399,20 @@ CadViewer::CadViewer(
                           << "snapDisabled=" << snapDisabled_
                           << "selectionDisabled=" << selectionDisabled_
                           << "displayMode=" << qEnvironmentVariable("PARAMETRIC_CAD_DISPLAY_MODE");
+    }
+}
+
+void CadViewer::traceSelectionLifecycle(const QString& message) const
+{
+    const QString line = QString("[SEL %1] %2")
+        .arg(++selectionTraceSequence_, 5, 10, QLatin1Char('0'))
+        .arg(message);
+    const QByteArray encoded = line.toLocal8Bit();
+    std::fprintf(stderr, "%s\n", encoded.constData());
+    std::fflush(stderr);
+    if (selectionTraceFile_.is_open()) {
+        selectionTraceFile_ << encoded.constData() << '\n';
+        selectionTraceFile_.flush();
     }
 }
 
@@ -578,9 +629,19 @@ bool CadViewer::makeViewRay(const QPoint& position, ViewRay& ray) const
 
 void CadViewer::enterSketchMode(
     const gp_Pnt& origin, const gp_Dir& xDirection,
-    const gp_Dir& yDirection, const gp_Dir& normal)
+    const gp_Dir& yDirection, const gp_Dir& normal,
+    const QString& featureId)
 {
+    traceSelectionLifecycle(QString("enterSketchMode begin mode=%1 dirty=%2 managed=%3")
+        .arg(selectionModeName(selectionMode_))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size()));
     sketchPreviousSelectionMode_ = selectionMode_;
+    clearSelection();
+    releaseManagedSelection(featureId);
+    editingSketchFeatureId_ = featureId;
+    traceSelectionLifecycle(QString("Sketch edit owns feature=%1; excluded from model selection")
+        .arg(featureId));
     sketchMode_ = true;
     sketchOrigin_ = origin;
     sketchXDirection_ = xDirection;
@@ -605,28 +666,51 @@ void CadViewer::enterSketchMode(
         invalidateSnapProjectionCache("SKETCH_MODE: aligned camera");
         view_->Redraw();
     }
+    traceSelectionLifecycle(QString("enterSketchMode end mode=%1 dirty=%2 managed=%3")
+        .arg(selectionModeName(selectionMode_))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size()));
 }
 
 void CadViewer::exitSketchMode()
 {
+    traceSelectionLifecycle(QString("exitSketchMode begin mode=%1 previous=%2 dirty=%3 managed=%4")
+        .arg(selectionModeName(selectionMode_))
+        .arg(selectionModeName(sketchPreviousSelectionMode_))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size()));
     // Clear detection/selection and remove edit-only presentations before
     // restoring the previous AIS selection mode.  Restoring the mode first
     // asks OCCT to deactivate selectors that can still own the sketch edit
     // presentations being removed below.
     sketchMode_ = false;
     if (!context_.IsNull()) {
+        traceSelectionLifecycle("ClearDetected BEFORE");
         context_->ClearDetected(Standard_False);
+        traceSelectionLifecycle("ClearDetected AFTER");
+        traceSelectionLifecycle("ClearSelected BEFORE");
         context_->ClearSelected(Standard_False);
+        traceSelectionLifecycle("ClearSelected AFTER");
     }
     sketchPreviewFirstPoint_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+        traceSelectionLifecycle(QString("AIS Remove sketchPreview obj=%1 before")
+            .arg(selectionObjectPointer(sketchPreviewObject_)));
         context_->Remove(sketchPreviewObject_, Standard_False);
+        traceSelectionLifecycle("AIS Remove sketchPreview after");
     }
     sketchPreviewObject_.Nullify();
     clearSketchTrimPreview();
     clearSketchConstraintMarkers();
     clearSketchConstraintHighlight();
+    traceSelectionLifecycle(QString("Sketch edit releases feature=%1; register fresh")
+        .arg(editingSketchFeatureId_));
+    editingSketchFeatureId_.clear();
     setSelectionMode(sketchPreviousSelectionMode_);
+    traceSelectionLifecycle(QString("exitSketchMode end mode=%1 dirty=%2 managed=%3")
+        .arg(selectionModeName(selectionMode_))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size()));
 }
 
 bool CadViewer::sketchMode() const noexcept
@@ -636,10 +720,15 @@ bool CadViewer::sketchMode() const noexcept
 
 void CadViewer::setSketchPreviewTool(const SketchPreviewTool tool)
 {
+    traceSelectionLifecycle(QString("setSketchPreviewTool tool=%1 preview=%2")
+        .arg(static_cast<int>(tool)).arg(selectionObjectPointer(sketchPreviewObject_)));
     sketchPreviewTool_ = tool;
     sketchPreviewFirstPoint_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+        traceSelectionLifecycle(QString("AIS Remove sketchPreview obj=%1 before")
+            .arg(selectionObjectPointer(sketchPreviewObject_)));
         context_->Remove(sketchPreviewObject_, Standard_True);
+        traceSelectionLifecycle("AIS Remove sketchPreview after");
     }
     sketchPreviewObject_.Nullify();
     clearSketchTrimPreview();
@@ -735,16 +824,27 @@ void CadViewer::setSketchExtendPreview(
 
 void CadViewer::clearSketchTrimPreview()
 {
-    if (!sketchTrimPreviewObject_.IsNull() && !context_.IsNull())
+    if (!sketchTrimPreviewObject_.IsNull() && !context_.IsNull()) {
+        traceSelectionLifecycle(QString("AIS Remove trimPreview obj=%1 before")
+            .arg(selectionObjectPointer(sketchTrimPreviewObject_)));
         context_->Remove(sketchTrimPreviewObject_, Standard_True);
+        traceSelectionLifecycle("AIS Remove trimPreview after");
+    }
     sketchTrimPreviewObject_.Nullify();
 }
 
 void CadViewer::clearSketchConstraintMarkers()
 {
     if (!context_.IsNull()) {
-        for (const auto& marker : sketchConstraintMarkers_)
-            if (!marker.presentation.IsNull()) context_->Remove(marker.presentation, Standard_False);
+        for (const auto& marker : sketchConstraintMarkers_) {
+            if (!marker.presentation.IsNull()) {
+                traceSelectionLifecycle(QString("AIS Remove constraintMarker id=%1 obj=%2 before")
+                    .arg(QString::fromStdString(marker.constraintId))
+                    .arg(selectionObjectPointer(marker.presentation)));
+                context_->Remove(marker.presentation, Standard_False);
+                traceSelectionLifecycle("AIS Remove constraintMarker after");
+            }
+        }
     }
     sketchConstraintMarkers_.clear();
     if (!context_.IsNull()) context_->CurrentViewer()->Redraw();
@@ -907,8 +1007,12 @@ void CadViewer::setSketchConstraintMarkers(
 
 void CadViewer::clearSketchConstraintHighlight()
 {
-    if (!sketchConstraintHighlightObject_.IsNull() && !context_.IsNull())
+    if (!sketchConstraintHighlightObject_.IsNull() && !context_.IsNull()) {
+        traceSelectionLifecycle(QString("AIS Remove constraintHighlight obj=%1 before")
+            .arg(selectionObjectPointer(sketchConstraintHighlightObject_)));
         context_->Remove(sketchConstraintHighlightObject_, Standard_True);
+        traceSelectionLifecycle("AIS Remove constraintHighlight after");
+    }
     sketchConstraintHighlightObject_.Nullify();
 }
 
@@ -1510,15 +1614,29 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
         interactiveShape->SetTransparency(XRayTransparency);
     }
 
-    context_->Display(
-        interactiveShape,
-        bulkUpdateDepth_ == 0 ? Standard_True : Standard_False
-    );
+    traceSelectionLifecycle(QString("AIS register feature=%1 obj=%2 before Display")
+        .arg(featureId).arg(selectionObjectPointer(interactiveShape)));
+    // Preserve OCCT's established persistent-object display lifecycle.  The
+    // selection manager immediately reconciles the resulting default mode
+    // with the requested CAD mode.  Passing selection mode -1 here leaves a
+    // native AIS_Shape in a different display/selection state and breaks
+    // native decomposition picking on some OCCT viewer configurations.
+    context_->Display(interactiveShape,
+        bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
+    traceSelectionLifecycle(QString("AIS register feature=%1 obj=%2 after Display")
+        .arg(featureId).arg(selectionObjectPointer(interactiveShape)));
+    traceSelectionLifecycle(QString("AIS state after Display feature=%1 obj=%2 displayed=%3 activeModes=%4")
+        .arg(featureId).arg(selectionObjectPointer(interactiveShape))
+        .arg(context_->IsDisplayed(interactiveShape) ? 1 : 0)
+        .arg(activeSelectionModes(context_, interactiveShape)));
     displayedShapes_.push_back(interactiveShape);
     if (!featureId.isEmpty()) {
         featureObjects_[featureId] = interactiveShape;
         featureVisibility_[featureId] = VisibilityMode::Visible;
         setFeatureTransparency(featureId, interactiveShape);
+        traceSelectionLifecycle(QString("registered selectable feature=%1 obj=%2 map=%3 dirty=%4")
+            .arg(featureId).arg(selectionObjectPointer(interactiveShape))
+            .arg(featureObjects_.size()).arg(selectionActivationDirty_));
     }
     invalidateSnapReferenceCache("MODEL_CHANGED: feature added");
     selectionState_.hovered.reset();
@@ -1639,8 +1757,11 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     resetDetectedCycle();
     invalidateSnapReferenceCache("MODEL_CHANGED: feature shape updated");
     selectionState_.hovered.reset();
-    object->SetShape(shape);
-    context_->Redisplay(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
+    traceSelectionLifecycle(QString("AIS replace feature=%1 obj=%2 before SetShape")
+        .arg(featureId).arg(selectionObjectPointer(object)));
+    updateManagedShape(featureId, object, shape);
+    traceSelectionLifecycle(QString("AIS replace feature=%1 obj=%2 after Redisplay")
+        .arg(featureId).arg(selectionObjectPointer(object)));
     if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
 }
 
@@ -1668,6 +1789,7 @@ void CadViewer::setFeatureVisibilityModes(
         }();
         const auto previous = featureVisibilityMode(id);
         const bool modeChanged = previous != mode;
+        if (mode != VisibilityMode::Visible) releaseManagedSelection(id);
         featureVisibility_[id] = mode;
         const bool displayed = bool(context_->IsDisplayed(object));
         if (mode == VisibilityMode::Hidden) {
@@ -1700,7 +1822,9 @@ void CadViewer::setFeatureVisibilityModes(
     if (selectedFeatureUnavailable) {
         if (transformDragging_) cancelTransform();
         if (pushPullActive_) cancelPushPull();
+        traceSelectionLifecycle("ClearSelected BEFORE (visibility change)");
         context_->ClearSelected(Standard_False);
+        traceSelectionLifecycle("ClearSelected AFTER (visibility change)");
     }
     invalidateSnapReferenceCache("MODEL_CHANGED: presentation visibility changed");
     resetDetectedCycle();
@@ -1726,6 +1850,7 @@ void CadViewer::applyVisibilityChanges(
 
         const auto previous = featureVisibilityMode(id);
         if (previous == change.newMode) continue;
+        if (change.newMode != VisibilityMode::Visible) releaseManagedSelection(id);
         featureVisibility_[id] = change.newMode;
         const bool displayed = bool(context_->IsDisplayed(object->second));
         if (change.newMode == VisibilityMode::Hidden) {
@@ -1748,7 +1873,9 @@ void CadViewer::applyVisibilityChanges(
     if (selectedFeatureUnavailable) {
         if (transformDragging_) cancelTransform();
         if (pushPullActive_) cancelPushPull();
+        traceSelectionLifecycle("ClearSelected BEFORE (visibility change)");
         context_->ClearSelected(Standard_False);
+        traceSelectionLifecycle("ClearSelected AFTER (visibility change)");
     }
     // Snap references are still invalidated globally in Stage 7. This keeps
     // candidate caches correct while the viewer presentation update is local.
@@ -2118,7 +2245,35 @@ void CadViewer::recordPerformanceSample(
 bool CadViewer::featureIsSelectable(const QString& featureId) const noexcept
 {
     return !selectionDisabled_
+        && featureId != editingSketchFeatureId_
         && featureVisibilityMode(featureId) == VisibilityMode::Visible;
+}
+
+void CadViewer::releaseManagedSelection(const QString& featureId)
+{
+    const auto active = managedSelectionModes_.find(featureId);
+    if (active == managedSelectionModes_.end()) return;
+    const auto found = featureObjects_.find(featureId);
+    if (found != featureObjects_.end() && !found->second.IsNull()) {
+        traceSelectionLifecycle(QString("release managed BEFORE feature=%1 obj=%2 mode=%3")
+            .arg(featureId).arg(selectionObjectPointer(found->second)).arg(active->second));
+        context_->Deactivate(found->second, active->second);
+        traceSelectionLifecycle(QString("release managed AFTER feature=%1").arg(featureId));
+    }
+    managedSelectionModes_.erase(active);
+    selectionActivationDirty_ = true;
+}
+
+void CadViewer::updateManagedShape(const QString& featureId,
+    const Handle(AIS_Shape)& object, const TopoDS_Shape& shape)
+{
+    // Release selection while the old shape is still intact. The cache must
+    // never describe selection structures belonging to a previous shape.
+    releaseManagedSelection(featureId);
+    object->SetShape(shape);
+    context_->Redisplay(object, Standard_False);
+    selectionActivationDirty_ = true;
+    if (bulkUpdateDepth_ == 0) applySelectionMode();
 }
 
 void CadViewer::applyFeaturePresentation(
@@ -2158,7 +2313,10 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         }
         cancelPushPull();
         managedSelectionModes_.erase(it->first);
+        traceSelectionLifecycle(QString("AIS unregister feature=%1 obj=%2 before Remove")
+            .arg(it->first).arg(selectionObjectPointer(it->second)));
         context_->Remove(it->second, Standard_False);
+        traceSelectionLifecycle(QString("AIS unregister feature=%1 after Remove").arg(it->first));
         std::erase(displayedShapes_, it->second);
         featureVisibility_.erase(it->first);
         it = featureObjects_.erase(it);
@@ -2192,6 +2350,7 @@ void CadViewer::clear()
     displayedShapes_.clear();
     featureObjects_.clear();
     managedSelectionModes_.clear();
+    editingSketchFeatureId_.clear();
     featureVisibility_.clear();
     selectionActivationDirty_ = true;
     invalidateSnapReferenceCache("MODEL_CHANGED: viewer cleared");
@@ -2220,6 +2379,12 @@ void CadViewer::fitAll()
 
 void CadViewer::setSelectionMode(SelectionMode mode)
 {
+    const auto oldMode = selectionMode_;
+    traceSelectionLifecycle(QString("setSelectionMode begin old=%1 new=%2 dirty=%3 managed=%4")
+        .arg(selectionModeName(oldMode))
+        .arg(selectionModeName(mode))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size()));
     if (pushPullActive_) {
         cancelPushPull();
     }
@@ -2235,6 +2400,11 @@ void CadViewer::setSelectionMode(SelectionMode mode)
     }
 
     syncToolBarState();
+    traceSelectionLifecycle(QString("setSelectionMode end old=%1 new=%2 dirty=%3 managed=%4")
+        .arg(selectionModeName(oldMode))
+        .arg(selectionModeName(selectionMode_))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size()));
 }
 
 void CadViewer::setAxisPickCancelHandler(std::function<void()> handler)
@@ -2366,7 +2536,9 @@ void CadViewer::restoreSelection(
 {
     if (!initialized_ || !context_) return;
 
+    traceSelectionLifecycle("ClearSelected BEFORE (restoreSelection)");
     context_->ClearSelected(Standard_False);
+    traceSelectionLifecycle("ClearSelected AFTER (restoreSelection)");
     const cad::topology::TopologicalReferenceResolver resolver(body);
     for (const auto& reference : topology) {
         const auto resolved = resolver.resolve(reference);
@@ -2412,13 +2584,21 @@ void CadViewer::clearSelection()
         return;
     }
 
+    traceSelectionLifecycle("ClearSelected BEFORE");
     context_->ClearSelected(Standard_True);
+    traceSelectionLifecycle("ClearSelected AFTER");
     notifyFeatureSelection();
 }
 
 void CadViewer::applySelectionMode()
 {
+    traceSelectionLifecycle(QString("applySelectionMode begin mode=%1 dirty=%2 managed=%3 features=%4")
+        .arg(selectionModeName(selectionMode_))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size())
+        .arg(featureObjects_.size()));
     if (!initialized_) {
+        traceSelectionLifecycle("applySelectionMode skipped: not initialized");
         return;
     }
 
@@ -2427,6 +2607,7 @@ void CadViewer::applySelectionMode()
     // context also contains transient previews and technical overlays with
     // independent lifetimes.
     if (!selectionActivationDirty_) {
+        traceSelectionLifecycle("applySelectionMode skipped: not dirty");
         return;
     }
 
@@ -2450,6 +2631,11 @@ void CadViewer::applySelectionMode()
     }
 
     for (const auto& [id, object] : featureObjects_) {
+        if (id == editingSketchFeatureId_) {
+            traceSelectionLifecycle(QString("apply skips editing Sketch feature=%1 obj=%2")
+                .arg(id).arg(selectionObjectPointer(object)));
+            continue;
+        }
         if (object.IsNull()) {
             managedSelectionModes_.erase(id);
             continue;
@@ -2457,12 +2643,28 @@ void CadViewer::applySelectionMode()
 
         const bool selectable = !selectionDisabled_ && featureIsSelectable(id);
         const auto active = managedSelectionModes_.find(id);
+        traceSelectionLifecycle(QString("apply obj=%1 feature=%2 displayed=%3 old=%4 requested=%5 selectable=%6")
+            .arg(selectionObjectPointer(object))
+            .arg(id)
+            .arg(context_->IsDisplayed(object) ? 1 : 0)
+            .arg(active == managedSelectionModes_.end()
+                ? QStringLiteral("none") : QString::number(active->second))
+            .arg(mode)
+            .arg(selectable ? 1 : 0));
         if (!selectable) {
             if (active != managedSelectionModes_.end()) {
+                traceSelectionLifecycle(QString("Deactivate object BEFORE obj=%1 feature=%2 mode=%3")
+                    .arg(selectionObjectPointer(object)).arg(id).arg(active->second));
                 context_->Deactivate(object, active->second);
+                traceSelectionLifecycle(QString("Deactivate object AFTER obj=%1 feature=%2")
+                    .arg(selectionObjectPointer(object)).arg(id));
                 managedSelectionModes_.erase(active);
             } else {
+                traceSelectionLifecycle(QString("Deactivate object BEFORE obj=%1 feature=%2 mode=all")
+                    .arg(selectionObjectPointer(object)).arg(id));
                 context_->Deactivate(object);
+                traceSelectionLifecycle(QString("Deactivate object AFTER obj=%1 feature=%2")
+                    .arg(selectionObjectPointer(object)).arg(id));
             }
             continue;
         }
@@ -2471,15 +2673,27 @@ void CadViewer::applySelectionMode()
             continue;
         }
         if (active != managedSelectionModes_.end()) {
+            traceSelectionLifecycle(QString("Deactivate object BEFORE obj=%1 feature=%2 mode=%3")
+                .arg(selectionObjectPointer(object)).arg(id).arg(active->second));
             context_->Deactivate(object, active->second);
+            traceSelectionLifecycle(QString("Deactivate object AFTER obj=%1 feature=%2")
+                .arg(selectionObjectPointer(object)).arg(id));
         }
         // Use Multiple concurrency explicitly. The convenience Activate()
         // overload requests GlobalOrLocal concurrency and may internally
         // deactivate selectors on unrelated AIS objects.
+        traceSelectionLifecycle(QString("SetSelectionModeActive BEFORE obj=%1 feature=%2 mode=%3 displayed=%4")
+            .arg(selectionObjectPointer(object)).arg(id).arg(mode)
+            .arg(context_->IsDisplayed(object) ? 1 : 0));
         context_->SetSelectionModeActive(
             object, mode, Standard_True,
             AIS_SelectionModesConcurrency_Multiple,
             Standard_True);
+        traceSelectionLifecycle(QString("SetSelectionModeActive AFTER obj=%1 feature=%2 mode=%3")
+            .arg(selectionObjectPointer(object)).arg(id).arg(mode));
+        traceSelectionLifecycle(QString("AIS state after activation obj=%1 feature=%2 cached=%3 activeModes=%4")
+            .arg(selectionObjectPointer(object)).arg(id).arg(mode)
+            .arg(activeSelectionModes(context_, object)));
         managedSelectionModes_[id] = mode;
     }
     if (transformGizmo_) {
@@ -2498,6 +2712,10 @@ void CadViewer::applySelectionMode()
                           << "ms=" << lastSelectionActivationMilliseconds_
                           << "viewerUpdateMs=" << lastViewerUpdateMilliseconds_;
     }
+    traceSelectionLifecycle(QString("applySelectionMode end mode=%1 dirty=%2 managed=%3")
+        .arg(selectionModeName(selectionMode_))
+        .arg(selectionActivationDirty_)
+        .arg(managedSelectionModes_.size()));
 }
 
 void CadViewer::resetDetectedCycle()
@@ -3599,7 +3817,9 @@ void CadViewer::selectFeatures(const QStringList& featureIds)
 
     // Only change AIS selection. Keep presentations, camera and selection mode.
     // This is the tree-to-viewer path; do not echo a selection notification.
+    traceSelectionLifecycle("ClearSelected BEFORE (applySelectionSnapshot)");
     context_->ClearSelected(Standard_False);
+    traceSelectionLifecycle("ClearSelected AFTER (applySelectionSnapshot)");
     for (const auto& [id, object] : featureObjects_) {
         if (featureIds.contains(id) && context_->IsDisplayed(object)
             && featureIsSelectable(id)) {

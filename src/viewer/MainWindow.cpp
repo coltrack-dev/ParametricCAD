@@ -1349,7 +1349,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         selectedConstraintId_.clear();
         viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
         viewer_->enterSketchMode(frame.origin, frame.xDirection,
-            frame.yDirection, frame.normal);
+            frame.yDirection, frame.normal, QString::fromStdString(sketchId));
         viewer_->setSketchConstraintMarkers(*sketch);
         sketchLineAction_->setEnabled(true);
         sketchCircleAction_->setEnabled(true);
