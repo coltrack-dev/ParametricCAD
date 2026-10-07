@@ -5,6 +5,7 @@
 #define private public
 #include "viewer/MainWindow.h"
 #undef private
+#include "viewer/CadViewer.h"
 
 class MainWindowTests final : public QObject
 {
@@ -45,6 +46,24 @@ private slots:
         QVERIFY(sketch.success);
         window.applySelection({QString::fromStdString(sketch.id)});
         QVERIFY(window.extrudeAction_->isEnabled());
+    }
+
+    void persistentFeatureSelectionModesTransitionWithoutGlobalReset()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()
+            || qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen") {
+            QSKIP("Native OCCT viewer is required for selection activation tests");
+        }
+        MainWindow window;
+        const auto box = window.modeling_.createBox();
+        QVERIFY(box.success);
+
+        window.viewer_->setSelectionMode(CadViewer::SelectionMode::Object);
+        window.viewer_->setSelectionMode(CadViewer::SelectionMode::Face);
+        window.viewer_->setSelectionMode(CadViewer::SelectionMode::Edge);
+        window.viewer_->setSelectionMode(CadViewer::SelectionMode::Vertex);
+        window.viewer_->setSelectionMode(CadViewer::SelectionMode::Object);
+        QVERIFY(window.viewer_->selectionMode() == CadViewer::SelectionMode::Object);
     }
 
     void validSketchEnablesVisibleRevolveAction()
@@ -108,6 +127,10 @@ private slots:
             feature->entities()[0]));
         QVERIFY(std::visit([](const auto& entity) { return !entity.id.empty(); },
             feature->entities()[1]));
+
+        window.finishSketch();
+        QVERIFY(window.activeSketchId_.empty());
+        QVERIFY(!window.viewer_->sketchMode());
     }
 };
 

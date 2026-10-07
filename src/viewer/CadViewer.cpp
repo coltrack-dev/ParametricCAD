@@ -609,16 +609,24 @@ void CadViewer::enterSketchMode(
 
 void CadViewer::exitSketchMode()
 {
+    // Clear detection/selection and remove edit-only presentations before
+    // restoring the previous AIS selection mode.  Restoring the mode first
+    // asks OCCT to deactivate selectors that can still own the sketch edit
+    // presentations being removed below.
     sketchMode_ = false;
-    setSelectionMode(sketchPreviousSelectionMode_);
+    if (!context_.IsNull()) {
+        context_->ClearDetected(Standard_False);
+        context_->ClearSelected(Standard_False);
+    }
     sketchPreviewFirstPoint_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
-        context_->Remove(sketchPreviewObject_, Standard_True);
+        context_->Remove(sketchPreviewObject_, Standard_False);
     }
     sketchPreviewObject_.Nullify();
     clearSketchTrimPreview();
     clearSketchConstraintMarkers();
     clearSketchConstraintHighlight();
+    setSelectionMode(sketchPreviousSelectionMode_);
 }
 
 bool CadViewer::sketchMode() const noexcept
@@ -2149,6 +2157,7 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
             continue;
         }
         cancelPushPull();
+        managedSelectionModes_.erase(it->first);
         context_->Remove(it->second, Standard_False);
         std::erase(displayedShapes_, it->second);
         featureVisibility_.erase(it->first);
@@ -2182,6 +2191,7 @@ void CadViewer::clear()
     spatialBoxObject_.Nullify();
     displayedShapes_.clear();
     featureObjects_.clear();
+    managedSelectionModes_.clear();
     featureVisibility_.clear();
     selectionActivationDirty_ = true;
     invalidateSnapReferenceCache("MODEL_CHANGED: viewer cleared");
@@ -2413,16 +2423,15 @@ void CadViewer::applySelectionMode()
     }
 
     // Redisplaying a shape does not change the active AIS selection mode.
-    // Avoid tearing down the selector for every parametric model refresh;
-    // OCCT can reject a global Deactivate while its selector is transitioning.
+    // Keep activation scoped to persistent feature presentations; the OCCT
+    // context also contains transient previews and technical overlays with
+    // independent lifetimes.
     if (!selectionActivationDirty_) {
         return;
     }
 
     QElapsedTimer timer;
     timer.start();
-    context_->Deactivate();
-
     Standard_Integer mode = 0;
 
     switch (selectionMode_) {
@@ -2440,11 +2449,38 @@ void CadViewer::applySelectionMode()
         break;
     }
 
-    if (!selectionDisabled_) context_->Activate(mode, Standard_True);
-    if (!selectionDisabled_) {
-        for (const auto& [id, object] : featureObjects_) {
-            if (!featureIsSelectable(id)) context_->Deactivate(object);
+    for (const auto& [id, object] : featureObjects_) {
+        if (object.IsNull()) {
+            managedSelectionModes_.erase(id);
+            continue;
         }
+
+        const bool selectable = !selectionDisabled_ && featureIsSelectable(id);
+        const auto active = managedSelectionModes_.find(id);
+        if (!selectable) {
+            if (active != managedSelectionModes_.end()) {
+                context_->Deactivate(object, active->second);
+                managedSelectionModes_.erase(active);
+            } else {
+                context_->Deactivate(object);
+            }
+            continue;
+        }
+
+        if (active != managedSelectionModes_.end() && active->second == mode) {
+            continue;
+        }
+        if (active != managedSelectionModes_.end()) {
+            context_->Deactivate(object, active->second);
+        }
+        // Use Multiple concurrency explicitly. The convenience Activate()
+        // overload requests GlobalOrLocal concurrency and may internally
+        // deactivate selectors on unrelated AIS objects.
+        context_->SetSelectionModeActive(
+            object, mode, Standard_True,
+            AIS_SelectionModesConcurrency_Multiple,
+            Standard_True);
+        managedSelectionModes_[id] = mode;
     }
     if (transformGizmo_) {
         transformGizmo_->deactivateSelection();

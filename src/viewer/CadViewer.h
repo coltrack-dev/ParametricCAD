@@ -305,6 +305,7 @@ private:
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
+    std::map<QString, Standard_Integer> managedSelectionModes_;
     std::map<QString, cad::application::VisibilityMode> featureVisibility_;
     Handle(AIS_Shape) spatialBoxObject_;
     Handle(AIS_Shape) sectionPlaneObject_;
