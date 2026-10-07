@@ -10,6 +10,7 @@
 #include "operations/SketchConstraintSolver.h"
 
 #include <TopoDS.hxx>
+#include <TopExp.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <QUuid>
 
@@ -889,8 +890,14 @@ ModelingResult ModelingController::pushPull(
     const auto source = body_.findFeature(targetId);
     if (!source) return {false, {}, "Push/Pull target does not exist"};
     try {
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
+        if (faceIndex <= 0 || faceIndex > faces.Extent())
+            return {false, {}, "Push/Pull face reference is invalid"};
+        const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            source->id(), source->shape(), faces(faceIndex));
         const auto feature = std::make_shared<cad::parametric::PushPullFeature>(
-            id("pushpull"), source, faceIndex, normal, distance);
+            id("pushpull"), source, reference, normal, distance);
         return addFeature(feature);
     } catch (const std::exception& error) {
         return failure(error);

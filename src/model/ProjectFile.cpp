@@ -469,6 +469,23 @@ std::vector<cad::topology::TopologicalReference> topologicalReferences(
     return result;
 }
 
+std::vector<cad::topology::TopologicalReference> faceTopologicalReferences(
+    const QJsonObject& o, const char* key, const std::string& sourceId)
+{
+    const auto array = o.value(QLatin1String(key)).toArray();
+    require(!array.isEmpty(), "Invalid face topological reference array");
+    std::vector<cad::topology::TopologicalReference> result;
+    for (const auto& value : array) {
+        require(value.isObject(), "Invalid face topological reference item");
+        auto reference = cad::topology::topologicalReferenceFromJson(value.toObject());
+        require(reference.featureId == sourceId
+                    && reference.kind == cad::topology::TopologicalKind::Face,
+                "Invalid face topological reference");
+        result.push_back(std::move(reference));
+    }
+    return result;
+}
+
 std::vector<SketchEntity> sketchEntities(const QJsonObject& object)
 {
     std::vector<SketchEntity> result;
@@ -658,6 +675,17 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
         {"PushPull", [](const QJsonObject& o, const Body& body) {
             const auto source = body.findFeature(string(o, "sourceFeatureId"));
             require(static_cast<bool>(source), "PushPull references missing source");
+            if (o.contains("faceReference")) {
+                const auto reference = cad::topology::topologicalReferenceFromJson(
+                    o.value("faceReference").toObject());
+                require(reference.featureId == source->id()
+                            && reference.kind == cad::topology::TopologicalKind::Face,
+                        "Invalid PushPull face reference");
+                return std::make_shared<PushPullFeature>(string(o, "id"), source,
+                    reference,
+                    gp_Vec(number(o, "normalX"), number(o, "normalY"), number(o, "normalZ")),
+                    number(o, "distance"));
+            }
             const double faceIndexValue = number(o, "faceIndex");
             require(faceIndexValue >= 1.0 && std::floor(faceIndexValue) == faceIndexValue,
                     "Invalid PushPull face index");
@@ -730,6 +758,11 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
         {"Shell", [](const QJsonObject& o, const Body& body) {
             const auto base = body.findFeature(string(o, "sourceFeatureId"));
             require(static_cast<bool>(base), "Shell references missing source");
+            if (o.contains("topologicalReferences")) {
+                return std::make_shared<ShellFeature>(string(o, "id"), base,
+                    faceTopologicalReferences(o, "topologicalReferences", base->id()),
+                    number(o, "thickness"));
+            }
             return std::make_shared<ShellFeature>(string(o, "id"), base,
                 positiveIntegers(o, "faceIndices"), number(o, "thickness"));
         }},

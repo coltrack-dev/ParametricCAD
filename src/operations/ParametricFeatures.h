@@ -496,6 +496,13 @@ public:
         gp_Vec normal,
         double distance
     );
+    PushPullFeature(
+        std::string id,
+        const Ptr& source,
+        cad::topology::TopologicalReference faceReference,
+        gp_Vec normal,
+        double distance
+    );
     const char* typeId() const noexcept override { return "PushPull"; }
     Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
@@ -505,6 +512,7 @@ public:
     Ptr source() const;
     const std::string& sourceFeatureId() const noexcept;
     int faceIndex() const noexcept;
+    const cad::topology::TopologicalReference& faceReference() const noexcept;
     const gp_Vec& normal() const noexcept;
     double distance() const noexcept;
 
@@ -516,6 +524,7 @@ private:
     std::string sourceFeatureId_;
     std::weak_ptr<ParametricFeature> source_;
     int faceIndex_;
+    std::optional<cad::topology::TopologicalReference> faceReference_;
     gp_Vec normal_;
     double distance_;
 };
@@ -588,10 +597,8 @@ private:
     BooleanOperation operation_;
 };
 
-// Fillet and Chamfer edge references are currently transient topology indices.
-// They are resolved against the current source shape during recompute; upstream
-// topology changes may invalidate or silently remap them until persistent
-// topological naming is implemented.
+// Fillet and Chamfer keep persistent topology references. The index remains
+// only as a legacy file-format migration hint and a current-shape fast path.
 class FilletFeature final : public ParametricFeature
 {
 public:
@@ -703,6 +710,12 @@ public:
         std::vector<int> faceIndices,
         double thickness
     );
+    ShellFeature(
+        std::string id,
+        const Ptr& base,
+        std::vector<cad::topology::TopologicalReference> faceReferences,
+        double thickness
+    );
     const char* typeId() const noexcept override { return "Shell"; }
     Ptr clone(std::string newId) const override;
 
@@ -711,6 +724,7 @@ public:
 
     const Ptr& base() const noexcept;
     const std::vector<TopoDS_Face>& facesToRemove() const noexcept;
+    const std::vector<cad::topology::TopologicalReference>& faceReferences() const noexcept;
     double thickness() const noexcept;
 
 protected:
@@ -721,6 +735,7 @@ private:
     Ptr base_;
     std::vector<TopoDS_Face> facesToRemove_;
     std::vector<int> faceIndices_;
+    std::vector<cad::topology::TopologicalReference> faceReferences_;
     double thickness_;
 };
 

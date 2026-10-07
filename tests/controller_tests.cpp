@@ -546,6 +546,84 @@ private slots:
         QCOMPARE(controller.undoStack().index(), 3);
     }
 
+    void persistentTopologySurvivesDetailAndShellResize()
+    {
+        ModelingController filletController;
+        const auto box = filletController.createBox();
+        QVERIFY(box.success);
+        const auto fillet = filletController.createFillet(
+            SelectionSnapshot{{{box.id, SelectionKind::Edge, 1}}}, 1.0);
+        QVERIFY2(fillet.success, qPrintable(QString::fromStdString(fillet.error)));
+        const auto filletFeature = std::dynamic_pointer_cast<FilletFeature>(
+            filletController.body().findFeature(fillet.id));
+        QVERIFY(filletFeature);
+        QVERIFY(filletFeature->references().front().signature.has_value());
+        QVERIFY(filletController.setFeatureProperty(box.id, "width", 140.0).success);
+        QVERIFY(filletFeature->state() == FeatureState::UpToDate);
+        QVERIFY(!filletFeature->shape().IsNull());
+        filletController.undo();
+        QVERIFY(filletFeature->state() == FeatureState::UpToDate);
+        filletController.redo();
+        QVERIFY(filletFeature->state() == FeatureState::UpToDate);
+
+        ModelingController chamferController;
+        const auto chamferBox = chamferController.createBox();
+        QVERIFY(chamferBox.success);
+        const auto chamfer = chamferController.createChamfer(
+            SelectionSnapshot{{{chamferBox.id, SelectionKind::Edge, 1}}}, 1.0);
+        QVERIFY2(chamfer.success, qPrintable(QString::fromStdString(chamfer.error)));
+        const auto chamferFeature = std::dynamic_pointer_cast<ChamferFeature>(
+            chamferController.body().findFeature(chamfer.id));
+        QVERIFY(chamferFeature);
+        QVERIFY(chamferFeature->references().front().signature.has_value());
+        QVERIFY(chamferController.setFeatureProperty(chamferBox.id, "height", 45.0).success);
+        QVERIFY(chamferFeature->state() == FeatureState::UpToDate);
+        QVERIFY(!chamferFeature->shape().IsNull());
+        chamferController.undo();
+        chamferController.redo();
+        QVERIFY(chamferFeature->state() == FeatureState::UpToDate);
+
+        ModelingController pushPullController;
+        const auto pushBox = pushPullController.createBox();
+        QVERIFY(pushBox.success);
+        const auto pushPull = pushPullController.pushPull(
+            pushBox.id, 1, {0.0, 0.0, 1.0}, 2.0);
+        QVERIFY2(pushPull.success, qPrintable(QString::fromStdString(pushPull.error)));
+        const auto pushFeature = std::dynamic_pointer_cast<PushPullFeature>(
+            pushPullController.body().findFeature(pushPull.id));
+        QVERIFY(pushFeature);
+        QVERIFY(pushFeature->faceReference().signature.has_value());
+        QVERIFY(pushPullController.setFeatureProperty(pushBox.id, "width", 130.0).success);
+        QVERIFY(pushFeature->state() == FeatureState::UpToDate);
+        QVERIFY(!pushFeature->shape().IsNull());
+    }
+
+    void shellUsesPersistentFaceReferencesAfterResize()
+    {
+        auto base = std::make_shared<BoxParametricFeature>("shell-base", 100.0, 70.0, 30.0);
+        QVERIFY(base->recompute());
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(base->shape(), TopAbs_FACE, faces);
+        QVERIFY(faces.Extent() == 6);
+        const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            base->id(), base->shape(), faces(1));
+        auto shell = std::make_shared<ShellFeature>(
+            "shell", base, std::vector<cad::topology::TopologicalReference>{reference}, 1.0);
+        Body body;
+        body.addFeature(base);
+        body.addFeature(shell);
+        QVERIFY(body.recompute());
+        QVERIFY(shell->state() == FeatureState::UpToDate);
+        QVERIFY(!shell->shape().IsNull());
+
+        base->setSize(140.0, 70.0, 30.0);
+        body.markDirtyFrom(base->id());
+        QVERIFY(body.recompute());
+        QVERIFY(shell->state() == FeatureState::UpToDate);
+        QVERIFY(!shell->shape().IsNull());
+        QCOMPARE(shell->faceReferences().size(), std::size_t{1});
+    }
+
     void transformIsOneUndoablePlacementChange()
     {
         ModelingController controller;
@@ -836,6 +914,16 @@ private slots:
         QCOMPARE(loaded->entityCount(), std::size_t{2});
         QCOMPARE(loaded->supportType(), SketchSupportType::Face);
         QVERIFY(!loaded->shape().IsNull());
+        const auto loadedBox = std::dynamic_pointer_cast<BoxParametricFeature>(
+            loadedBody.findFeature(box.id));
+        QVERIFY(loadedBox);
+        loadedBox->setSize(170.0, 70.0, 30.0);
+        loadedBody.markDirtyFrom(box.id);
+        QVERIFY(loadedBody.recompute());
+        QVERIFY(loaded->state() == FeatureState::UpToDate);
+        const auto loadedSupport = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *loaded->faceReference(), loadedBox->shape());
+        QCOMPARE(loadedSupport.status, cad::topology::ResolveStatus::Resolved);
 
         ModelingController cylinderController;
         const auto cylinder = cylinderController.createCylinder();

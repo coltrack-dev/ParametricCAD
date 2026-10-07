@@ -207,6 +207,54 @@ std::vector<cad::topology::TopologicalReference> referencesFor(
     return result;
 }
 
+std::vector<cad::topology::TopologicalReference> faceReferencesFor(
+    const ParametricFeature::Ptr& base,
+    const std::vector<TopoDS_Face>& faces)
+{
+    requireFeature(base, "face operation base");
+    std::vector<cad::topology::TopologicalReference> result;
+    result.reserve(faces.size());
+    for (const auto& face : faces) {
+        if (face.IsNull()) throw std::invalid_argument("Face must not be null");
+        result.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+            base->id(), base->shape(), face));
+    }
+    if (result.empty()) throw std::invalid_argument("Face operation requires at least one face");
+    return result;
+}
+
+void validateFaceReferences(
+    const std::vector<cad::topology::TopologicalReference>& references,
+    const std::string& featureId)
+{
+    if (references.empty()) throw std::invalid_argument("Face operation requires at least one face reference");
+    for (const auto& reference : references) {
+        if (reference.featureId != featureId
+            || reference.kind != cad::topology::TopologicalKind::Face)
+            throw std::invalid_argument("Invalid face topological reference");
+    }
+}
+
+std::vector<TopoDS_Face> resolveFaces(
+    const ParametricFeature::Ptr& base,
+    const std::vector<cad::topology::TopologicalReference>& references)
+{
+    requireFeature(base, "face operation base");
+    std::vector<TopoDS_Face> result;
+    result.reserve(references.size());
+    for (const auto& reference : references) {
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            reference, base->shape());
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape)
+            throw std::runtime_error(resolved.error.empty()
+                ? "Stored face reference could not be resolved" : resolved.error);
+        if (resolved.shape->ShapeType() != TopAbs_FACE)
+            throw std::runtime_error("Stored face reference resolved to a non-face");
+        result.push_back(TopoDS::Face(*resolved.shape));
+    }
+    return result;
+}
+
 std::vector<TopoDS_Edge> resolveEdges(
     const ParametricFeature::Ptr& base,
     const std::vector<cad::topology::TopologicalReference>& references
@@ -1521,6 +1569,37 @@ PushPullFeature::PushPullFeature(
         throw std::invalid_argument("Push/Pull distance must not be zero");
     }
     normal_.Normalize();
+    if (!source->shape().IsNull()) {
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
+        if (faceIndex_ <= faces.Extent()) {
+            faceReference_ = cad::topology::TopologicalSignatureBuilder::createReference(
+                source->id(), source->shape(), faces(faceIndex_));
+        }
+    }
+    addDependency(source);
+}
+
+PushPullFeature::PushPullFeature(
+    std::string id,
+    const Ptr& source,
+    cad::topology::TopologicalReference faceReference,
+    gp_Vec normal,
+    const double distance
+)
+    : ParametricFeature(std::move(id), "Push/Pull"),
+      sourceFeatureId_(source ? source->id() : std::string{}),
+      source_(source), faceIndex_(0), faceReference_(std::move(faceReference)),
+      normal_(std::move(normal)), distance_(distance)
+{
+    requireFeature(source, "Push/Pull source");
+    if (!faceReference_ || faceReference_->featureId != source->id()
+        || faceReference_->kind != cad::topology::TopologicalKind::Face)
+        throw std::invalid_argument("Push/Pull reference must identify a source Face");
+    if (normal_.Magnitude() <= 1.0e-9) throw std::invalid_argument("Push/Pull normal must not be zero");
+    if (!std::isfinite(distance_) || std::abs(distance_) <= 1.0e-9)
+        throw std::invalid_argument("Push/Pull distance must not be zero");
+    normal_.Normalize();
     addDependency(source);
 }
 
@@ -1564,6 +1643,11 @@ int PushPullFeature::faceIndex() const noexcept
     return faceIndex_;
 }
 
+const cad::topology::TopologicalReference& PushPullFeature::faceReference() const noexcept
+{
+    return *faceReference_;
+}
+
 const gp_Vec& PushPullFeature::normal() const noexcept
 {
     return normal_;
@@ -1579,14 +1663,22 @@ TopoDS_Shape PushPullFeature::build() const
     const auto source = source_.lock();
     requireFeature(source, "Push/Pull source");
 
-    TopTools_IndexedMapOfShape faces;
-    TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
-    if (source->shape().IsNull() || faces.Extent() == 0 || faceIndex_ <= 0
-        || faceIndex_ > faces.Extent()) {
-        throw std::runtime_error("Push/Pull face reference is no longer valid");
+    TopoDS_Shape selectedShape;
+    if (faceReference_) {
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *faceReference_, source->shape());
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape)
+            throw std::runtime_error(resolved.error.empty()
+                ? "Push/Pull face reference is no longer valid" : resolved.error);
+        selectedShape = *resolved.shape;
+    } else {
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(source->shape(), TopAbs_FACE, faces);
+        if (source->shape().IsNull() || faces.Extent() == 0 || faceIndex_ <= 0
+            || faceIndex_ > faces.Extent())
+            throw std::runtime_error("Push/Pull face reference is no longer valid");
+        selectedShape = faces.FindKey(faceIndex_);
     }
-
-    const TopoDS_Shape selectedShape = faces.FindKey(faceIndex_);
     if (selectedShape.IsNull() || selectedShape.ShapeType() != TopAbs_FACE) {
         throw std::runtime_error("Push/Pull source subshape is not a Face");
     }
@@ -1625,7 +1717,8 @@ TopoDS_Shape PushPullFeature::build() const
 void PushPullFeature::writeParameters(QJsonObject& object) const
 {
     object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
-    object.insert("faceIndex", faceIndex_);
+    if (faceReference_) object.insert("faceReference", cad::topology::toJson(*faceReference_));
+    if (faceIndex_ > 0) object.insert("faceIndex", faceIndex_);
     object.insert("normalX", normal_.X());
     object.insert("normalY", normal_.Y());
     object.insert("normalZ", normal_.Z());
@@ -2067,6 +2160,21 @@ ShellFeature::ShellFeature(
       thickness_(thickness)
 {
     requireFeature(base_, "base");
+    faceReferences_ = faceReferencesFor(base_, facesToRemove_);
+    addDependency(base_);
+}
+
+ShellFeature::ShellFeature(
+    std::string id,
+    const Ptr& base,
+    std::vector<cad::topology::TopologicalReference> faceReferences,
+    const double thickness
+)
+    : ParametricFeature(std::move(id), "Shell"),
+      base_(base), faceReferences_(std::move(faceReferences)), thickness_(thickness)
+{
+    requireFeature(base_, "base");
+    validateFaceReferences(faceReferences_, base_->id());
     addDependency(base_);
 }
 
@@ -2114,6 +2222,12 @@ ShellFeature::facesToRemove() const noexcept
     return facesToRemove_;
 }
 
+const std::vector<cad::topology::TopologicalReference>&
+ShellFeature::faceReferences() const noexcept
+{
+    return faceReferences_;
+}
+
 double ShellFeature::thickness() const noexcept
 {
     return thickness_;
@@ -2122,7 +2236,9 @@ double ShellFeature::thickness() const noexcept
 TopoDS_Shape ShellFeature::build() const
 {
     auto faces = facesToRemove_;
-    if (!faceIndices_.empty()) {
+    if (!faceReferences_.empty()) {
+        faces = resolveFaces(base_, faceReferences_);
+    } else if (!faceIndices_.empty()) {
         TopTools_IndexedMapOfShape map;
         TopExp::MapShapes(base_->shape(), TopAbs_FACE, map);
         faces.clear();
@@ -2142,8 +2258,17 @@ TopoDS_Shape ShellFeature::build() const
 void ShellFeature::writeParameters(QJsonObject& object) const
 {
     object.insert("sourceFeatureId", QString::fromStdString(base_->id()));
+    if (!faceReferences_.empty()) {
+        QJsonArray references;
+        for (const auto& reference : faceReferences_)
+            references.append(cad::topology::toJson(reference));
+        object.insert("topologicalReferences", references);
+    }
     QJsonArray indices;
-    if (!faceIndices_.empty()) {
+    if (!faceReferences_.empty()) {
+        for (const auto& reference : faceReferences_)
+            if (reference.transientIndex) indices.append(*reference.transientIndex);
+    } else if (!faceIndices_.empty()) {
         for (const int index : faceIndices_) indices.append(index);
     } else {
         TopTools_IndexedMapOfShape map;
@@ -2460,8 +2585,11 @@ ParametricFeature::Ptr PocketFeature::clone(std::string newId) const
 
 ParametricFeature::Ptr PushPullFeature::clone(std::string newId) const
 {
-    auto copy = std::make_shared<PushPullFeature>(
-        std::move(newId), source(), faceIndex_, normal_, distance_);
+    auto copy = faceReference_
+        ? std::make_shared<PushPullFeature>(
+            std::move(newId), source(), *faceReference_, normal_, distance_)
+        : std::make_shared<PushPullFeature>(
+            std::move(newId), source(), faceIndex_, normal_, distance_);
     copyPlacementTo(copy);
     return copy;
 }
@@ -2500,9 +2628,11 @@ ParametricFeature::Ptr ChamferFeature::clone(std::string newId) const
 
 ParametricFeature::Ptr ShellFeature::clone(std::string newId) const
 {
-    auto copy = faceIndices_.empty()
-        ? std::make_shared<ShellFeature>(std::move(newId), base_, facesToRemove_, thickness_)
-        : std::make_shared<ShellFeature>(std::move(newId), base_, faceIndices_, thickness_);
+    auto copy = !faceReferences_.empty()
+        ? std::make_shared<ShellFeature>(std::move(newId), base_, faceReferences_, thickness_)
+        : faceIndices_.empty()
+            ? std::make_shared<ShellFeature>(std::move(newId), base_, facesToRemove_, thickness_)
+            : std::make_shared<ShellFeature>(std::move(newId), base_, faceIndices_, thickness_);
     copyPlacementTo(copy);
     return copy;
 }
