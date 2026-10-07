@@ -97,7 +97,7 @@ private slots:
 
         auto state = controller.actionState({sketch.id});
         QVERIFY(state.canCreateFace);
-        QVERIFY(!state.canExtrude);
+        QVERIFY(state.canExtrude);
 
         const auto face = controller.createFace({sketch.id});
         QVERIFY(face.success);
@@ -119,6 +119,46 @@ private slots:
             BooleanKind::Cut, {box.id, cylinder.id}, cylinder.id);
         QVERIFY(boolean.success);
         QVERIFY(controller.actionState({box.id, cylinder.id}).canBoolean);
+    }
+
+    void sketchExtrudeEligibilityIncludesFaceAttachedProfiles()
+    {
+        ModelingController controller;
+        const auto global = controller.createSketch();
+        QVERIFY(global.success);
+        QVERIFY(controller.addSketchLine(global.id, {0, 0}, {20, 0}).success);
+        QVERIFY(controller.addSketchLine(global.id, {20, 0}, {20, 10}).success);
+        QVERIFY(controller.addSketchLine(global.id, {20, 10}, {0, 10}).success);
+        QVERIFY(controller.addSketchLine(global.id, {0, 10}, {0, 0}).success);
+        QVERIFY(controller.actionState({global.id}).canExtrude);
+        QVERIFY(controller.actionState(SelectionSnapshot{{
+            {global.id, SelectionKind::Object, std::nullopt}}}).canExtrude);
+        QVERIFY(controller.createExtrudeFromSketch(SelectionSnapshot{{
+            {global.id, SelectionKind::Object, std::nullopt}}}, 5.0).success);
+
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto attached = controller.createSketchOnFace(SelectionSnapshot{{
+            {box.id, SelectionKind::Face, 1}}});
+        QVERIFY(attached.success);
+        QVERIFY(controller.addSketchLine(attached.id, {0, 0}, {20, 0}).success);
+        QVERIFY(controller.addSketchLine(attached.id, {20, 0}, {20, 10}).success);
+        QVERIFY(controller.addSketchLine(attached.id, {20, 10}, {0, 10}).success);
+        QVERIFY(controller.addSketchLine(attached.id, {0, 10}, {0, 0}).success);
+        QVERIFY(controller.actionState({attached.id}).canExtrude);
+        const auto attachedSelection = SelectionSnapshot{{
+            {attached.id, SelectionKind::Object, std::nullopt}}};
+        QVERIFY(controller.actionState(attachedSelection).canExtrude);
+        const auto extrude = controller.createExtrudeFromSketch(attachedSelection, 5.0);
+        QVERIFY2(extrude.success, qPrintable(QString::fromStdString(extrude.error)));
+        QVERIFY(!controller.body().findFeature(extrude.id)->shape().IsNull());
+
+        const auto open = controller.createSketch();
+        QVERIFY(open.success);
+        QVERIFY(controller.addSketchLine(open.id, {0, 0}, {20, 0}).success);
+        QVERIFY(!controller.actionState({open.id}).canExtrude);
+        QVERIFY(!controller.actionState({box.id}).canExtrude);
+        QVERIFY(!controller.actionState({global.id, attached.id}).canExtrude);
     }
 
     void sketchExtrudeAndPocketAreParametric()

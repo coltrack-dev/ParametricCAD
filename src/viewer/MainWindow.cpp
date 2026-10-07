@@ -970,7 +970,8 @@ std::vector<std::string> MainWindow::selectedIds() const
 
 void MainWindow::updateActionState()
 {
-    const auto state = modeling_.actionState(currentSelection_);
+    auto state = modeling_.actionState(currentSelection_);
+    if (!activeSketchId_.empty()) state.canExtrude = false;
     deleteAction_->setEnabled(state.canDelete);
     if (duplicateAction_) duplicateAction_->setEnabled(selectedIds().size() == 1);
     faceAction_->setEnabled(state.canCreateFace);

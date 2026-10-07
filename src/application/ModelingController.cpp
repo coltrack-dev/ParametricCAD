@@ -1148,7 +1148,14 @@ ModelingActionState ModelingController::actionState(
         state.canExtrude = feature && feature->role() == cad::parametric::FeatureRole::Face;
         if (feature && feature->role() == cad::parametric::FeatureRole::Sketch) {
             const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
-            state.canExtrude = false;
+            try {
+                if (sketch) {
+                    (void)cad::operations::SketchProfileBuilder::build(*sketch);
+                    state.canExtrude = true;
+                }
+            } catch (const std::exception&) {
+                state.canExtrude = false;
+            }
             state.canPocket = sketch && sketch->supportType() == cad::parametric::SketchSupportType::Face
                 && sketch->faceReference()
                 && body_.findFeature(sketch->faceReference()->featureId);
@@ -1166,16 +1173,9 @@ ModelingActionState ModelingController::actionState(
 ) const
 {
     auto state = actionState(selection.selectedObjectIds());
-    if (selection.items.size() == 1
-        && selection.items.front().kind == SelectionKind::Object) {
-        const auto feature = body_.findFeature(selection.items.front().featureId);
-        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
-        if (sketch) {
-            try {
-                (void)cad::operations::SketchProfileBuilder::build(*sketch);
-                state.canExtrude = true;
-            } catch (const std::exception&) {}
-        }
+    if (selection.items.size() != 1
+        || selection.items.front().kind != SelectionKind::Object) {
+        state.canExtrude = false;
     }
     if (!selection.items.empty()) {
         const auto& first = selection.items.front();
