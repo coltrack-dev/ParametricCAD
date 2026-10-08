@@ -369,8 +369,11 @@ CadViewer::CadViewer(
     : QWidget(parent),
       operationSession_(operationSession ? operationSession : &localOperationSession_)
 {
-    selectionTraceFile_.open("/tmp/parametriccad-selection.log",
-        std::ios::out | std::ios::trunc);
+    selectionTraceEnabled_ = qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_SELECTION");
+    if (selectionTraceEnabled_) {
+        selectionTraceFile_.open("/tmp/parametriccad-selection.log",
+            std::ios::out | std::ios::trunc);
+    }
     traceSelectionLifecycle("CadViewer constructed");
     performanceDiagnostics_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_PERF");
     snapDisabled_ = qEnvironmentVariableIsSet("PARAMETRIC_CAD_DISABLE_SNAP");
@@ -406,6 +409,7 @@ CadViewer::CadViewer(
 
 void CadViewer::traceSelectionLifecycle(const QString& message) const
 {
+    if (!selectionTraceEnabled_) return;
     const QString line = QString("[SEL %1] %2")
         .arg(++selectionTraceSequence_, 5, 10, QLatin1Char('0'))
         .arg(message);

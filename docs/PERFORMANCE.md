@@ -90,6 +90,12 @@ PARAMETRIC_CAD_DISPLAY_MODE=shaded  # shaded faces without edge boundaries
 PARAMETRIC_CAD_DISPLAY_MODE=wireframe
 ```
 
+Selection lifecycle tracing is disabled by default. Enable
+`PARAMETRICCAD_TRACE_SELECTION=1` only when diagnosing OCCT selection issues;
+it writes detailed stderr output and `/tmp/parametriccad-selection.log`.
+Revolve/action diagnostics are separately enabled with
+`PARAMETRICCAD_TRACE_ACTIONS=1`.
+
 The display and interaction switches are diagnostic only; defaults are
 unchanged. Camera navigation does not invoke model recompute, visibility
 policy evaluation, tree rebuild, or snap topology generation. Hover picking is

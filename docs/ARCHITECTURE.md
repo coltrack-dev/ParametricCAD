@@ -132,6 +132,12 @@ Sketch axes use stable entity IDs, and model-edge axes use persistent topology
 references. The UI stages the angle and global-axis choice but never stores a
 transient OCCT axis as history.
 
+Sketch-line axis picking is a dedicated viewport path. `SketchEntityPicker`
+projects the source Sketch's local entities through its current frame and the
+camera, resolves the nearest Line to a stable `SketchEntityId`, and consumes
+the click before ordinary OCCT selection. Model Edge axes use the normal typed
+OCCT Edge path; the two identities are intentionally not conflated.
+
 ## Parametric model
 
 `Body` is the canonical ordered history owner. It contains shared
@@ -210,6 +216,14 @@ the normalized interaction state. `SelectionState::primary` is the sole
 transform source and is also the source feature used to build snap references.
 Topology selection is restored through feature IDs and geometry-signature
 `TopologicalReference` values; raw `TopoDS_Shape` identity is transient.
+
+While a Sketch is being edited, its persistent model presentation is excluded
+from normal model selection management. Finish Sketch clears edit-only state,
+re-registers the presentation, and restores the Sketch as an object selection.
+Selection activation is object-scoped and incremental; `SetShape()` releases
+the old managed selector before replacing geometry so OCCT cannot retain stale
+selection structures. Diagnostic lifecycle output is disabled by default and
+can be enabled with `PARAMETRICCAD_TRACE_SELECTION=1`.
 
 ## Visibility architecture
 

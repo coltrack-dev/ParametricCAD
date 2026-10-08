@@ -39,6 +39,35 @@ general-purpose constraint CAD system; advanced profile and solver coverage is
 still limited. See [docs/PARAMETRIC_FEATURES.md](docs/PARAMETRIC_FEATURES.md)
 and the focused sketch documents for the current scope.
 
+### Revolve from a Sketch
+
+The complete native workflow is:
+
+```text
+Create Sketch -> draw closed profile -> draw separate axis Line
+-> mark the Line Construction -> Finish Sketch
+-> select the Sketch in the model tree -> Revolve
+-> Axis = Sketch Line -> Pick Axis -> click the Line in the viewport
+-> verify the selected Sketch Line/entity -> set Angle (for example 360°)
+-> confirm/create Revolve
+```
+
+Selecting `Sketch Line` in the axis control does not select a line by itself;
+`Pick Axis` must be followed by a viewport click. The chosen line is stored by
+stable `SketchEntityId`, and the profile and axis may be in the same Sketch.
+Construction geometry remains visible but does not participate in profile
+boundary extraction, so a Rectangle plus a Construction Line remains valid.
+An ordinary extra open Line still follows the normal profile validation rules.
+
+For other axes, choose Global X/Y/Z directly. Choose `Model Edge`, press
+`Pick Axis`, and click a linear model Edge to use a persistent topology
+reference.
+
+The Construction control is also a drawing default when no existing Sketch
+edge is selected: enabled mode makes newly drawn Lines construction geometry.
+When an existing Sketch Line is selected, it toggles that entity's Construction
+property instead.
+
 ### Selection and interaction
 
 - Object, edge, and face selection modes.

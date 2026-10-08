@@ -45,6 +45,41 @@ controller command boundary. The current UI stages global-axis and angle
 choices before one persistent AddFeature command. Angle and global-axis edits
 use the standard FeatureEditorPanel and one Undo/Redo command per edit.
 
+### Revolve workflow
+
+For a Sketch-line axis:
+
+1. Create a Sketch and draw a valid closed profile.
+2. Draw a separate Line for the rotation axis.
+3. Mark that Line as Construction, then finish the Sketch.
+4. Select the Sketch feature in the model tree and activate Revolve.
+5. Set `Axis` to `Sketch Line` and press `Pick Axis`.
+6. Click the desired construction Line in the viewport. Choosing `Sketch Line`
+   does not choose an axis automatically.
+7. Confirm that the UI displays the selected Sketch line/entity, set the angle
+   (for example, `360` degrees), and create the Revolve.
+
+The profile and axis may belong to the same Sketch. The picked line is stored
+by stable `SketchEntityId`; it is not identified by a transient edge index.
+Construction geometry remains visible and editable, participates in Sketch
+snapping/constraints, and is excluded from profile-boundary extraction. Thus a
+closed Rectangle plus a construction Line remains a valid profile, while a
+normal open extra Line remains subject to the normal open-profile rules.
+
+`Axis = Model Edge` followed by `Pick Axis` uses ordinary linear OCCT Edge
+selection and stores a persistent topology reference. Global X, Y, and Z axes
+do not require viewport picking.
+
+### Construction control
+
+The checkable `Construction Line` control has two explicit behaviors. With no
+existing Sketch edge selected, it is the drawing default: newly created Lines
+are construction geometry while it is enabled. When an existing Sketch Line
+is selected, the same control toggles that entity's Construction property;
+the separate `Toggle Construction` action remains available as an equivalent
+explicit action. The selected entity keeps its `SketchEntityId`, geometry, and
+undo/redo history.
+
 ## Placement and transforms
 
 Placement is a `gp_Trsf` stored on `ParametricFeature`. The transform gizmo and
