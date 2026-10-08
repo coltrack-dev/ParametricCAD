@@ -1,4 +1,5 @@
 #include "viewer/CadViewer.h"
+#include "viewer/SketchEntityPicker.h"
 
 #include "model/Body.h"
 
@@ -166,6 +167,15 @@ QPointF projectWorldPoint(
     );
 }
 
+gp_Pnt sketchWorldPoint(
+    const cad::parametric::SketchFrame& frame, const gp_Pnt2d& point)
+{
+    gp_Pnt result = frame.origin;
+    result.Translate(gp_Vec(frame.xDirection) * point.X()
+        + gp_Vec(frame.yDirection) * point.Y());
+    return result;
+}
+
 gp_Pnt shapeCenter(const TopoDS_Shape& shape)
 {
     Bnd_Box bounds;
@@ -314,14 +324,6 @@ TopoDS_Shape makeSketchPreviewShape(
         }
     }
     return compound;
-}
-
-gp_Pnt sketchWorldPoint(const cad::parametric::SketchFrame& frame, const gp_Pnt2d& point)
-{
-    gp_Pnt result = frame.origin;
-    result.Translate(gp_Vec(frame.xDirection) * point.X()
-        + gp_Vec(frame.yDirection) * point.Y());
-    return result;
 }
 
 TopoDS_Shape makeTrimPreviewShape(
@@ -1765,6 +1767,43 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
 }
 
+void CadViewer::updateSketchConstructionGeometry(
+    const cad::parametric::SketchFeature& sketch, const QString& featureId)
+{
+    if (!initialized_ || featureId.isEmpty()) return;
+    const auto existing = sketchConstructionObjects_.find(featureId);
+    if (existing != sketchConstructionObjects_.end()) {
+        context_->Remove(existing->second, Standard_False);
+        sketchConstructionObjects_.erase(existing);
+    }
+
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    const auto frame = sketch.currentFrame();
+    bool hasConstruction = false;
+    for (const auto& entity : sketch.entities()) {
+        const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+        if (!line || !line->construction) continue;
+        auto edge = BRepBuilderAPI_MakeEdge(
+            sketchWorldPoint(frame, line->start), sketchWorldPoint(frame, line->end));
+        if (!edge.IsDone()) continue;
+        builder.Add(compound, edge.Edge());
+        hasConstruction = true;
+    }
+    if (!hasConstruction) return;
+
+    auto object = Handle(AIS_Shape)(new AIS_Shape(compound));
+    object->SetDisplayMode(AIS_WireFrame);
+    object->SetColor(Quantity_NOC_GRAY70);
+    object->SetWidth(1.5);
+    sketchConstructionObjects_.emplace(featureId, object);
+    context_->Display(object, Standard_False);
+    if (featureVisibilityMode(featureId) == VisibilityMode::Hidden) {
+        context_->Erase(object, Standard_False);
+    }
+}
+
 void CadViewer::setHiddenFeatures(const QStringList& featureIds)
 {
     std::map<QString, VisibilityMode> modes;
@@ -1859,6 +1898,14 @@ void CadViewer::applyVisibilityChanges(
             if (!displayed) context_->Display(object->second, Standard_False);
             setFeatureTransparency(id, object->second);
             context_->Redisplay(object->second, Standard_False);
+        }
+        const auto construction = sketchConstructionObjects_.find(id);
+        if (construction != sketchConstructionObjects_.end()) {
+            if (change.newMode == VisibilityMode::Hidden) {
+                context_->Erase(construction->second, Standard_False);
+            } else {
+                context_->Display(construction->second, Standard_False);
+            }
         }
         changed = true;
         if (change.newMode != VisibilityMode::Visible
@@ -2318,6 +2365,11 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         context_->Remove(it->second, Standard_False);
         traceSelectionLifecycle(QString("AIS unregister feature=%1 after Remove").arg(it->first));
         std::erase(displayedShapes_, it->second);
+        const auto construction = sketchConstructionObjects_.find(it->first);
+        if (construction != sketchConstructionObjects_.end()) {
+            context_->Remove(construction->second, Standard_False);
+            sketchConstructionObjects_.erase(construction);
+        }
         featureVisibility_.erase(it->first);
         it = featureObjects_.erase(it);
         changed = true;
@@ -2340,6 +2392,7 @@ void CadViewer::clear()
 
     cancelPushPull();
     clearSection();
+    clearSketchLinePickTarget();
     if (!sketchPreviewObject_.IsNull()) {
         context_->Remove(sketchPreviewObject_, Standard_False);
         sketchPreviewObject_.Nullify();
@@ -2349,6 +2402,7 @@ void CadViewer::clear()
     spatialBoxObject_.Nullify();
     displayedShapes_.clear();
     featureObjects_.clear();
+    sketchConstructionObjects_.clear();
     managedSelectionModes_.clear();
     editingSketchFeatureId_.clear();
     featureVisibility_.clear();
@@ -2410,6 +2464,86 @@ void CadViewer::setSelectionMode(SelectionMode mode)
 void CadViewer::setAxisPickCancelHandler(std::function<void()> handler)
 {
     axisPickCancelHandler_ = std::move(handler);
+}
+
+void CadViewer::setSketchLinePickTarget(
+    std::shared_ptr<const cad::parametric::SketchFeature> sketch,
+    std::function<void(const cad::parametric::SketchEntityId&)> pickedHandler,
+    std::function<void(const std::optional<cad::parametric::SketchEntityId>&)> hoveredHandler)
+{
+    sketchLinePickSketch_ = std::move(sketch);
+    sketchLinePickedHandler_ = std::move(pickedHandler);
+    sketchLineHoveredHandler_ = std::move(hoveredHandler);
+    sketchLineHoveredId_.reset();
+    sketchLinePickMousePress_ = false;
+    updateSketchLinePickHover(lastMousePosition_);
+}
+
+void CadViewer::clearSketchLinePickTarget()
+{
+    sketchLinePickSketch_.reset();
+    sketchLinePickedHandler_ = {};
+    sketchLineHoveredHandler_ = {};
+    sketchLineHoveredId_.reset();
+    sketchLinePickMousePress_ = false;
+    if (!sketchLinePickHighlightObject_.IsNull() && !context_.IsNull()) {
+        context_->Remove(sketchLinePickHighlightObject_, Standard_True);
+    }
+    sketchLinePickHighlightObject_.Nullify();
+}
+
+std::optional<cad::parametric::SketchEntityId> CadViewer::sketchLineAtScreen(
+    const QPoint& position) const
+{
+    if (!sketchLinePickSketch_ || !view_ || width() <= 0 || height() <= 0) {
+        return std::nullopt;
+    }
+    const auto frame = sketchLinePickSketch_->currentFrame();
+    std::vector<cad::viewer::SketchLineScreenCandidate> candidates;
+    for (const auto& entity : sketchLinePickSketch_->entities()) {
+        const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+        if (!line) continue;
+        const gp_Pnt start = sketchWorldPoint(frame, line->start);
+        const gp_Pnt end = sketchWorldPoint(frame, line->end);
+        candidates.push_back({line->id,
+            projectWorldPoint(view_, start, width(), height()),
+            projectWorldPoint(view_, end, width(), height()), line->construction});
+    }
+    return cad::viewer::pickSketchLine(candidates, QPointF(position), SketchTrimHitPixels);
+}
+
+void CadViewer::updateSketchLinePickHover(const QPoint& position)
+{
+    if (!sketchLinePickSketch_) return;
+    std::optional<cad::parametric::SketchEntityId> id;
+    try {
+        id = sketchLineAtScreen(position);
+    } catch (const std::exception&) {
+        id.reset();
+    }
+    if (id == sketchLineHoveredId_) return;
+    sketchLineHoveredId_ = id;
+    if (sketchLineHoveredHandler_) sketchLineHoveredHandler_(id);
+
+    if (!context_ || !view_) return;
+    if (!sketchLinePickHighlightObject_.IsNull()) {
+        context_->Remove(sketchLinePickHighlightObject_, Standard_True);
+        sketchLinePickHighlightObject_.Nullify();
+    }
+    if (!id) return;
+    const auto frame = sketchLinePickSketch_->currentFrame();
+    for (const auto& entity : sketchLinePickSketch_->entities()) {
+        const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+        if (!line || line->id != *id) continue;
+        const auto shape = BRepBuilderAPI_MakeEdge(
+            sketchWorldPoint(frame, line->start), sketchWorldPoint(frame, line->end)).Edge();
+        sketchLinePickHighlightObject_ = new AIS_Shape(shape);
+        sketchLinePickHighlightObject_->SetDisplayMode(AIS_WireFrame);
+        sketchLinePickHighlightObject_->SetColor(Quantity_NOC_YELLOW);
+        sketchLinePickHighlightObject_->SetWidth(4.0);
+        context_->Display(sketchLinePickHighlightObject_, Standard_True);
+        break;
+    }
 }
 
 CadViewer::SelectionMode CadViewer::selectionMode() const
@@ -3304,6 +3438,18 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
     interactionMode_ = InteractionMode::None;
     clearAxisHover();
 
+    if (sketchLinePickSketch_ && event->button() == Qt::LeftButton) {
+        sketchLinePickMousePress_ = true;
+        std::optional<cad::parametric::SketchEntityId> id;
+        try {
+            id = sketchLineAtScreen(lastMousePosition_);
+        } catch (const std::exception&) {
+            id.reset();
+        }
+        if (id && sketchLinePickedHandler_) sketchLinePickedHandler_(*id);
+        return;
+    }
+
     if (sketchMode_ && event->button() == Qt::LeftButton) {
         if (sketchPreviewTool_ != SketchPreviewTool::Trim
             && sketchPreviewTool_ != SketchPreviewTool::Extend
@@ -3459,6 +3605,10 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
     const QPoint currentPosition =
         event->position().toPoint();
+
+    if (sketchLinePickSketch_ && event->buttons() == Qt::NoButton) {
+        updateSketchLinePickHover(currentPosition);
+    }
 
     if (sketchMode_ && sketchPreviewTool_ == SketchPreviewTool::None && !context_.IsNull()) {
         context_->MoveTo(currentPosition.x(), currentPosition.y(), view_, Standard_False);
@@ -3652,6 +3802,11 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
 void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 {
+    if ((sketchLinePickSketch_ || sketchLinePickMousePress_)
+        && event->button() == Qt::LeftButton) {
+        sketchLinePickMousePress_ = false;
+        return;
+    }
     if (sectionDragging_ && event->button() == Qt::LeftButton) {
         sectionDragging_ = false;
         setCursor(Qt::OpenHandCursor);

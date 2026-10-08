@@ -123,6 +123,8 @@ public:
     std::int64_t lastViewerUpdateMilliseconds() const noexcept;
     std::int64_t lastSelectionActivationMilliseconds() const noexcept;
     void updateFeature(const TopoDS_Shape& shape, const QString& featureId);
+    void updateSketchConstructionGeometry(
+        const cad::parametric::SketchFeature& sketch, const QString& featureId);
     void selectFeatures(const QStringList& featureIds);
     void setHiddenFeatures(const QStringList& featureIds);
     void setFeatureVisibilityModes(
@@ -197,6 +199,11 @@ public:
     void setSectionInteractionStatusHandler(
         std::function<void(const QString&)> handler);
     void setAxisPickCancelHandler(std::function<void()> handler);
+    void setSketchLinePickTarget(
+        std::shared_ptr<const cad::parametric::SketchFeature> sketch,
+        std::function<void(const cad::parametric::SketchEntityId&)> pickedHandler,
+        std::function<void(const std::optional<cad::parametric::SketchEntityId>&)> hoveredHandler);
+    void clearSketchLinePickTarget();
 
 signals:
     void selectionChanged(const cad::application::SelectionSnapshot& selection);
@@ -281,6 +288,9 @@ private:
     void updateSectionPresentation();
     int sectionHandleAt(const QPoint& position) const;
     void updateSectionDrag(const QPoint& position);
+    std::optional<cad::parametric::SketchEntityId> sketchLineAtScreen(
+        const QPoint& position) const;
+    void updateSketchLinePickHover(const QPoint& position);
 
     QToolBar* toolBar_{nullptr};
     QLabel* xRayStatusLabel_{nullptr};
@@ -316,6 +326,7 @@ private:
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
+    std::map<QString, Handle(AIS_Shape)> sketchConstructionObjects_;
     std::map<QString, Standard_Integer> managedSelectionModes_;
     std::map<QString, cad::application::VisibilityMode> featureVisibility_;
     Handle(AIS_Shape) spatialBoxObject_;
@@ -331,6 +342,13 @@ private:
     double sectionDragPosition_{0.0};
     std::function<void(const QString&)> sectionInteractionStatusHandler_;
     std::function<void()> axisPickCancelHandler_;
+    std::shared_ptr<const cad::parametric::SketchFeature> sketchLinePickSketch_;
+    std::function<void(const cad::parametric::SketchEntityId&)> sketchLinePickedHandler_;
+    std::function<void(const std::optional<cad::parametric::SketchEntityId>&)>
+        sketchLineHoveredHandler_;
+    std::optional<cad::parametric::SketchEntityId> sketchLineHoveredId_;
+    bool sketchLinePickMousePress_{false};
+    Handle(AIS_Shape) sketchLinePickHighlightObject_;
     int bulkUpdateDepth_{0};
     bool bulkCachesInvalidated_{false};
     std::int64_t lastBulkViewerUpdateMilliseconds_{0};

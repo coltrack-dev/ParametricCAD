@@ -48,6 +48,8 @@ set(PARAMETRIC_CAD_SOURCES
     viewer/BimInspectorPanel.h
     viewer/CadViewer.cpp
     viewer/CadViewer.h
+    viewer/SketchEntityPicker.cpp
+    viewer/SketchEntityPicker.h
     model/Document.cpp
     model/Document.h
     model/ProjectFile.cpp

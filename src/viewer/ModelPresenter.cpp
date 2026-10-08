@@ -24,6 +24,10 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
             || feature->shape().IsNull()) continue;
         result.presentedIds.push_back(feature->id());
         viewer_.updateFeature(feature->shape(), QString::fromStdString(feature->id()));
+        if (const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature)) {
+            viewer_.updateSketchConstructionGeometry(*sketch,
+                QString::fromStdString(feature->id()));
+        }
     }
     viewer_.retainFeatures([&result]() {
         QStringList ids;

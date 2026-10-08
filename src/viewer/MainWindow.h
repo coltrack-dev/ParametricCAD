@@ -124,6 +124,7 @@ private:
     void cancelRevolveAxisPick();
     bool handleRevolveAxisSelection(
         const cad::application::SelectionSnapshot& selection);
+    void handleSketchLineAxisPicked(const cad::parametric::SketchEntityId& entityId);
     bool beginOperation(
         cad::application::InteractiveOperationKind kind,
         const std::vector<std::string>& sourceFeatureIds);

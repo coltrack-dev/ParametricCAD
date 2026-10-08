@@ -170,6 +170,7 @@ add_executable(main_window_tests
     ../src/viewer/BimNavigationPanel.cpp
     ../src/viewer/BimInspectorPanel.cpp
     ../src/viewer/CadViewer.cpp
+    ../src/viewer/SketchEntityPicker.cpp
 )
 target_link_libraries(main_window_tests PRIVATE
     model_test_support Qt6::Test Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets

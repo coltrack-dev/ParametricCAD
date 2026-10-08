@@ -1984,6 +1984,7 @@ void MainWindow::beginRevolveAxisPick(
                 featureId.toStdString(), {});
         }
     }
+    if (!editingExisting) revolveProfileFeatureId_ = featureId;
     revolveAxisPicking_ = true;
     revolveAxisPickEditing_ = editingExisting;
     revolveAxisFeatureId_ = editingExisting ? featureId : QString{};
@@ -1991,6 +1992,26 @@ void MainWindow::beginRevolveAxisPick(
     revolvePreviousSelectionMode_ = static_cast<int>(viewer_->selectionMode());
     viewer_->setAxisPickCancelHandler([this]() { cancelRevolveAxisPick(); });
     viewer_->setSelectionMode(CadViewer::SelectionMode::Edge);
+    if (type == cad::parametric::RevolveAxisType::SketchLine) {
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(revolveProfileFeatureId_.toStdString()));
+        if (!sketch) {
+            cancelRevolveAxisPick();
+            statusBar()->showMessage("Revolve Sketch source is unavailable", 3000);
+            return;
+        }
+        viewer_->setSketchLinePickTarget(
+            sketch,
+            [this](const cad::parametric::SketchEntityId& entityId) {
+                handleSketchLineAxisPicked(entityId);
+            },
+            [this](const std::optional<cad::parametric::SketchEntityId>& entityId) {
+                statusBar()->showMessage(entityId
+                    ? QString("Axis: Sketch Line | Entity: %1").arg(
+                        QString::fromStdString(*entityId))
+                    : "Pick a line from the source Sketch");
+            });
+    }
     statusBar()->showMessage(
         type == cad::parametric::RevolveAxisType::SketchLine
             ? "Pick a line from the source Sketch"
@@ -2002,11 +2023,37 @@ void MainWindow::cancelRevolveAxisPick()
     if (!revolveAxisPicking_) return;
     revolveRestoringSelectionMode_ = true;
     viewer_->setAxisPickCancelHandler({});
+    viewer_->clearSketchLinePickTarget();
     viewer_->setSelectionMode(static_cast<CadViewer::SelectionMode>(
         revolvePreviousSelectionMode_));
     revolveAxisPicking_ = false;
     revolveRestoringSelectionMode_ = false;
     statusBar()->showMessage("Revolve axis pick cancelled", 2000);
+}
+
+void MainWindow::handleSketchLineAxisPicked(const cad::parametric::SketchEntityId& entityId)
+{
+    if (!revolveAxisPicking_) return;
+    cad::parametric::RevolveAxisDefinition axis;
+    axis.type = cad::parametric::RevolveAxisType::SketchLine;
+    axis.sketchFeatureId = revolveProfileFeatureId_.toStdString();
+    axis.sketchLineId = entityId;
+
+    cad::application::ModelingResult result;
+    if (revolveAxisPickEditing_) {
+        result = modeling_.updateRevolveAxis(
+            revolveAxisFeatureId_.toStdString(), std::move(axis));
+        if (result.success) operationSession_.commit();
+        else operationSession_.cancel();
+    } else {
+        const cad::application::SelectionSnapshot profileSelection{{
+            {revolveProfileFeatureId_.toStdString(),
+                cad::application::SelectionKind::Object, std::nullopt}}};
+        result = modeling_.createRevolve(
+            profileSelection, std::move(axis), revolvePendingAngleDegrees_);
+        if (!result.success) cancelOperation(); else commitOperation();
+    }
+    reportResult(result);
 }
 
 bool MainWindow::handleRevolveAxisSelection(

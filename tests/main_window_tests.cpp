@@ -6,6 +6,7 @@
 #include "viewer/MainWindow.h"
 #undef private
 #include "viewer/CadViewer.h"
+#include "viewer/SketchEntityPicker.h"
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -15,6 +16,18 @@ class MainWindowTests final : public QObject
     Q_OBJECT
 
 private slots:
+    void sketchLinePickerChoosesNearestAndPrefersConstructionOnOverlap()
+    {
+        const std::vector<cad::viewer::SketchLineScreenCandidate> candidates{
+            {"near", {0.0, 10.0}, {100.0, 10.0}, false},
+            {"construction", {0.0, 0.0}, {100.0, 0.0}, true}};
+        QCOMPARE(cad::viewer::pickSketchLine(candidates, {50.0, 1.0}, 8.0),
+            std::optional<std::string>("construction"));
+        QCOMPARE(cad::viewer::pickSketchLine(candidates, {50.0, 9.0}, 8.0),
+            std::optional<std::string>("near"));
+        QVERIFY(!cad::viewer::pickSketchLine(candidates, {50.0, 30.0}, 8.0));
+    }
+
     void selectionOwnershipSurvivesShapeReplacementWithoutRendering()
     {
         // OCCT selection structures can be exercised without creating a
