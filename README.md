@@ -200,6 +200,12 @@ the matching binary from `build/`:
 ./run.sh         # rebuild and run build/src/ParametricCAD
 ```
 
+On macOS, `run.sh` uses a separate `build-macos/` tree and launches the
+application executable from `ParametricCAD.app`. Configure Qt and Open CASCADE
+with `Qt6_ROOT`, `OpenCASCADE_DIR`, or `CMAKE_PREFIX_PATH` as needed. IFC is
+disabled by default on macOS; set
+`PARAMETRIC_CAD_IFCOPENSHELL_ROOT` to an IfcOpenShell installation to enable it.
+
 To run the tests separately:
 
 ```bash
