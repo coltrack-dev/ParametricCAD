@@ -715,6 +715,70 @@ private slots:
             std::size_t{1});
     }
 
+    void threePointArcUsesPickedPointAndRejectsCollinearInput()
+    {
+        const auto upper = cad::parametric::sketchArcFromThreePoints(
+            {0.0, 0.0}, {10.0, 0.0}, {5.0, 5.0});
+        QVERIFY(upper);
+        QVERIFY(upper->startPoint().Distance({0.0, 0.0}) < 1.0e-9);
+        QVERIFY(upper->endPoint().Distance({10.0, 0.0}) < 1.0e-9);
+        QVERIFY(std::abs(upper->center.X() - 5.0) < 1.0e-9);
+        QVERIFY(std::abs(upper->center.Y()) < 1.0e-9);
+        QVERIFY(std::abs(upper->signedSweep()) > 0.0);
+        QVERIFY(std::abs(upper->signedSweep()) < 2.0 * std::acos(-1.0));
+        QVERIFY(std::abs(upper->center.Distance({5.0, 5.0}) - upper->radius)
+            < 1.0e-9);
+
+        const auto lower = cad::parametric::sketchArcFromThreePoints(
+            {0.0, 0.0}, {10.0, 0.0}, {5.0, -5.0});
+        QVERIFY(lower);
+        QVERIFY(lower->signedSweep() * upper->signedSweep() < 0.0);
+        QVERIFY(!cad::parametric::sketchArcFromThreePoints(
+            {0.0, 0.0}, {5.0, 0.0}, {10.0, 0.0}));
+
+        ModelingController controller;
+        const auto sketch = controller.createSketch(SketchSupportType::YZ);
+        QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchThreePointArc(
+            sketch.id, {0.0, 0.0}, {10.0, 0.0}, {5.0, 5.0}).success);
+        const auto feature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketch.id));
+        QVERIFY(feature);
+        const auto& entity = std::get<SketchArc>(feature->entities().front());
+        const auto frame = feature->currentFrame();
+        gp_Pnt world = frame.origin;
+        world.Translate(gp_Vec(frame.xDirection) * entity.center.X()
+            + gp_Vec(frame.yDirection) * entity.center.Y());
+        QVERIFY(world.Distance({0.0, 5.0, 0.0}) < 1.0e-9);
+
+        const auto path = controller.createSketch(SketchSupportType::XY);
+        QVERIFY(path.success);
+        QVERIFY(controller.addSketchLine(path.id, {0.0, 0.0}, {10.0, 0.0}).success);
+        QVERIFY(controller.addSketchThreePointArc(
+            path.id, {10.0, 0.0}, {20.0, 0.0}, {15.0, 5.0}).success);
+        QVERIFY(controller.addSketchLine(path.id, {20.0, 0.0}, {30.0, 0.0}).success);
+        const auto pathFeature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(path.id));
+        QVERIFY(pathFeature);
+        const auto built = cad::operations::SketchPathBuilder::build(*pathFeature);
+        QCOMPARE(built.entityIds.size(), std::size_t{3});
+        QVERIFY(!built.wire.IsNull());
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto file = directory.filePath("three-point-arc.pcad");
+        QVERIFY(ProjectFile::save(file, controller.document(), controller.body(), error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(file, loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<SketchFeature>(
+            loadedBody.findFeature(sketch.id));
+        QVERIFY(loaded);
+        QVERIFY(std::get<SketchArc>(loaded->entities().front()).startPoint().Distance(
+            {0.0, 0.0}) < 1.0e-9);
+    }
+
     void sketchArcMixedProfileIsParametricAndPersistent()
     {
         ModelingController controller;

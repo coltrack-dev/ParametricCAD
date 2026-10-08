@@ -252,6 +252,25 @@ ModelingResult ModelingController::addSketchArc(
     }
 }
 
+ModelingResult ModelingController::addSketchThreePointArc(
+    const std::string& sketchId,
+    const gp_Pnt2d& start,
+    const gp_Pnt2d& end,
+    const gp_Pnt2d& point)
+{
+    const auto feature = body_.findFeature(sketchId);
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    const auto arc = cad::parametric::sketchArcFromThreePoints(start, end, point);
+    if (!arc) return {false, {}, "Sketch 3-point arc requires non-collinear points"};
+    try {
+        undoStack_.push(new cad::commands::AddSketchEntityCommand(body_, sketch, *arc));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::trimSketchEntity(const std::string& sketchId,
                                                     const gp_Pnt2d& click,
                                                     const double hitTolerance)

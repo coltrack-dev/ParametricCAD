@@ -424,6 +424,41 @@ double SketchArc::signedSweep() const
     return normalizedArcSweep(startAngle, endAngle, clockwise);
 }
 
+std::optional<SketchArc> sketchArcFromThreePoints(
+    const gp_Pnt2d& start, const gp_Pnt2d& end, const gp_Pnt2d& point)
+{
+    const double determinant = 2.0 * (start.X() * (end.Y() - point.Y())
+        + end.X() * (point.Y() - start.Y())
+        + point.X() * (start.Y() - end.Y()));
+    const double scale = std::max({1.0, start.Distance(end), start.Distance(point),
+        end.Distance(point)});
+    if (!std::isfinite(determinant) || std::abs(determinant) <= 1.0e-9 * scale * scale)
+        return std::nullopt;
+
+    const double startSquared = start.X() * start.X() + start.Y() * start.Y();
+    const double endSquared = end.X() * end.X() + end.Y() * end.Y();
+    const double pointSquared = point.X() * point.X() + point.Y() * point.Y();
+    const gp_Pnt2d center{
+        (startSquared * (end.Y() - point.Y())
+            + endSquared * (point.Y() - start.Y())
+            + pointSquared * (start.Y() - end.Y())) / determinant,
+        (startSquared * (point.X() - end.X())
+            + endSquared * (start.X() - point.X())
+            + pointSquared * (end.X() - start.X())) / determinant};
+    const double radius = center.Distance(start);
+    if (!std::isfinite(center.X()) || !std::isfinite(center.Y())
+        || !std::isfinite(radius) || radius <= 1.0e-6)
+        return std::nullopt;
+
+    const double startAngle = std::atan2(start.Y() - center.Y(), start.X() - center.X());
+    const double endAngle = std::atan2(end.Y() - center.Y(), end.X() - center.X());
+    const double pointAngle = std::atan2(point.Y() - center.Y(), point.X() - center.X());
+    const double ccwEnd = normalizedArcSweep(startAngle, endAngle, false);
+    const double ccwPoint = normalizedArcSweep(startAngle, pointAngle, false);
+    const bool clockwise = ccwPoint > ccwEnd + 1.0e-9;
+    return SketchArc{center, radius, startAngle, endAngle, clockwise, {}, false};
+}
+
 SketchFeature::SketchFeature(std::string id, double width, double height)
     : SketchFeature(std::move(id), SketchSupportType::XY, width, height)
 {

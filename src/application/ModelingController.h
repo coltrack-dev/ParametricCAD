@@ -43,6 +43,9 @@ public:
     ModelingResult addSketchArc(
         const std::string& sketchId, const gp_Pnt2d& center,
         const gp_Pnt2d& start, const gp_Pnt2d& end);
+    ModelingResult addSketchThreePointArc(
+        const std::string& sketchId, const gp_Pnt2d& start,
+        const gp_Pnt2d& end, const gp_Pnt2d& point);
     ModelingResult trimSketchEntity(const std::string& sketchId, const gp_Pnt2d& click,
                                     double hitTolerance);
     ModelingResult extendSketchEntity(const std::string& sketchId, const gp_Pnt2d& click,

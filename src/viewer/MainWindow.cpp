@@ -1383,9 +1383,13 @@ void MainWindow::createActions()
     sketchCircleAction_ = modelingMenu->addAction("Sketch Circle");
     sketchCircleAction_->setEnabled(false);
     connect(sketchCircleAction_, &QAction::triggered, this, &MainWindow::selectSketchCircleTool);
-    sketchArcAction_ = modelingMenu->addAction("Sketch Arc");
+    sketchArcAction_ = modelingMenu->addAction("Arc");
     sketchArcAction_->setEnabled(false);
     connect(sketchArcAction_, &QAction::triggered, this, &MainWindow::selectSketchArcTool);
+    sketchCenterArcAction_ = modelingMenu->addAction("Center Arc");
+    sketchCenterArcAction_->setEnabled(false);
+    connect(sketchCenterArcAction_, &QAction::triggered, this,
+        &MainWindow::selectSketchCenterArcTool);
     sketchRectangleAction_ = modelingMenu->addAction("Sketch Rectangle");
     sketchRectangleAction_->setEnabled(false);
     connect(sketchRectangleAction_, &QAction::triggered, this, &MainWindow::selectSketchRectangleTool);
@@ -1651,6 +1655,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchConstructionAction_->setEnabled(true);
         sketchCircleAction_->setEnabled(true);
         sketchArcAction_->setEnabled(true);
+        sketchCenterArcAction_->setEnabled(true);
         sketchRectangleAction_->setEnabled(true);
         sketchTrimAction_->setEnabled(true);
         sketchExtendAction_->setEnabled(true);
@@ -1694,6 +1699,7 @@ void MainWindow::finishSketch()
     sketchConstructionAction_->setChecked(false);
     sketchCircleAction_->setEnabled(false);
     sketchArcAction_->setEnabled(false);
+    sketchCenterArcAction_->setEnabled(false);
     sketchRectangleAction_->setEnabled(false);
     sketchTrimAction_->setEnabled(false);
     sketchExtendAction_->setEnabled(false);
@@ -1751,7 +1757,17 @@ void MainWindow::selectSketchArcTool()
     sketchSecondPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Arc);
     refreshConstraintManager();
-    statusBar()->showMessage("Arc: select center, start, then end");
+    statusBar()->showMessage("Arc: pick start point");
+}
+
+void MainWindow::selectSketchCenterArcTool()
+{
+    sketchTool_ = SketchTool::CenterArc;
+    sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::CenterArc);
+    refreshConstraintManager();
+    statusBar()->showMessage("Center Arc: pick center");
 }
 
 void MainWindow::selectSketchRectangleTool()
@@ -2103,10 +2119,18 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     }
     if (!sketchFirstPoint_) {
         sketchFirstPoint_ = point;
+        if (sketchTool_ == SketchTool::Arc) {
+            statusBar()->showMessage("Arc: pick end point");
+        } else if (sketchTool_ == SketchTool::CenterArc) {
+            statusBar()->showMessage("Center Arc: pick start point");
+        }
         return;
     }
-    if (sketchTool_ == SketchTool::Arc && !sketchSecondPoint_) {
+    if ((sketchTool_ == SketchTool::Arc || sketchTool_ == SketchTool::CenterArc)
+        && !sketchSecondPoint_) {
         sketchSecondPoint_ = point;
+        statusBar()->showMessage(sketchTool_ == SketchTool::Arc
+            ? "Arc: pick point on arc" : "Center Arc: pick end point");
         return;
     }
     const auto first = *sketchFirstPoint_;
@@ -2120,6 +2144,8 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     } else if (sketchTool_ == SketchTool::Circle) {
         result = modeling_.addSketchCircle(activeSketchId_, first, first.Distance(point));
     } else if (sketchTool_ == SketchTool::Arc) {
+        result = modeling_.addSketchThreePointArc(activeSketchId_, first, *second, point);
+    } else if (sketchTool_ == SketchTool::CenterArc) {
         result = modeling_.addSketchArc(activeSketchId_, first, *second, point);
     } else {
         result = modeling_.addSketchLine(activeSketchId_, first,
@@ -2134,7 +2160,7 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     if (!result.success) {
         QMessageBox::warning(this, "Sketch entity failed",
             QString::fromStdString(result.error));
-    } else if (sketchTool_ == SketchTool::Arc) {
+    } else if (sketchTool_ == SketchTool::Arc || sketchTool_ == SketchTool::CenterArc) {
         const auto updated = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
             modeling_.body().findFeature(activeSketchId_));
         if (updated && !updated->entities().empty()) {

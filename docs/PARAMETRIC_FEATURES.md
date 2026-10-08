@@ -32,8 +32,10 @@ face selected it offers `XY Plane`, `XZ Plane`, and `YZ Plane`. With exactly
 one selected planar face it also offers `Selected Planar Face`. Each choice
 creates the same `SketchFeature` and immediately enters Sketch edit mode.
 
-Rectangle is a normal Sketch drawing tool, alongside Line, Circle, Arc, Trim,
-and Extend; there is no separate Rectangle Sketch modeling feature. Global
+Rectangle is a normal Sketch drawing tool, alongside Line, Circle, Arc, Center
+Arc, Trim, and Extend; there is no separate Rectangle Sketch modeling feature.
+`Arc` uses start → end → point-on-arc clicks; `Center Arc` uses center → start
+→ end clicks. Both produce the same persistent `SketchArc` entity. Global
 planes use `SketchSupportType::XY`, `XZ`, or `YZ`, while face-attached sketches
 use `SketchSupportType::Face` and the persistent topological face reference.
 `SketchFeature::currentFrame()` remains the common frame used by editing and

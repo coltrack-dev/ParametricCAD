@@ -42,6 +42,10 @@ subsystem is not yet a full general-purpose constraint CAD system; advanced
 profile and solver coverage is still limited. See
 [docs/PARAMETRIC_FEATURES.md](docs/PARAMETRIC_FEATURES.md) for the model scope.
 
+`Arc` is the three-point tool: pick start, end, then a point on the arc.
+`Center Arc` retains the center, start, end workflow. Both create the same
+persistent Arc entity.
+
 ### Revolve from a Sketch
 
 The complete native workflow is:

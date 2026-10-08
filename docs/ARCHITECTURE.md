@@ -13,6 +13,10 @@ selection lifecycle, and persistence do not need a special Rectangle Sketch
 path. The legacy `Add Rectangle Sketch` shortcut is intentionally absent from
 the normal UI.
 
+The `Arc` tool picks start, end, then a point on the arc. `Center Arc` keeps
+the center, start, end sequence; both are converted to the same persistent
+`SketchArc` representation.
+
 ParametricCAD is a C++20 / Qt 6 / Open CASCADE desktop application. The
 runtime separates the editable parametric model, application policy, and OCCT
 presentation. The model is the source of geometry and dependencies; the

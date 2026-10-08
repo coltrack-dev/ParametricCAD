@@ -167,7 +167,7 @@ public:
                          const QString& featureId);
     void exitSketchMode();
     bool sketchMode() const noexcept;
-    enum class SketchPreviewTool { None, Line, Circle, Arc, Rectangle, Trim, Extend };
+    enum class SketchPreviewTool { None, Line, Circle, Arc, CenterArc, Rectangle, Trim, Extend };
     void setSketchPreviewTool(SketchPreviewTool tool);
     void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
     void setSketchMouseMovedHandler(std::function<void(const gp_Pnt2d&, double)> handler);

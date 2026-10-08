@@ -282,10 +282,9 @@ void configureSketchPresentation(
 }
 
 TopoDS_Shape makeSketchPreviewShape(
+    const cad::parametric::SketchFrame& frame,
     const gp_Pnt& first,
     const gp_Pnt& current,
-    const gp_Dir& xDirection,
-    const gp_Dir& normal,
     const CadViewer::SketchPreviewTool tool,
     const std::optional<gp_Pnt>& second)
 {
@@ -295,7 +294,7 @@ TopoDS_Shape makeSketchPreviewShape(
 
     const double radius = first.Distance(current);
     if (tool == CadViewer::SketchPreviewTool::Circle && radius > 1.0e-9) {
-        const gp_Circ circle(gp_Ax2(first, normal, xDirection), radius);
+        const gp_Circ circle(gp_Ax2(first, frame.normal, frame.xDirection), radius);
         auto circleEdge = BRepBuilderAPI_MakeEdge(circle);
         if (circleEdge.IsDone()) {
             const TopoDS_Shape edge = circleEdge.Edge();
@@ -303,22 +302,40 @@ TopoDS_Shape makeSketchPreviewShape(
         }
     }
 
-    if (tool == CadViewer::SketchPreviewTool::Arc && second
-        && first.Distance(*second) > 1.0e-9) {
-        const gp_Circ circle(gp_Ax2(first, normal, xDirection), first.Distance(*second));
-        const auto startVector = gp_Vec(first, *second);
-        const auto endVector = gp_Vec(first, current);
-        const auto yDirection = gp_Vec(normal).Crossed(gp_Vec(xDirection));
-        const double startAngle = std::atan2(
-            startVector.Dot(yDirection), startVector.Dot(gp_Vec(xDirection)));
-        const double endAngle = std::atan2(
-            endVector.Dot(yDirection), endVector.Dot(gp_Vec(xDirection)));
-        double sweep = endAngle - startAngle;
-        while (sweep <= 0.0) sweep += 2.0 * std::acos(-1.0);
-        while (sweep > 2.0 * std::acos(-1.0)) sweep -= 2.0 * std::acos(-1.0);
-        auto arcBuilder = BRepBuilderAPI_MakeEdge(
-            circle, startAngle, startAngle + sweep);
-        if (arcBuilder.IsDone()) builder.Add(compound, arcBuilder.Edge());
+    if ((tool == CadViewer::SketchPreviewTool::Arc
+            || tool == CadViewer::SketchPreviewTool::CenterArc) && second) {
+        const auto localPoint = [&frame](const gp_Pnt& world) {
+            const gp_Vec offset(frame.origin, world);
+            return gp_Pnt2d(offset.Dot(gp_Vec(frame.xDirection)),
+                offset.Dot(gp_Vec(frame.yDirection)));
+        };
+        const auto firstLocal = localPoint(first);
+        const auto secondLocal = localPoint(*second);
+        const auto currentLocal = localPoint(current);
+        const auto arc = tool == CadViewer::SketchPreviewTool::Arc
+            ? cad::parametric::sketchArcFromThreePoints(
+                firstLocal, secondLocal, currentLocal)
+            : std::optional<cad::parametric::SketchArc>(cad::parametric::SketchArc{
+                firstLocal, firstLocal.Distance(secondLocal),
+                std::atan2(secondLocal.Y() - firstLocal.Y(),
+                    secondLocal.X() - firstLocal.X()),
+                std::atan2(currentLocal.Y() - firstLocal.Y(),
+                    currentLocal.X() - firstLocal.X()), false, {}, false});
+        if (arc) {
+            const gp_Circ circle(gp_Ax2(
+                sketchWorldPoint(frame, arc->center), frame.normal, frame.xDirection),
+                arc->radius);
+            const double sweep = arc->signedSweep();
+            auto arcBuilder = sweep > 0.0
+                ? BRepBuilderAPI_MakeEdge(circle, arc->startAngle,
+                    arc->startAngle + sweep)
+                : BRepBuilderAPI_MakeEdge(circle, arc->startAngle + sweep,
+                    arc->startAngle);
+            if (arcBuilder.IsDone()) {
+                builder.Add(compound, sweep > 0.0
+                    ? arcBuilder.Edge() : TopoDS::Edge(arcBuilder.Edge().Reversed()));
+            }
+        }
     }
 
     auto radiusEdge = BRepBuilderAPI_MakeEdge(first, current);
@@ -329,9 +346,9 @@ TopoDS_Shape makeSketchPreviewShape(
 
     const double markerSize = std::max(radius * 0.08, 1.0e-3);
     gp_Dir markerX(1.0, 0.0, 0.0);
-    if (std::abs(markerX.Dot(normal)) > 0.95) markerX = gp_Dir(0.0, 1.0, 0.0);
-    gp_Dir markerY(gp_Vec(normal).Crossed(gp_Vec(markerX)));
-    markerX = gp_Dir(gp_Vec(markerY).Crossed(gp_Vec(normal)));
+    if (std::abs(markerX.Dot(frame.normal)) > 0.95) markerX = gp_Dir(0.0, 1.0, 0.0);
+    gp_Dir markerY(gp_Vec(frame.normal).Crossed(gp_Vec(markerX)));
+    markerX = gp_Dir(gp_Vec(markerY).Crossed(gp_Vec(frame.normal)));
     for (const auto& direction : {markerX, markerY}) {
         gp_Pnt start = first;
         gp_Pnt end = first;
@@ -3545,7 +3562,8 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
             gp_Pnt world = sketchOrigin_;
             world.Translate(gp_Vec(sketchXDirection_) * point->X()
                 + gp_Vec(sketchYDirection_) * point->Y());
-            if (sketchPreviewTool_ == SketchPreviewTool::Arc
+            if ((sketchPreviewTool_ == SketchPreviewTool::Arc
+                    || sketchPreviewTool_ == SketchPreviewTool::CenterArc)
                 && qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
                 qInfo().noquote() << QString(
                     "[ARC] click screen=(%1,%2) world=(%3,%4,%5) local=(%6,%7) "
@@ -3559,7 +3577,8 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
                     .arg(sketchYDirection_.X()).arg(sketchYDirection_.Y()).arg(sketchYDirection_.Z())
                     .arg(sketchNormal_.X()).arg(sketchNormal_.Y()).arg(sketchNormal_.Z());
             }
-            if (sketchPreviewTool_ == SketchPreviewTool::Arc) {
+            if (sketchPreviewTool_ == SketchPreviewTool::Arc
+                || sketchPreviewTool_ == SketchPreviewTool::CenterArc) {
                 if (!sketchPreviewFirstPoint_) {
                     sketchPreviewFirstPoint_ = world;
                 } else if (!sketchPreviewSecondPoint_) {
@@ -3747,8 +3766,9 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
             current.Translate(gp_Vec(sketchXDirection_) * point->X()
                 + gp_Vec(sketchYDirection_) * point->Y());
             const auto shape = makeSketchPreviewShape(
-                *sketchPreviewFirstPoint_, current, sketchXDirection_, sketchNormal_,
-                sketchPreviewTool_, sketchPreviewSecondPoint_);
+                {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_},
+                *sketchPreviewFirstPoint_, current, sketchPreviewTool_,
+                sketchPreviewSecondPoint_);
             if (sketchPreviewObject_.IsNull()) {
                 sketchPreviewObject_ = new AIS_Shape(shape);
                 sketchPreviewObject_->SetDisplayMode(AIS_WireFrame);

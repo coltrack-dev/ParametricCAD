@@ -92,6 +92,7 @@ private:
     void selectSketchLineTool();
     void selectSketchCircleTool();
     void selectSketchArcTool();
+    void selectSketchCenterArcTool();
     void selectSketchRectangleTool();
     void selectSketchTrimTool();
     void selectSketchExtendTool();
@@ -204,6 +205,7 @@ private:
     QAction* toggleSketchConstructionAction_{nullptr};
     QAction* sketchCircleAction_{nullptr};
     QAction* sketchArcAction_{nullptr};
+    QAction* sketchCenterArcAction_{nullptr};
     QAction* sketchRectangleAction_{nullptr};
     QAction* sketchTrimAction_{nullptr};
     QAction* sketchExtendAction_{nullptr};
@@ -221,7 +223,7 @@ private:
     QAction* sketchTangentAction_{nullptr};
     QAction* sketchEqualAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
-    enum class SketchTool { None, Line, Circle, Arc, Rectangle, Trim, Extend,
+    enum class SketchTool { None, Line, Circle, Arc, CenterArc, Rectangle, Trim, Extend,
                             Coincident, Horizontal, Vertical, Distance, Radius,
                             HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular,
                             AngleBetweenLines, Tangent, Equal };

@@ -63,6 +63,9 @@ struct SketchArc
     double signedSweep() const;
 };
 
+std::optional<SketchArc> sketchArcFromThreePoints(
+    const gp_Pnt2d& start, const gp_Pnt2d& end, const gp_Pnt2d& point);
+
 using SketchEntity = std::variant<SketchLine, SketchCircle, SketchArc>;
 
 enum class SketchConstraintType {
