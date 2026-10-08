@@ -11,6 +11,7 @@
 #include "operations/SketchConstraintSolver.h"
 #include "operations/ImportedFeature.h"
 #include "operations/SketchProfileBuilder.h"
+#include "operations/SketchPathBuilder.h"
 #include "application/SelectionResolver.h"
 
 #include <QAction>
@@ -332,6 +333,12 @@ void MainWindow::createParametricPanel()
 
     featureEditorPanel_->setFeatureSelectedHandler(
         [this](const QStringList& featureIds) {
+            if (sweepPathPicking_ && featureIds.size() == 1) {
+                const cad::application::SelectionSnapshot selection{{
+                    {featureIds.front().toStdString(),
+                        cad::application::SelectionKind::Object, std::nullopt}}};
+                if (handleSweepPathSelection(selection)) return;
+            }
             applySelection(featureIds);
         }
     );
@@ -1447,7 +1454,7 @@ void MainWindow::createActions()
     toolBar->addAction(revolveAction_);
     sweepAction_ = modelingMenu->addAction("Sweep");
     sweepAction_->setEnabled(false);
-    sweepAction_->setToolTip("Sweep a Sketch profile along a model Edge");
+    sweepAction_->setToolTip("Sweep a Sketch profile along an Edge or Sketch path");
     connect(sweepAction_, &QAction::triggered, this, &MainWindow::createSweep);
     toolBar->addAction(sweepAction_);
     linearPatternAction_ = modelingMenu->addAction("Linear Pattern");
@@ -2336,7 +2343,7 @@ void MainWindow::pickSweepPath()
         .arg(static_cast<int>(viewer_->selectionMode()))
         .arg(dialogAddress(sweepDialog_))
         .arg(sweepDialog_ && sweepDialog_->isVisible()));
-    statusBar()->showMessage("Pick Sweep path edge");
+    statusBar()->showMessage("Pick Sweep path Edge or Sketch");
 }
 
 void MainWindow::commitSweep()
@@ -2378,7 +2385,9 @@ void MainWindow::commitSweep()
         statusBar()->showMessage("Sweep requires a selected path Edge", 3000);
         return;
     }
-    if (!sweepPathReference_) {
+    const bool sketchPath = sweepPathSelection_->items.front().kind
+        == cad::application::SelectionKind::Object;
+    if (!sketchPath && !sweepPathReference_) {
         traceActionState("sweep.commit.return", "reason=persistent path reference missing");
         statusBar()->showMessage("Sweep path reference is missing", 3000);
         return;
@@ -2488,9 +2497,49 @@ bool MainWindow::handleSweepPathSelection(
         return true;
     }
     const auto& item = selection.items.front();
-    if (!item.subshapeIndex) return true;
     const auto owner = modeling_.body().findFeature(item.featureId);
     if (!owner) return true;
+    if (item.kind == cad::application::SelectionKind::Object) {
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(owner);
+        if (!sketch || sketch->id() == sweepProfileSelection_.items.front().featureId) {
+            statusBar()->showMessage("Sweep path must be a different Sketch", 3000);
+            return true;
+        }
+        try {
+            const auto path = cad::operations::SketchPathBuilder::build(*sketch);
+            sweepPathSelection_ = selection;
+            sweepPathReference_.reset();
+            viewer_->setAxisPickCancelHandler({});
+            sweepPathPicking_ = false;
+            sweepRestoringSelectionMode_ = true;
+            viewer_->setSelectionMode(static_cast<CadViewer::SelectionMode>(
+                sweepPreviousSelectionMode_));
+            sweepRestoringSelectionMode_ = false;
+            if (sweepPathLabel_) sweepPathLabel_->setText(QString("Path: %1 | Entities: %2")
+                .arg(QString::fromStdString(owner->name()))
+                .arg(static_cast<int>(path.entityIds.size())));
+            if (sweepCommitButton_) sweepCommitButton_->setEnabled(true);
+            traceActionState("sweep.pathAccepted", QString(
+                "type=SketchPath owner=%1 entities=%2 sessionActive=%3 operation=%4 "
+                "buttonEnabled=%5 buttonVisible=%6 dialog=%7 dialogVisible=%8")
+                .arg(QString::fromStdString(item.featureId))
+                .arg(static_cast<int>(path.entityIds.size()))
+                .arg(operationSession_.active())
+                .arg(operationSession_.active()
+                    ? static_cast<int>(operationSession_.context().kind) : -1)
+                .arg(sweepCommitButton_ && sweepCommitButton_->isEnabled())
+                .arg(sweepCommitButton_ && sweepCommitButton_->isVisible())
+                .arg(dialogAddress(sweepDialog_))
+                .arg(sweepDialog_ && sweepDialog_->isVisible()));
+            statusBar()->showMessage("Sweep Sketch path selected; click Commit");
+        } catch (const std::exception& error) {
+            traceActionState("sweep.pathRejected", QString::fromStdString(error.what()));
+            statusBar()->showMessage(QString::fromStdString(error.what()), 4000);
+        }
+        return true;
+    }
+    if (item.kind != cad::application::SelectionKind::Edge || !item.subshapeIndex)
+        return true;
     try {
         cad::application::SelectionResolver resolver(modeling_.body());
         const auto edge = resolver.resolve(item);

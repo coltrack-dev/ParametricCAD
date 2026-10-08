@@ -151,6 +151,13 @@ camera, resolves the nearest Line to a stable `SketchEntityId`, and consumes
 the click before ordinary OCCT selection. Model Edge axes use the normal typed
 OCCT Edge path; the two identities are intentionally not conflated.
 
+Sweep paths use the same distinction. `SweepPathDefinition` stores either a
+Model Edge owner plus `TopologicalReference`, or a Sketch ID plus stable
+`SketchEntityId` values. `SketchPathBuilder` independently transforms selected
+Line/Arc entities through the Sketch frame, orders one connected open chain,
+and creates a `TopoDS_Wire`. Both path types then use the common Sweep feature
+and `BasicFeatures::sweep` backend.
+
 ## Parametric model
 
 `Body` is the canonical ordered history owner. It contains shared

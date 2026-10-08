@@ -843,6 +843,17 @@ private:
     bool ruled_;
 };
 
+enum class SweepPathType { ModelEdge, SketchPath };
+
+struct SweepPathDefinition
+{
+    SweepPathType type{SweepPathType::ModelEdge};
+    std::string ownerFeatureId;
+    std::optional<cad::topology::TopologicalReference> edgeReference;
+    std::string sketchFeatureId;
+    std::vector<SketchEntityId> entityIds;
+};
+
 class SweepFeature final : public ParametricFeature
 {
 public:
@@ -862,6 +873,12 @@ public:
         const cad::topology::TopologicalReference& pathReference,
         const Ptr& profile
     );
+    SweepFeature(
+        std::string id,
+        const std::shared_ptr<SketchFeature>& pathSketch,
+        std::vector<SketchEntityId> entityIds,
+        const Ptr& profile
+    );
     const char* typeId() const noexcept override { return "Sweep"; }
     Ptr clone(std::string newId) const override;
     std::vector<FeatureProperty> properties() const override;
@@ -872,6 +889,7 @@ public:
     const Ptr& profile() const noexcept;
     const Ptr& pathOwner() const noexcept;
     const std::optional<cad::topology::TopologicalReference>& pathReference() const noexcept;
+    const SweepPathDefinition& pathDefinition() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -883,6 +901,7 @@ private:
     Ptr profile_;
     Ptr pathOwner_;
     std::optional<cad::topology::TopologicalReference> pathReference_;
+    SweepPathDefinition pathDefinition_;
 };
 
 } // namespace cad::parametric

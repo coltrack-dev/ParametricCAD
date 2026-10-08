@@ -4,6 +4,7 @@
 #include "model/ProjectFile.h"
 #include "model/TopologicalReference.h"
 #include "operations/SketchProfileBuilder.h"
+#include "operations/SketchPathBuilder.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
@@ -424,6 +425,142 @@ private slots:
         QVERIFY(loaded->pathReference());
         QVERIFY(!loaded->shape().IsNull());
         QVERIFY(volume(loaded->shape()) > 0.0);
+    }
+
+    void sweepUsesSketchPathLineArcChainAndPersistence()
+    {
+        ModelingController controller;
+        const auto profile = controller.createSketch(SketchSupportType::YZ);
+        QVERIFY(profile.success);
+        QVERIFY(controller.addSketchCircle(profile.id, {0.0, 0.0}, 5.0).success);
+        const auto path = controller.createSketch(SketchSupportType::XZ);
+        QVERIFY(path.success);
+        QVERIFY(controller.addSketchLine(path.id, {20.0, 10.0}, {30.0, 10.0}).success);
+        QVERIFY(controller.addSketchArc(path.id, {10.0, 10.0}, {10.0, 0.0}, {20.0, 10.0}).success);
+        QVERIFY(controller.addSketchLine(path.id, {0.0, 0.0}, {10.0, 0.0}).success);
+
+        const auto pathFeature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(path.id));
+        QVERIFY(pathFeature);
+        const auto built = cad::operations::SketchPathBuilder::build(*pathFeature);
+        QCOMPARE(built.entityIds.size(), std::size_t{3});
+        QVERIFY(!built.wire.IsNull());
+
+        const auto result = controller.createSweep({{
+            {profile.id, SelectionKind::Object, std::nullopt}}}, {{
+            {path.id, SelectionKind::Object, std::nullopt}}});
+        QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
+        const auto sweep = std::dynamic_pointer_cast<SweepFeature>(
+            controller.body().findFeature(result.id));
+        QVERIFY(sweep);
+        QCOMPARE(sweep->pathDefinition().type, SweepPathType::SketchPath);
+        QCOMPARE(sweep->pathDefinition().sketchFeatureId, path.id);
+        QCOMPARE(sweep->pathDefinition().entityIds.size(), std::size_t{3});
+        int solidCount = 0;
+        for (TopExp_Explorer explorer(sweep->shape(), TopAbs_SOLID);
+             explorer.More(); explorer.Next()) ++solidCount;
+        QCOMPARE(solidCount, 1);
+        QVERIFY(volume(sweep->shape()) > 0.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto file = directory.filePath("sketch-path-sweep.pcad");
+        QVERIFY2(ProjectFile::save(file, controller.document(), controller.body(), error),
+            qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(file, loadedDocument, loadedBody, error),
+            qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<SweepFeature>(
+            loadedBody.findFeature(result.id));
+        QVERIFY(loaded);
+        QCOMPARE(loaded->pathDefinition().type, SweepPathType::SketchPath);
+        QCOMPARE(loaded->pathDefinition().entityIds, sweep->pathDefinition().entityIds);
+        QVERIFY(volume(loaded->shape()) > 0.0);
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(result.id));
+        controller.redo();
+        QVERIFY(controller.body().findFeature(result.id));
+    }
+
+    void sweepUsesSingleSketchLineAndArcPaths()
+    {
+        const auto makeProfile = [](ModelingController& controller) {
+            const auto profile = controller.createSketch(SketchSupportType::YZ);
+            if (!profile.success) return profile;
+            if (!controller.addSketchCircle(profile.id, {0.0, 0.0}, 5.0).success)
+                return ModelingResult{false, {}, "profile creation failed"};
+            return profile;
+        };
+
+        ModelingController lineController;
+        const auto lineProfile = makeProfile(lineController);
+        QVERIFY(lineProfile.success);
+        const auto linePath = lineController.createSketch(SketchSupportType::XZ);
+        QVERIFY(linePath.success);
+        QVERIFY(lineController.addSketchLine(
+            linePath.id, {0.0, 0.0}, {100.0, 0.0}).success);
+        const auto lineSweep = lineController.createSweep({{
+            {lineProfile.id, SelectionKind::Object, std::nullopt}}}, {{
+            {linePath.id, SelectionKind::Object, std::nullopt}}});
+        QVERIFY2(lineSweep.success, qPrintable(QString::fromStdString(lineSweep.error)));
+        const auto lineFeature = std::dynamic_pointer_cast<SketchFeature>(
+            lineController.body().findFeature(linePath.id));
+        QVERIFY(lineFeature);
+        const auto beforeEdit = volume(lineController.body().findFeature(lineSweep.id)->shape());
+        const auto line = std::get<SketchLine>(lineFeature->entities().front());
+        lineFeature->replaceEntities(0, 1, {SketchLine{line.start, {60.0, 0.0}, line.id, false}});
+        lineController.body().markDirtyFrom(linePath.id);
+        QVERIFY(lineController.body().recompute());
+        const auto afterEdit = volume(lineController.body().findFeature(lineSweep.id)->shape());
+        QVERIFY(afterEdit > 0.0);
+        QVERIFY(afterEdit < beforeEdit);
+
+        ModelingController arcController;
+        const auto arcProfile = makeProfile(arcController);
+        QVERIFY(arcProfile.success);
+        const auto arcPath = arcController.createSketch(SketchSupportType::XZ);
+        QVERIFY(arcPath.success);
+        QVERIFY(arcController.addSketchArc(
+            arcPath.id, {0.0, 10.0}, {0.0, 0.0}, {10.0, 10.0}).success);
+        const auto arcSweep = arcController.createSweep({{
+            {arcProfile.id, SelectionKind::Object, std::nullopt}}}, {{
+            {arcPath.id, SelectionKind::Object, std::nullopt}}});
+        QVERIFY2(arcSweep.success, qPrintable(QString::fromStdString(arcSweep.error)));
+        QVERIFY(volume(arcController.body().findFeature(arcSweep.id)->shape()) > 0.0);
+    }
+
+    void sketchPathBuilderRejectsDisconnectedBranchesAndConstructionGeometry()
+    {
+        ModelingController controller;
+        const auto sketch = controller.createSketch(SketchSupportType::XZ);
+        QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0.0, 0.0}, {10.0, 0.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20.0, 0.0}, {30.0, 0.0}).success);
+        const auto feature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketch.id));
+        QVERIFY(feature);
+        QVERIFY_EXCEPTION_THROWN(cad::operations::SketchPathBuilder::build(*feature),
+            std::runtime_error);
+
+        controller.undo();
+        controller.undo();
+        QVERIFY(controller.addSketchLine(sketch.id, {10.0, 0.0}, {10.0, 10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {10.0, 0.0}, {10.0, -10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {10.0, 0.0}, {20.0, 0.0}).success);
+        QVERIFY_EXCEPTION_THROWN(cad::operations::SketchPathBuilder::build(*feature),
+            std::runtime_error);
+
+        controller.undo();
+        controller.undo();
+        controller.undo();
+        QVERIFY(controller.addSketchLine(sketch.id, {0.0, 0.0}, {10.0, 0.0}).success);
+        QVERIFY(controller.addSketchLine(
+            sketch.id, {100.0, 100.0}, {110.0, 100.0}, true).success);
+        const auto valid = cad::operations::SketchPathBuilder::build(*feature);
+        QCOMPARE(valid.entityIds.size(), std::size_t{1});
     }
 
     void sketchProfileBuilderSupportsHolesAndDisconnectedRegions()

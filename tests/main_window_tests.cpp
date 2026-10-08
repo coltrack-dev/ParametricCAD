@@ -399,6 +399,68 @@ private slots:
         }
     }
 
+    void sweepAcceptsSketchPathFromTreeBeforeCommit()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("OCCT CadViewer requires an X display for MainWindow tests");
+        }
+        MainWindow window;
+        const auto profile = window.modeling_.createSketch(
+            cad::parametric::SketchSupportType::YZ);
+        QVERIFY(profile.success);
+        QVERIFY(window.modeling_.addSketchCircle(profile.id, {0.0, 0.0}, 5.0).success);
+        const auto path = window.modeling_.createSketch(
+            cad::parametric::SketchSupportType::XZ);
+        QVERIFY(path.success);
+        QVERIFY(window.modeling_.addSketchLine(
+            path.id, {0.0, 0.0}, {100.0, 0.0}).success);
+        window.refreshModelView();
+        window.applySelection({QString::fromStdString(profile.id)});
+        window.createSweep();
+        QVERIFY(window.operationSession_.active());
+        QVERIFY(window.sweepDialog_);
+
+        const auto buttons = window.sweepDialog_->findChildren<QPushButton*>();
+        const auto pickButton = std::find_if(buttons.begin(), buttons.end(),
+            [](const auto* button) { return button->text() == "Pick Path"; });
+        const auto commitButton = std::find_if(buttons.begin(), buttons.end(),
+            [](const auto* button) { return button->text() == "Commit"; });
+        QVERIFY(pickButton != buttons.end());
+        QVERIFY(commitButton != buttons.end());
+        (*pickButton)->click();
+
+        QTreeWidgetItem* pathItem = nullptr;
+        for (QTreeWidgetItemIterator iterator(window.featureEditorPanel_->tree_);
+             *iterator; ++iterator) {
+            if ((*iterator)->data(0, Qt::UserRole + 1).toString()
+                == QString::fromStdString(path.id)) {
+                pathItem = *iterator;
+                break;
+            }
+        }
+        QVERIFY(pathItem);
+        {
+            const QSignalBlocker blocker(window.featureEditorPanel_->tree_);
+            window.featureEditorPanel_->tree_->clearSelection();
+            pathItem->setSelected(true);
+            window.featureEditorPanel_->tree_->setCurrentItem(pathItem);
+        }
+        QVERIFY(QMetaObject::invokeMethod(
+            window.featureEditorPanel_->tree_, "itemSelectionChanged", Qt::DirectConnection));
+
+        QVERIFY(window.operationSession_.active());
+        QCOMPARE(window.operationSession_.context().kind,
+            cad::application::InteractiveOperationKind::Sweep);
+        QCOMPARE(window.sweepPathLabel_->text(), QString("Path: Sketch | Entities: 1"));
+        QVERIFY(window.sweepCommitButton_->isEnabled());
+        QCOMPARE(window.modeling_.body().features().size(), std::size_t(2));
+
+        (*commitButton)->click();
+        QVERIFY(!window.operationSession_.active());
+        QVERIFY(window.modeling_.body().features().size() == 3);
+        QVERIFY(window.modeling_.body().features().back()->typeId() == std::string("Sweep"));
+    }
+
     void faceAttachedSketchLineToolSurvivesRepeatedLines_data()
     {
         QTest::addColumn<bool>("faceAttached");

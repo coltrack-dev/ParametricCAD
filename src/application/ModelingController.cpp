@@ -5,6 +5,7 @@
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
 #include "operations/SketchProfileBuilder.h"
+#include "operations/SketchPathBuilder.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
 #include "operations/SketchConstraintSolver.h"
@@ -938,10 +939,26 @@ ModelingResult ModelingController::createSweep(
     if (!profile) return {false, {}, "Sweep requires a Sketch profile"};
     std::string profileError;
     if (!validateSketchProfile(*profile, profileError)) return {false, {}, profileError};
-    if (pathSelection.items.size() != 1
-        || pathSelection.items.front().kind != SelectionKind::Edge
+    if (pathSelection.items.size() != 1) {
+        return {false, {}, "Sweep requires exactly one path Edge or Sketch"};
+    }
+    if (pathSelection.items.front().kind == SelectionKind::Object) {
+        const auto pathSketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            body_.findFeature(pathSelection.items.front().featureId));
+        if (!pathSketch) return {false, {}, "Sweep Sketch path does not exist"};
+        if (pathSketch->id() == profile->id())
+            return {false, {}, "Sweep profile and path Sketch must be different"};
+        try {
+            const auto path = cad::operations::SketchPathBuilder::build(*pathSketch);
+            return addFeature(std::make_shared<cad::parametric::SweepFeature>(
+                id("sweep"), pathSketch, path.entityIds, profile));
+        } catch (const std::exception& error) {
+            return failure(error);
+        }
+    }
+    if (pathSelection.items.front().kind != SelectionKind::Edge
         || !pathSelection.items.front().subshapeIndex) {
-        return {false, {}, "Sweep requires exactly one path Edge"};
+        return {false, {}, "Sweep requires exactly one path Edge or Sketch"};
     }
     const auto& item = pathSelection.items.front();
     const auto owner = body_.findFeature(item.featureId);

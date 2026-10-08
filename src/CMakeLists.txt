@@ -76,6 +76,8 @@ set(PARAMETRIC_CAD_SOURCES
     operations/ParametricFeatures.h
     operations/SketchProfileBuilder.cpp
     operations/SketchProfileBuilder.h
+    operations/SketchPathBuilder.cpp
+    operations/SketchPathBuilder.h
     operations/SketchTrimService.cpp
     operations/SketchTrimService.h
     operations/SketchExtendService.cpp

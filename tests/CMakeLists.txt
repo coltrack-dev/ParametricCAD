@@ -70,6 +70,7 @@ add_library(model_test_support STATIC
     ../src/operations/BasicFeatures.cpp
     ../src/operations/ParametricFeatures.cpp
     ../src/operations/SketchProfileBuilder.cpp
+    ../src/operations/SketchPathBuilder.cpp
     ../src/operations/SketchTrimService.cpp
     ../src/operations/SketchExtendService.cpp
     ../src/operations/SketchConstraintSolver.cpp

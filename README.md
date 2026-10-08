@@ -36,8 +36,8 @@ Create sketches through one command: choose `XY Plane`, `XZ Plane`, `YZ Plane`,
 or (when one planar face is selected) `Selected Planar Face`. The command then
 enters normal Sketch edit mode, where Rectangle, Line, Circle, Arc, Trim,
 Extend, and constraint tools create the same stable-ID Sketch entities. A
-global XY rectangle can be finished and extruded; XZ and YZ sketches are
-available for profiles and future independent path workflows. The sketch
+ global XY rectangle can be finished and extruded; XZ and YZ sketches are
+ available for profiles and independent Sweep paths. The sketch
 subsystem is not yet a full general-purpose constraint CAD system; advanced
 profile and solver coverage is still limited. See
 [docs/PARAMETRIC_FEATURES.md](docs/PARAMETRIC_FEATURES.md) for the model scope.
@@ -207,11 +207,13 @@ interaction checks require a desktop session.
 ### Sweep from a Sketch
 
 Select a valid closed Sketch and activate `Sweep`. In the staged dialog click
-`Pick Path`, select one model Edge, then click `Commit`. The feature stores the path owner ID and persistent
-`TopologicalReference`, not an OCCT subshape index. Construction geometry does
-not affect profile eligibility. The MVP currently implements one Edge and
-Frenet/tangent-following orientation; Loft, multiple rails, and multi-edge
-Wire picking are not included.
+`Pick Path`, then select either one model Edge in the viewport or an open Sketch
+path in the model tree. Sketch paths automatically use non-construction Line
+and Arc entities, order them by endpoint connectivity, and display the entity
+count before Commit. Model Edge paths retain their owner ID and persistent
+`TopologicalReference`; Sketch paths retain the path Sketch ID and stable
+`SketchEntityId` values. Both are rebuilt into a `TopoDS_Wire` and use the same
+Frenet/tangent-following Sweep backend.
 
 ## Example project
 

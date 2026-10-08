@@ -812,9 +812,22 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 boolean(o, "solid"), o.value("ruled").toBool(false));
         }},
         {"Sweep", [](const QJsonObject& o, const Body& body) {
-            const auto path = body.findFeature(string(o, "pathFeatureId"));
             const auto profile = body.findFeature(string(o, "profileFeatureId"));
-            require(path && profile, "Sweep references missing path or profile");
+            require(static_cast<bool>(profile), "Sweep references missing profile");
+            if (o.value("pathType").toString() == "SketchPath") {
+                const auto pathId = o.value("pathSketchFeatureId").toString(
+                    o.value("pathFeatureId").toString());
+                require(!pathId.isEmpty(), "Sweep Sketch path is missing its Sketch reference");
+                const auto path = body.findFeature(pathId.toStdString());
+                require(path && path->role() == FeatureRole::Sketch,
+                    "Sweep references missing Sketch path");
+                const auto sketch = std::dynamic_pointer_cast<SketchFeature>(path);
+                require(static_cast<bool>(sketch), "Sweep Sketch path has invalid feature type");
+                return std::make_shared<SweepFeature>(string(o, "id"), sketch,
+                    strings(o, "pathEntityIds"), profile);
+            }
+            const auto path = body.findFeature(string(o, "pathFeatureId"));
+            require(static_cast<bool>(path), "Sweep references missing path");
             if (o.contains("pathReference")) {
                 return std::make_shared<SweepFeature>(string(o, "id"), path,
                     cad::topology::topologicalReferenceFromJson(

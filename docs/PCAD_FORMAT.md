@@ -176,9 +176,12 @@ Saved views are optional root-level presentation metadata:
 }
 ```
 
-Sweep records contain `profileFeatureId`, `pathFeatureId`, and a serialized
-`pathReference` TopologicalReference. Older Sweep records containing only
-`pathFeatureId` remain readable. `axis` is 0/1/2 for X/Y/Z. Saved views capture presentation configuration,
+Sweep Model Edge records contain `profileFeatureId`, `pathFeatureId`, and a
+serialized `pathReference` TopologicalReference. SketchPath records additionally
+contain `pathType: "SketchPath"`, `pathSketchFeatureId`, and `pathEntityIds`
+with stable SketchEntityId values. Older Sweep records containing only
+`pathFeatureId` remain readable and are not implicitly converted to SketchPath.
+`axis` is 0/1/2 for X/Y/Z. Saved views capture presentation configuration,
 camera eye/center/up/scale, isolation, Ghost Others, spatial rule, and section
 state. They do not capture selection, hover, active transform drag, snap
 candidates, or AIS objects. Restoring a view does not recompute the Body.

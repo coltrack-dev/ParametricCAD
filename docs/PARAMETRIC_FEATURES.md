@@ -185,16 +185,22 @@ Visibility-only commands use `refreshVisibility()` and must not call
 `Body::recompute()`. Viewer camera, clipping, and saved-view restoration are
 also presentation-only operations.
 
-## Sweep (MVP)
+## Sweep
 
-`SweepFeature` consumes exactly one valid closed Sketch profile and one model
-Edge path. Profile extraction uses the canonical `SketchProfileBuilder`, so
-construction geometry is ignored. The path is persisted as its owner feature
-ID plus a geometry-signature `TopologicalReference`, then resolved again after
-recompute and load. The current orientation is Frenet/tangent-following.
+`SweepFeature` consumes exactly one valid closed Sketch profile and either one
+model Edge or one Sketch path. Profile extraction uses the canonical
+`SketchProfileBuilder`; path extraction uses the separate `SketchPathBuilder`.
+Sketch paths contain non-construction Line and Arc entities and are rebuilt as
+one world-space `TopoDS_Wire` through `SketchFeature::currentFrame()`.
+Endpoint connectivity uses a deterministic 1e-6 model-unit tolerance. The
+path must be one open chain: disconnected entities, branches, loops,
+zero-length entities, unsupported entities, and ambiguous topology are rejected.
+Construction geometry is ignored for automatic Sketch path extraction.
 
 Workflow: select the valid Sketch in the model tree and activate Sweep. The
 staged dialog shows the profile and `Path: <not selected>`. Click `Pick Path`,
-select one model Edge in the viewport, then click `Commit`; no SweepFeature is
-inserted before Commit. Cancel leaves the model unchanged.
-Lofting, multiple rails, and a multi-edge Wire picker are outside this MVP.
+then select either one model Edge in the viewport or a Sketch in the model
+tree. A valid Sketch is shown as `Path: Sketch002 | Entities: N`. Click
+`Commit`; no SweepFeature is inserted before Commit. Cancel leaves the model
+unchanged. The backend remains the same `BasicFeatures::sweep`/MakePipe path
+for both source types.
