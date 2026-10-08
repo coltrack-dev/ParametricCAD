@@ -18,12 +18,15 @@
 #include <QActionGroup>
 #include <QCloseEvent>
 #include <QDialog>
+#include <QEvent>
 #include <QDir>
 #include <QFileDialog>
 #include <QKeySequence>
 #include <QMessageBox>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -145,6 +148,76 @@ MainWindow::MainWindow(QWidget* parent)
     updateTitle();
     setCentralWidget(viewer_);
 
+    const auto setupRectangleOverlay = [this](QWidget* widget) {
+        widget->setParent(viewer_);
+        widget->setVisible(false);
+        widget->installEventFilter(this);
+    };
+    rectangleWidthTitle_ = new QLabel("Width", viewer_);
+    rectangleHeightTitle_ = new QLabel("Height", viewer_);
+    rectangleCursorLabel_ = new QLabel(viewer_);
+    rectangleWidthEdit_ = new QLineEdit(viewer_);
+    rectangleHeightEdit_ = new QLineEdit(viewer_);
+    for (auto* widget : {static_cast<QWidget*>(rectangleWidthTitle_),
+                         static_cast<QWidget*>(rectangleHeightTitle_),
+                         static_cast<QWidget*>(rectangleCursorLabel_),
+                         static_cast<QWidget*>(rectangleWidthEdit_),
+                         static_cast<QWidget*>(rectangleHeightEdit_)}) {
+        setupRectangleOverlay(widget);
+        widget->setStyleSheet(
+            "background: rgba(255,255,255,235); color: #202733; "
+            "border: 1px solid #d89b38; border-radius: 3px; padding: 2px;");
+        widget->setAttribute(Qt::WA_TransparentForMouseEvents,
+            widget != rectangleWidthEdit_ && widget != rectangleHeightEdit_);
+    }
+    // The fields receive keyboard focus programmatically after the first
+    // corner. They must not become a second hit-test surface over the
+    // viewport, otherwise the second corner can be delivered to QLineEdit
+    // instead of CadViewer and the rectangle never reaches commit.
+    rectangleWidthEdit_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    rectangleHeightEdit_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    rectangleWidthEdit_->setPlaceholderText("Width");
+    rectangleHeightEdit_->setPlaceholderText("Height");
+    rectangleWidthEdit_->setFixedSize(78, 24);
+    rectangleHeightEdit_->setFixedSize(78, 24);
+    rectangleWidthTitle_->setFixedHeight(20);
+    rectangleHeightTitle_->setFixedHeight(20);
+    rectangleCursorLabel_->setFixedHeight(24);
+    rectangleWidthEdit_->setTabOrder(rectangleWidthEdit_, rectangleHeightEdit_);
+    connect(rectangleWidthEdit_, &QLineEdit::textEdited, this, [this](const QString& text) {
+        rectangleWidthLocked_ = false;
+        if (rectangleState_ == RectangleState::Drawing)
+            rectangleState_ = RectangleState::NumericInput;
+        bool ok = false;
+        const double value = text.toDouble(&ok);
+        if (ok && value > 1.0e-9) {
+            rectangleWidth_ = value;
+            rectangleWidthLocked_ = true;
+            updateRectangleInput(rectangleCursorPoint_.value_or(
+                sketchFirstPoint_.value_or(gp_Pnt2d())));
+        }
+    });
+    connect(rectangleHeightEdit_, &QLineEdit::textEdited, this, [this](const QString& text) {
+        rectangleHeightLocked_ = false;
+        if (rectangleState_ == RectangleState::Drawing)
+            rectangleState_ = RectangleState::NumericInput;
+        bool ok = false;
+        const double value = text.toDouble(&ok);
+        if (ok && value > 1.0e-9) {
+            rectangleHeight_ = value;
+            rectangleHeightLocked_ = true;
+            updateRectangleInput(rectangleCursorPoint_.value_or(
+                sketchFirstPoint_.value_or(gp_Pnt2d())));
+        }
+    });
+    connect(rectangleWidthEdit_, &QLineEdit::returnPressed,
+        this, &MainWindow::commitRectangleFromInput);
+    connect(rectangleHeightEdit_, &QLineEdit::returnPressed,
+        this, &MainWindow::commitRectangleFromInput);
+    rectangleOverlayTimer_.setInterval(30);
+    connect(&rectangleOverlayTimer_, &QTimer::timeout,
+        this, &MainWindow::updateRectangleOverlay);
+
     createActions();
     createParametricPanel();
     createBimPanel();
@@ -204,6 +277,10 @@ MainWindow::MainWindow(QWidget* parent)
         });
     viewer_->setSketchMouseMovedHandler(
         [this](const gp_Pnt2d& point, const double tolerance) {
+            if (sketchTool_ == SketchTool::Rectangle && !activeSketchId_.empty()) {
+                updateRectangleInput(point);
+                return;
+            }
             if (activeSketchId_.empty()
                 || (sketchTool_ != SketchTool::Trim && sketchTool_ != SketchTool::Extend)) return;
             const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
@@ -223,7 +300,21 @@ MainWindow::MainWindow(QWidget* parent)
         });
     viewer_->setSketchCancelHandler(
         [this]() {
+            const bool rectangleActive = sketchTool_ == SketchTool::Rectangle;
+            const bool rectangleWasDrawing = rectangleState_ == RectangleState::Drawing
+                || rectangleState_ == RectangleState::NumericInput;
+            clearRectangleInput();
             sketchFirstPoint_.reset(); sketchSecondPoint_.reset();
+            if (rectangleActive) {
+                if (rectangleWasDrawing) {
+                    statusBar()->showMessage("Rectangle: pick first corner", 2000);
+                } else {
+                    sketchTool_ = SketchTool::None;
+                    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+                    statusBar()->showMessage("Sketch mode: select a drawing tool", 2000);
+                }
+                return;
+            }
             if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend
                 || sketchTool_ == SketchTool::Coincident
                 || sketchTool_ == SketchTool::Horizontal
@@ -1871,12 +1962,15 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
     try {
         const auto frame = sketch->currentFrame();
         activeSketchId_ = sketchId;
-        sketchTool_ = SketchTool::Line;
+        sketchModeState_ = SketchModeState::Editing;
+        sketchTool_ = SketchTool::None;
+        rectangleState_ = RectangleState::Ready;
         sketchFirstPoint_.reset();
         sketchSecondPoint_.reset();
+        clearRectangleInput();
         constraintFirstPoint_.reset();
         selectedConstraintId_.clear();
-        viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Line);
+        viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
         viewer_->enterSketchMode(frame.origin, frame.xDirection,
             frame.yDirection, frame.normal, QString::fromStdString(sketchId));
         viewer_->setSketchConstraintMarkers(*sketch);
@@ -1916,11 +2010,17 @@ void MainWindow::finishSketch()
         .arg(QString::fromStdString(activeSketchId_))
         .arg(static_cast<int>(viewer_->selectionMode())));
     const QString finishedSketchId = QString::fromStdString(activeSketchId_);
+    if (rectangleWidthEdit_) rectangleWidthEdit_->clearFocus();
+    if (rectangleHeightEdit_) rectangleHeightEdit_->clearFocus();
+    viewer_->setFocus(Qt::OtherFocusReason);
     viewer_->exitSketchMode();
     activeSketchId_.clear();
+    sketchModeState_ = SketchModeState::Inactive;
     sketchTool_ = SketchTool::None;
+    rectangleState_ = RectangleState::Ready;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
+    clearRectangleInput();
     constraintFirstPoint_.reset();
     selectedConstraintId_.clear();
     sketchLineAction_->setEnabled(false);
@@ -1965,6 +2065,8 @@ void MainWindow::finishSketch()
 
 void MainWindow::selectSketchLineTool()
 {
+    clearRectangleInput();
+    if (sketchModeState_ != SketchModeState::Editing) return;
     sketchTool_ = SketchTool::Line;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
@@ -1973,6 +2075,8 @@ void MainWindow::selectSketchLineTool()
 
 void MainWindow::selectSketchCircleTool()
 {
+    clearRectangleInput();
+    if (sketchModeState_ != SketchModeState::Editing) return;
     sketchTool_ = SketchTool::Circle;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
@@ -1981,6 +2085,8 @@ void MainWindow::selectSketchCircleTool()
 
 void MainWindow::selectSketchArcTool()
 {
+    clearRectangleInput();
+    if (sketchModeState_ != SketchModeState::Editing) return;
     sketchTool_ = SketchTool::Arc;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
@@ -1991,6 +2097,8 @@ void MainWindow::selectSketchArcTool()
 
 void MainWindow::selectSketchCenterArcTool()
 {
+    clearRectangleInput();
+    if (sketchModeState_ != SketchModeState::Editing) return;
     sketchTool_ = SketchTool::CenterArc;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
@@ -2001,14 +2109,19 @@ void MainWindow::selectSketchCenterArcTool()
 
 void MainWindow::selectSketchRectangleTool()
 {
+    if (sketchModeState_ != SketchModeState::Editing) return;
     sketchTool_ = SketchTool::Rectangle;
+    rectangleState_ = RectangleState::Ready;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
+    clearRectangleInput();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Rectangle);
+    statusBar()->showMessage("Rectangle: pick first corner");
 }
 
 void MainWindow::selectSketchTrimTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Trim;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
@@ -2018,6 +2131,7 @@ void MainWindow::selectSketchTrimTool()
 
 void MainWindow::selectSketchExtendTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Extend;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
@@ -2027,6 +2141,7 @@ void MainWindow::selectSketchExtendTool()
 
 void MainWindow::selectSketchCoincidentTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Coincident;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2035,6 +2150,7 @@ void MainWindow::selectSketchCoincidentTool()
 
 void MainWindow::selectSketchHorizontalTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Horizontal;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2043,6 +2159,7 @@ void MainWindow::selectSketchHorizontalTool()
 
 void MainWindow::selectSketchVerticalTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Vertical;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2051,6 +2168,7 @@ void MainWindow::selectSketchVerticalTool()
 
 void MainWindow::selectSketchDistanceTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Distance;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2059,6 +2177,7 @@ void MainWindow::selectSketchDistanceTool()
 
 void MainWindow::selectSketchRadiusTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Radius;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2067,6 +2186,7 @@ void MainWindow::selectSketchRadiusTool()
 
 void MainWindow::selectSketchHorizontalDistanceTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::HorizontalDistance;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2075,6 +2195,7 @@ void MainWindow::selectSketchHorizontalDistanceTool()
 
 void MainWindow::selectSketchVerticalDistanceTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::VerticalDistance;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2083,6 +2204,7 @@ void MainWindow::selectSketchVerticalDistanceTool()
 
 void MainWindow::selectSketchAngleTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Angle;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2091,6 +2213,7 @@ void MainWindow::selectSketchAngleTool()
 
 void MainWindow::selectSketchParallelTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Parallel;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2099,6 +2222,7 @@ void MainWindow::selectSketchParallelTool()
 
 void MainWindow::selectSketchPerpendicularTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Perpendicular;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2107,6 +2231,7 @@ void MainWindow::selectSketchPerpendicularTool()
 
 void MainWindow::selectSketchAngleBetweenLinesTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Tangent;
     constraintFirstPoint_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -2115,6 +2240,7 @@ void MainWindow::selectSketchAngleBetweenLinesTool()
 
 void MainWindow::selectSketchTangentTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::Equal;
     constraintFirstPoint_.reset();
     statusBar()->showMessage("Tangent: click Line, then Circle or Arc");
@@ -2122,6 +2248,7 @@ void MainWindow::selectSketchTangentTool()
 
 void MainWindow::selectSketchEqualTool()
 {
+    clearRectangleInput();
     sketchTool_ = SketchTool::AngleBetweenLines;
     constraintFirstPoint_.reset();
     statusBar()->showMessage("Equal: click two compatible entities");
@@ -2158,12 +2285,248 @@ void MainWindow::toggleSelectedSketchConstruction()
     if (sketch) traceSketchEntities("toggleConstruction.after", *sketch);
 }
 
+std::optional<gp_Pnt2d> MainWindow::rectanglePointForCursor(const gp_Pnt2d& cursor) const
+{
+    if (!sketchFirstPoint_) return std::nullopt;
+    const double width = rectangleWidthLocked_ ? rectangleWidth_
+        : std::abs(cursor.X() - sketchFirstPoint_->X());
+    const double height = rectangleHeightLocked_ ? rectangleHeight_
+        : std::abs(cursor.Y() - sketchFirstPoint_->Y());
+    if (width <= 1.0e-9 || height <= 1.0e-9) return std::nullopt;
+    return gp_Pnt2d(
+        sketchFirstPoint_->X() + rectangleDirectionX_ * width,
+        sketchFirstPoint_->Y() + rectangleDirectionY_ * height);
+}
+
+void MainWindow::updateRectangleInput(const gp_Pnt2d& cursor)
+{
+    if (sketchModeState_ != SketchModeState::Editing
+        || sketchTool_ != SketchTool::Rectangle
+        || (rectangleState_ != RectangleState::Drawing
+            && rectangleState_ != RectangleState::NumericInput)
+        || !sketchFirstPoint_) return;
+    traceActionState("rectangle.mouseMove", QString(
+        "sketch=%1 state=%2 first=(%3,%4) cursor=(%5,%6)")
+        .arg(QString::fromStdString(activeSketchId_))
+        .arg(static_cast<int>(rectangleState_))
+        .arg(sketchFirstPoint_->X()).arg(sketchFirstPoint_->Y())
+        .arg(cursor.X()).arg(cursor.Y()));
+    rectangleCursorPoint_ = cursor;
+    if (std::abs(cursor.X() - sketchFirstPoint_->X()) > 1.0e-9)
+        rectangleDirectionX_ = cursor.X() >= sketchFirstPoint_->X() ? 1 : -1;
+    if (std::abs(cursor.Y() - sketchFirstPoint_->Y()) > 1.0e-9)
+        rectangleDirectionY_ = cursor.Y() >= sketchFirstPoint_->Y() ? 1 : -1;
+    if (!rectangleWidthLocked_) rectangleWidth_ = std::abs(cursor.X() - sketchFirstPoint_->X());
+    if (!rectangleHeightLocked_) rectangleHeight_ = std::abs(cursor.Y() - sketchFirstPoint_->Y());
+    if (rectangleWidthEdit_ && !rectangleWidthLocked_)
+        rectangleWidthEdit_->setText(QString::number(rectangleWidth_, 'f', 3));
+    if (rectangleHeightEdit_ && !rectangleHeightLocked_)
+        rectangleHeightEdit_->setText(QString::number(rectangleHeight_, 'f', 3));
+    const auto end = rectanglePointForCursor(cursor);
+    traceActionState("rectangle.geometry", QString(
+        "sketch=%1 first=(%2,%3) end=%4 width=%5 height=%6 locked=(%7,%8)")
+        .arg(QString::fromStdString(activeSketchId_))
+        .arg(sketchFirstPoint_->X()).arg(sketchFirstPoint_->Y())
+        .arg(end ? QString("(%1,%2)").arg(end->X()).arg(end->Y()) : QStringLiteral("<invalid>"))
+        .arg(rectangleWidth_).arg(rectangleHeight_)
+        .arg(rectangleWidthLocked_).arg(rectangleHeightLocked_));
+    viewer_->setSketchPreviewPointOverride(end);
+    viewer_->refreshSketchPreview();
+    updateRectangleOverlay();
+}
+
+void MainWindow::updateRectangleOverlay()
+{
+    if (!sketchFirstPoint_ || sketchTool_ != SketchTool::Rectangle) {
+        rectangleOverlayTimer_.stop();
+        for (auto* widget : {static_cast<QWidget*>(rectangleWidthTitle_),
+                             static_cast<QWidget*>(rectangleHeightTitle_),
+                             static_cast<QWidget*>(rectangleCursorLabel_),
+                             static_cast<QWidget*>(rectangleWidthEdit_),
+                             static_cast<QWidget*>(rectangleHeightEdit_)}) {
+            if (widget) widget->hide();
+        }
+        return;
+    }
+    rectangleOverlayTimer_.start();
+    const gp_Pnt2d cursor = rectangleCursorPoint_.value_or(*sketchFirstPoint_);
+    const auto end = rectanglePointForCursor(cursor).value_or(cursor);
+    const auto firstScreen = viewer_->sketchPointToScreen(*sketchFirstPoint_);
+    const auto endScreen = viewer_->sketchPointToScreen(end);
+    const auto cursorScreen = viewer_->sketchPointToScreen(cursor);
+    if (!firstScreen || !endScreen) return;
+    const int left = std::min(firstScreen->x(), endScreen->x());
+    const int right = std::max(firstScreen->x(), endScreen->x());
+    const int top = std::min(firstScreen->y(), endScreen->y());
+    const int bottom = std::max(firstScreen->y(), endScreen->y());
+    const int widthX = (left + right) / 2 - rectangleWidthEdit_->width() / 2;
+    const int heightY = (top + bottom) / 2 - rectangleHeightEdit_->height() / 2;
+    rectangleWidthTitle_->move(widthX, std::max(2, top - 70));
+    rectangleWidthEdit_->move(widthX, std::max(22, top - 47));
+    rectangleHeightTitle_->move(std::max(2, left - 88), std::max(2, heightY - 25));
+    rectangleHeightEdit_->move(std::max(2, left - 88), std::max(22, heightY));
+    traceActionState("rectangle.overlay", QString(
+        "sketch=%1 firstScreen=(%2,%3) endScreen=(%4,%5) widthRect=%6,%7,%8,%9 "
+        "heightRect=%10,%11,%12,%13")
+        .arg(QString::fromStdString(activeSketchId_))
+        .arg(firstScreen->x()).arg(firstScreen->y())
+        .arg(endScreen->x()).arg(endScreen->y())
+        .arg(rectangleWidthEdit_->x()).arg(rectangleWidthEdit_->y())
+        .arg(rectangleWidthEdit_->width()).arg(rectangleWidthEdit_->height())
+        .arg(rectangleHeightEdit_->x()).arg(rectangleHeightEdit_->y())
+        .arg(rectangleHeightEdit_->width()).arg(rectangleHeightEdit_->height()));
+    if (cursorScreen) {
+        rectangleCursorLabel_->setText(QString("X: %1  Y: %2")
+            .arg(cursor.X(), 0, 'f', 3).arg(cursor.Y(), 0, 'f', 3));
+        rectangleCursorLabel_->adjustSize();
+        rectangleCursorLabel_->move(
+            std::clamp(cursorScreen->x() + 12, 2, std::max(2, viewer_->width() - rectangleCursorLabel_->width() - 2)),
+            std::clamp(cursorScreen->y() + 12, 2, std::max(2, viewer_->height() - rectangleCursorLabel_->height() - 2)));
+    }
+    for (auto* widget : {static_cast<QWidget*>(rectangleWidthTitle_),
+                         static_cast<QWidget*>(rectangleHeightTitle_),
+                         static_cast<QWidget*>(rectangleCursorLabel_),
+                         static_cast<QWidget*>(rectangleWidthEdit_),
+                         static_cast<QWidget*>(rectangleHeightEdit_)}) {
+        if (widget) widget->show(), widget->raise();
+    }
+}
+
+bool MainWindow::commitRectangle(const gp_Pnt2d& point)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    const auto before = sketch ? sketch->entities().size() : 0U;
+    traceActionState("rectangle.commit.enter", QString(
+        "sketch=%1 state=%2 first=%3 point=(%4,%5) entitiesBefore=%6")
+        .arg(QString::fromStdString(activeSketchId_))
+        .arg(static_cast<int>(rectangleState_))
+        .arg(sketchFirstPoint_.has_value())
+        .arg(point.X()).arg(point.Y()).arg(static_cast<int>(before)));
+    if (!sketchFirstPoint_) {
+        traceActionState("rectangle.commit.return", "reason=missing first point");
+        return false;
+    }
+    const auto first = *sketchFirstPoint_;
+    if (first.Distance(point) <= 1.0e-9
+        || std::abs(point.X() - first.X()) <= 1.0e-9
+        || std::abs(point.Y() - first.Y()) <= 1.0e-9) {
+        statusBar()->showMessage("Rectangle width and height must be positive", 2500);
+        return false;
+    }
+    const gp_Pnt2d corners[] = {
+        first, {point.X(), first.Y()}, point, {first.X(), point.Y()}};
+    cad::application::ModelingResult result;
+    for (int index = 0; index < 4; ++index) {
+        result = modeling_.addSketchLine(activeSketchId_, corners[index],
+            corners[(index + 1) % 4]);
+        if (!result.success) break;
+    }
+    if (!result.success) {
+        traceActionState("rectangle.commit.failed", QString("error=%1")
+            .arg(QString::fromStdString(result.error)));
+        QMessageBox::warning(this, "Sketch entity failed",
+            QString::fromStdString(result.error));
+        return false;
+    }
+    const auto afterSketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    traceActionState("rectangle.commit.done", QString(
+        "sketch=%1 entitiesBefore=%2 entitiesAfter=%3 result=success")
+        .arg(QString::fromStdString(activeSketchId_))
+        .arg(static_cast<int>(before))
+        .arg(afterSketch ? static_cast<int>(afterSketch->entities().size()) : -1));
+    return true;
+}
+
+void MainWindow::commitRectangleFromInput()
+{
+    if (!sketchFirstPoint_ || sketchModeState_ != SketchModeState::Editing
+        || sketchTool_ != SketchTool::Rectangle
+        || (rectangleState_ != RectangleState::Drawing
+            && rectangleState_ != RectangleState::NumericInput)) return;
+    bool widthOk = false;
+    bool heightOk = false;
+    const double width = rectangleWidthEdit_->text().toDouble(&widthOk);
+    const double height = rectangleHeightEdit_->text().toDouble(&heightOk);
+    if (!widthOk || !heightOk || width <= 1.0e-9 || height <= 1.0e-9) {
+        statusBar()->showMessage("Enter positive Width and Height", 2500);
+        return;
+    }
+    rectangleWidth_ = width;
+    rectangleHeight_ = height;
+    rectangleState_ = RectangleState::NumericInput;
+    rectangleWidthLocked_ = true;
+    rectangleHeightLocked_ = true;
+    const auto end = rectanglePointForCursor(rectangleCursorPoint_.value_or(*sketchFirstPoint_));
+    if (!end || !commitRectangle(*end)) return;
+    sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
+    clearRectangleInput();
+    rectangleState_ = RectangleState::Ready;
+}
+
+void MainWindow::clearRectangleInput()
+{
+    rectangleOverlayTimer_.stop();
+    rectangleState_ = RectangleState::Ready;
+    rectangleCursorPoint_.reset();
+    rectangleWidthLocked_ = false;
+    rectangleHeightLocked_ = false;
+    rectangleWidth_ = 0.0;
+    rectangleHeight_ = 0.0;
+    viewer_->clearSketchPreview();
+    for (auto* widget : {static_cast<QWidget*>(rectangleWidthTitle_),
+                         static_cast<QWidget*>(rectangleHeightTitle_),
+                         static_cast<QWidget*>(rectangleCursorLabel_),
+                         static_cast<QWidget*>(rectangleWidthEdit_),
+                         static_cast<QWidget*>(rectangleHeightEdit_)}) {
+        if (widget) widget->hide();
+    }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if ((watched == rectangleWidthEdit_ || watched == rectangleHeightEdit_)
+        && event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Tab) {
+            auto* next = watched == rectangleWidthEdit_
+                ? rectangleHeightEdit_ : rectangleWidthEdit_;
+            next->setFocus(Qt::TabFocusReason);
+            next->selectAll();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            commitRectangleFromInput();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Escape) {
+            sketchFirstPoint_.reset();
+            sketchSecondPoint_.reset();
+            clearRectangleInput();
+            statusBar()->showMessage("Rectangle input cancelled", 2000);
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
 {
     if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
         modeling_.body().findFeature(activeSketchId_));
     if (!sketch) return;
+    if (sketchTool_ == SketchTool::Rectangle) {
+        traceActionState("rectangle.mousePoint", QString(
+            "sketch=%1 state=%2 first=%3 second=%4 point=(%5,%6) entities=%7")
+            .arg(QString::fromStdString(activeSketchId_))
+            .arg(static_cast<int>(rectangleState_))
+            .arg(sketchFirstPoint_.has_value()).arg(sketchSecondPoint_.has_value())
+            .arg(point.X()).arg(point.Y())
+            .arg(static_cast<int>(sketch->entities().size())));
+    }
     if (sketchTool_ == SketchTool::Arc) {
         const auto frame = sketch->currentFrame();
         gp_Pnt world = frame.origin;
@@ -2348,6 +2711,26 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     }
     if (!sketchFirstPoint_) {
         sketchFirstPoint_ = point;
+        if (sketchTool_ == SketchTool::Rectangle) {
+            rectangleState_ = RectangleState::Drawing;
+            rectangleCursorPoint_ = point;
+            rectangleDirectionX_ = 1;
+            rectangleDirectionY_ = 1;
+            rectangleWidth_ = 0.0;
+            rectangleHeight_ = 0.0;
+            rectangleWidthLocked_ = false;
+            rectangleHeightLocked_ = false;
+            rectangleWidthEdit_->setText("0.000");
+            rectangleHeightEdit_->setText("0.000");
+            rectangleWidthTitle_->setText("Width");
+            rectangleHeightTitle_->setText("Height");
+            rectangleWidthEdit_->show();
+            rectangleHeightEdit_->show();
+            rectangleWidthEdit_->setFocus(Qt::MouseFocusReason);
+            rectangleWidthEdit_->selectAll();
+            updateRectangleOverlay();
+            statusBar()->showMessage("Rectangle: move cursor or enter Width/Height");
+        }
         if (sketchTool_ == SketchTool::Arc) {
             statusBar()->showMessage("Arc: pick end point");
         } else if (sketchTool_ == SketchTool::CenterArc) {
@@ -2376,6 +2759,20 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
         result = modeling_.addSketchThreePointArc(activeSketchId_, first, *second, point);
     } else if (sketchTool_ == SketchTool::CenterArc) {
         result = modeling_.addSketchArc(activeSketchId_, first, *second, point);
+    } else if (sketchTool_ == SketchTool::Rectangle) {
+        if (rectangleState_ != RectangleState::Drawing
+            && rectangleState_ != RectangleState::NumericInput) return;
+        updateRectangleInput(point);
+        const auto end = rectanglePointForCursor(point);
+        if (!end) {
+            statusBar()->showMessage("Rectangle width and height must be positive", 2500);
+            return;
+        }
+        const bool committed = commitRectangle(*end);
+        if (committed) {
+            clearRectangleInput();
+            rectangleState_ = RectangleState::Ready;
+        }
     } else {
         result = modeling_.addSketchLine(activeSketchId_, first,
             {point.X(), first.Y()});
@@ -2385,6 +2782,11 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
             point, {first.X(), point.Y()});
         if (result.success) result = modeling_.addSketchLine(activeSketchId_,
             {first.X(), point.Y()}, first);
+    }
+    if (sketchTool_ == SketchTool::Rectangle) {
+        sketchFirstPoint_.reset();
+        sketchSecondPoint_.reset();
+        return;
     }
     if (!result.success) {
         QMessageBox::warning(this, "Sketch entity failed",

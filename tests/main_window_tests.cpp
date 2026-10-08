@@ -2,10 +2,14 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QLabel>
+#include <QLineEdit>
+#include <QKeyEvent>
+#include <QEvent>
 #include <QPushButton>
 #include <QToolBar>
 #include <QSettings>
 #include <QSet>
+#include <array>
 #include <QtTest/QtTest>
 
 #define private public
@@ -106,6 +110,107 @@ private slots:
         else settings.remove("mainWindow/geometry");
         if (oldState.isValid()) settings.setValue("mainWindow/state", oldState);
         else settings.remove("mainWindow/state");
+    }
+
+    void rectangleInputKeepsFourDirectionsAndExactDimensions()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("Native MainWindow is required for Sketch input tests");
+        }
+        MainWindow window;
+        const auto sketch = window.modeling_.createSketch();
+        QVERIFY(sketch.success);
+        window.activeSketchId_ = sketch.id;
+        window.sketchModeState_ = MainWindow::SketchModeState::Editing;
+        window.selectSketchRectangleTool();
+
+        const std::array<gp_Pnt2d, 4> cursors{
+            gp_Pnt2d(20.0, 10.0), gp_Pnt2d(-20.0, 10.0),
+            gp_Pnt2d(-20.0, -10.0), gp_Pnt2d(20.0, -10.0)};
+        for (const auto& cursor : cursors) {
+            window.sketchFirstPoint_ = gp_Pnt2d(0.0, 0.0);
+            window.rectangleState_ = MainWindow::RectangleState::Drawing;
+            window.updateRectangleInput(cursor);
+            const auto end = window.rectanglePointForCursor(cursor);
+            QVERIFY(end);
+            QCOMPARE(end->X(), cursor.X());
+            QCOMPARE(end->Y(), cursor.Y());
+            window.sketchFirstPoint_.reset();
+            window.clearRectangleInput();
+        }
+
+        window.sketchFirstPoint_ = gp_Pnt2d(0.0, 0.0);
+        window.rectangleState_ = MainWindow::RectangleState::Drawing;
+        window.updateRectangleInput(gp_Pnt2d(20.0, 10.0));
+        QKeyEvent tabEvent(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+        QVERIFY(window.eventFilter(window.rectangleWidthEdit_, &tabEvent));
+        QKeyEvent escapeEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QVERIFY(window.eventFilter(window.rectangleHeightEdit_, &escapeEvent));
+        QVERIFY(!window.sketchFirstPoint_.has_value());
+
+        window.sketchFirstPoint_ = gp_Pnt2d(10.0, 20.0);
+        window.rectangleState_ = MainWindow::RectangleState::Drawing;
+        window.updateRectangleInput(gp_Pnt2d(-100.0, -100.0));
+        window.rectangleWidthEdit_->setText("80");
+        window.rectangleHeightEdit_->setText("45");
+        window.commitRectangleFromInput();
+        const auto updated = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(updated);
+        QCOMPARE(updated->entities().size(), std::size_t(4));
+        const auto* first = std::get_if<cad::parametric::SketchLine>(&updated->entities()[0]);
+        const auto* second = std::get_if<cad::parametric::SketchLine>(&updated->entities()[1]);
+        QVERIFY(first && second);
+        QCOMPARE(first->start.X(), 10.0);
+        QCOMPARE(first->start.Y(), 20.0);
+        QCOMPARE(first->end.X(), -70.0);
+        QCOMPARE(first->end.Y(), 20.0);
+        QCOMPARE(second->end.X(), -70.0);
+        QCOMPARE(second->end.Y(), -25.0);
+        QVERIFY(window.sketchFirstPoint_.has_value() == false);
+    }
+
+    void sketchEditingStartsWithoutDrawingTool()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("Native MainWindow is required for Sketch lifecycle tests");
+        }
+        MainWindow window;
+        const auto sketch = window.modeling_.createSketch();
+        QVERIFY(sketch.success);
+        window.enterSketchEditing(sketch.id);
+        QCOMPARE(window.sketchModeState_, MainWindow::SketchModeState::Editing);
+        QCOMPARE(window.sketchTool_, MainWindow::SketchTool::None);
+        QCOMPARE(window.rectangleState_, MainWindow::RectangleState::Ready);
+        QCOMPARE(window.viewer_->sketchPreviewTool_, CadViewer::SketchPreviewTool::None);
+        QVERIFY(window.viewer_->sketchPreviewObject_.IsNull());
+        QVERIFY(window.rectangleWidthEdit_->testAttribute(Qt::WA_TransparentForMouseEvents));
+        QVERIFY(window.rectangleHeightEdit_->testAttribute(Qt::WA_TransparentForMouseEvents));
+        QVERIFY(window.sketchFirstPoint_.has_value() == false);
+        QMouseEvent move(QEvent::MouseMove, QPointF(100.0, 100.0),
+            Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        window.viewer_->mouseMoveEvent(&move);
+        QVERIFY(window.viewer_->sketchPreviewObject_.IsNull());
+        const auto edited = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(edited);
+        QCOMPARE(edited->entities().size(), std::size_t(0));
+
+        window.selectSketchRectangleTool();
+        QKeyEvent readyEscape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        window.viewer_->keyPressEvent(&readyEscape);
+        QCOMPARE(window.sketchTool_, MainWindow::SketchTool::None);
+        QCOMPARE(window.rectangleState_, MainWindow::RectangleState::Ready);
+
+        window.selectSketchRectangleTool();
+        window.sketchFirstPoint_ = gp_Pnt2d(1.0, 1.0);
+        window.rectangleState_ = MainWindow::RectangleState::Drawing;
+        QKeyEvent drawingEscape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        window.viewer_->keyPressEvent(&drawingEscape);
+        QCOMPARE(window.sketchTool_, MainWindow::SketchTool::Rectangle);
+        QCOMPARE(window.rectangleState_, MainWindow::RectangleState::Ready);
+        QVERIFY(!window.sketchFirstPoint_.has_value());
+
     }
 
     void sketchLinePickerChoosesNearestAndPrefersConstructionOnOverlap()
@@ -604,6 +709,54 @@ private slots:
         QVERIFY(window.viewer_->editingSketchFeatureId_.isEmpty());
         QCOMPARE(window.viewer_->managedSelectionModes_.at(sketchId),
             AIS_Shape::SelectionMode(TopAbs_FACE));
+    }
+
+    void faceAttachedRectangleCommitsOnCurrentFaceFrame()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()
+            || qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen") {
+            QSKIP("Native OCCT viewer is required for face-attached Rectangle tests");
+        }
+        MainWindow window;
+        const auto box = window.modeling_.createBox();
+        QVERIFY(box.success);
+        const auto sketch = window.modeling_.createSketchOnFace({{
+            {box.id, cad::application::SelectionKind::Face, 1}}});
+        QVERIFY(sketch.success);
+
+        window.refreshModelView();
+        window.enterSketchEditing(sketch.id);
+        window.selectSketchRectangleTool();
+        const auto before = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(before);
+        QCOMPARE(before->entityCount(), std::size_t{0});
+
+        window.handleSketchPoint({0.0, 0.0}, 0.1);
+        QCOMPARE(window.rectangleState_, MainWindow::RectangleState::Drawing);
+        window.handleSketchPoint({40.0, 20.0}, 0.1);
+
+        const auto after = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(after);
+        QCOMPARE(after->entityCount(), std::size_t{4});
+        QCOMPARE(window.rectangleState_, MainWindow::RectangleState::Ready);
+        QVERIFY(!window.sketchFirstPoint_.has_value());
+        QVERIFY(window.viewer_->sketchPreviewObject_.IsNull());
+
+        const auto frame = after->currentFrame();
+        for (const auto& entity : after->entities()) {
+            const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+            QVERIFY(line);
+            const gp_Pnt start = frame.origin.Translated(
+                gp_Vec(frame.xDirection) * line->start.X()
+                + gp_Vec(frame.yDirection) * line->start.Y());
+            const gp_Pnt end = frame.origin.Translated(
+                gp_Vec(frame.xDirection) * line->end.X()
+                + gp_Vec(frame.yDirection) * line->end.Y());
+            QVERIFY(std::abs(gp_Vec(frame.origin, start).Dot(gp_Vec(frame.normal))) < 1.0e-7);
+            QVERIFY(std::abs(gp_Vec(frame.origin, end).Dot(gp_Vec(frame.normal))) < 1.0e-7);
+        }
     }
 
     void shapeReplacementReleasesSelectionBeforeMutation()

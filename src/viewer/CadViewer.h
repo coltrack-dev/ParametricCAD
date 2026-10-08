@@ -182,7 +182,12 @@ public:
     void setSketchConstraintMarkerClickedHandler(std::function<void(const std::string&)> handler);
     void setSketchConstraintMarkerHoveredHandler(std::function<void(const std::string&)> handler);
     std::optional<gp_Pnt2d> sketchPointAtScreen(const QPoint& position) const;
+    std::optional<QPoint> sketchPointToScreen(const gp_Pnt2d& point) const;
     double sketchLocalToleranceFromPixels(const QPoint& position, double pixels) const;
+    void setSketchPreviewPointOverride(const std::optional<gp_Pnt2d>& point);
+    void clearSketchPreviewPointOverride();
+    void clearSketchPreview();
+    void refreshSketchPreview();
     void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void setSketchExtendPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void clearSketchTrimPreview();
@@ -408,6 +413,7 @@ private:
     SketchPreviewTool sketchPreviewTool_{SketchPreviewTool::None};
     std::optional<gp_Pnt> sketchPreviewFirstPoint_;
     std::optional<gp_Pnt> sketchPreviewSecondPoint_;
+    std::optional<gp_Pnt2d> sketchPreviewPointOverride_;
     Handle(AIS_Shape) sketchPreviewObject_;
     std::function<void(const gp_Pnt2d&, double)> sketchPointClickedHandler_;
     std::function<void(const gp_Pnt2d&, double)> sketchMouseMovedHandler_;

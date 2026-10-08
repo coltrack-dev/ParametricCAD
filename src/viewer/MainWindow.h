@@ -25,7 +25,9 @@ class FeatureEditorPanel;
 class BimNavigationPanel;
 class BimInspectorPanel;
 class QDialog;
+class QEvent;
 class QLabel;
+class QLineEdit;
 class QPushButton;
 namespace cad::viewer { class ModelPresenter; }
 
@@ -39,6 +41,7 @@ public:
 
 private:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void newDocument();
     void openDocument();
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
@@ -119,6 +122,12 @@ private:
     void editSketchConstraint(const QString& constraintId);
     void deleteSketchConstraint(const QString& constraintId);
     void handleSketchPoint(const gp_Pnt2d& point, double hitTolerance);
+    void updateRectangleInput(const gp_Pnt2d& cursor);
+    void clearRectangleInput();
+    void commitRectangleFromInput();
+    std::optional<gp_Pnt2d> rectanglePointForCursor(const gp_Pnt2d& cursor) const;
+    bool commitRectangle(const gp_Pnt2d& endPoint);
+    void updateRectangleOverlay();
     void createFace();
     void createExtrude();
     void createPocket();
@@ -250,10 +259,27 @@ private:
                             Coincident, Horizontal, Vertical, Distance, Radius,
                             HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular,
                             AngleBetweenLines, Tangent, Equal };
+    enum class SketchModeState { Inactive, Editing };
+    enum class RectangleState { Ready, Drawing, NumericInput };
+    SketchModeState sketchModeState_{SketchModeState::Inactive};
+    RectangleState rectangleState_{RectangleState::Ready};
     SketchTool sketchTool_{SketchTool::None};
     std::string activeSketchId_;
     std::optional<gp_Pnt2d> sketchFirstPoint_;
     std::optional<gp_Pnt2d> sketchSecondPoint_;
+    std::optional<gp_Pnt2d> rectangleCursorPoint_;
+    bool rectangleWidthLocked_{false};
+    bool rectangleHeightLocked_{false};
+    double rectangleWidth_{0.0};
+    double rectangleHeight_{0.0};
+    int rectangleDirectionX_{1};
+    int rectangleDirectionY_{1};
+    QLineEdit* rectangleWidthEdit_{nullptr};
+    QLineEdit* rectangleHeightEdit_{nullptr};
+    QLabel* rectangleWidthTitle_{nullptr};
+    QLabel* rectangleHeightTitle_{nullptr};
+    QLabel* rectangleCursorLabel_{nullptr};
+    QTimer rectangleOverlayTimer_;
     std::optional<cad::parametric::SketchPointRef> constraintFirstPoint_;
     QString selectedConstraintId_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and

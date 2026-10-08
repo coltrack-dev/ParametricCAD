@@ -687,6 +687,13 @@ void CadViewer::enterSketchMode(
     traceSelectionLifecycle(QString("Sketch edit owns feature=%1; excluded from model selection")
         .arg(featureId));
     sketchMode_ = true;
+    sketchPreviewFirstPoint_.reset();
+    sketchPreviewSecondPoint_.reset();
+    sketchPreviewPointOverride_.reset();
+    if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+        context_->Remove(sketchPreviewObject_, Standard_False);
+    }
+    sketchPreviewObject_.Nullify();
     sketchOrigin_ = origin;
     sketchXDirection_ = xDirection;
     sketchYDirection_ = yDirection;
@@ -738,6 +745,7 @@ void CadViewer::exitSketchMode()
     }
     sketchPreviewFirstPoint_.reset();
     sketchPreviewSecondPoint_.reset();
+    sketchPreviewPointOverride_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
         traceSelectionLifecycle(QString("AIS Remove sketchPreview obj=%1 before")
             .arg(selectionObjectPointer(sketchPreviewObject_)));
@@ -770,6 +778,7 @@ void CadViewer::setSketchPreviewTool(const SketchPreviewTool tool)
     sketchPreviewTool_ = tool;
     sketchPreviewFirstPoint_.reset();
     sketchPreviewSecondPoint_.reset();
+    sketchPreviewPointOverride_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
         traceSelectionLifecycle(QString("AIS Remove sketchPreview obj=%1 before")
             .arg(selectionObjectPointer(sketchPreviewObject_)));
@@ -821,6 +830,71 @@ std::optional<gp_Pnt2d> CadViewer::sketchPointAtScreen(const QPoint& position) c
     const gp_Vec offset(sketchOrigin_, *world);
     return gp_Pnt2d(offset.Dot(gp_Vec(sketchXDirection_)),
                     offset.Dot(gp_Vec(sketchYDirection_)));
+}
+
+std::optional<QPoint> CadViewer::sketchPointToScreen(const gp_Pnt2d& point) const
+{
+    if (!sketchMode_ || view_.IsNull()) return std::nullopt;
+    const gp_Pnt world = sketchWorldPoint(
+        {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_}, point);
+    const QPointF projected = projectWorldPoint(view_, world, width(), height());
+    if (!std::isfinite(projected.x()) || !std::isfinite(projected.y())) return std::nullopt;
+    return QPoint(qRound(projected.x()), qRound(projected.y()));
+}
+
+void CadViewer::setSketchPreviewPointOverride(const std::optional<gp_Pnt2d>& point)
+{
+    sketchPreviewPointOverride_ = point;
+}
+
+void CadViewer::clearSketchPreviewPointOverride()
+{
+    sketchPreviewPointOverride_.reset();
+}
+
+void CadViewer::clearSketchPreview()
+{
+    sketchPreviewFirstPoint_.reset();
+    sketchPreviewSecondPoint_.reset();
+    sketchPreviewPointOverride_.reset();
+    if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+        context_->Remove(sketchPreviewObject_, Standard_True);
+    }
+    sketchPreviewObject_.Nullify();
+}
+
+void CadViewer::refreshSketchPreview()
+{
+    if (!sketchMode_ || !sketchPreviewFirstPoint_
+        || sketchPreviewTool_ == SketchPreviewTool::None
+        || sketchPreviewTool_ == SketchPreviewTool::Trim
+        || sketchPreviewTool_ == SketchPreviewTool::Extend
+        || context_.IsNull()) return;
+    const auto point = sketchPointAtScreen(lastMousePosition_);
+    if (!point) return;
+    gp_Pnt current = sketchOrigin_;
+    current.Translate(gp_Vec(sketchXDirection_) * point->X()
+        + gp_Vec(sketchYDirection_) * point->Y());
+    if (sketchPreviewTool_ == SketchPreviewTool::Rectangle
+        && sketchPreviewPointOverride_) {
+        current = sketchWorldPoint(
+            {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_},
+            *sketchPreviewPointOverride_);
+    }
+    const auto shape = makeSketchPreviewShape(
+        {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_},
+        *sketchPreviewFirstPoint_, current, sketchPreviewTool_,
+        sketchPreviewSecondPoint_);
+    if (sketchPreviewObject_.IsNull()) {
+        sketchPreviewObject_ = new AIS_Shape(shape);
+        sketchPreviewObject_->SetDisplayMode(AIS_WireFrame);
+        sketchPreviewObject_->SetColor(Quantity_NOC_YELLOW);
+        sketchPreviewObject_->SetWidth(2.0);
+        context_->Display(sketchPreviewObject_, Standard_True);
+    } else {
+        sketchPreviewObject_->SetShape(shape);
+        context_->Redisplay(sketchPreviewObject_, Standard_True);
+    }
 }
 
 double CadViewer::sketchLocalToleranceFromPixels(const QPoint& position, const double pixels) const
@@ -3558,7 +3632,25 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
             }
         }
         const auto point = sketchPointAtScreen(lastMousePosition_);
-        if (point) {
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
+            const auto pointText = point
+                ? QString("(%1,%2)").arg(point->X()).arg(point->Y())
+                : QStringLiteral("<none>");
+            qInfo().noquote() << QString(
+                "[SKETCH] mousePress screen=(%1,%2) sketch=%3 tool=%4 point=%5 "
+                "frameOrigin=(%6,%7,%8) frameX=(%9,%10,%11) frameY=(%12,%13,%14) "
+                "frameNormal=(%15,%16,%17) previewFirst=%18")
+                .arg(lastMousePosition_.x()).arg(lastMousePosition_.y())
+                .arg(editingSketchFeatureId_)
+                .arg(static_cast<int>(sketchPreviewTool_))
+                .arg(pointText)
+                .arg(sketchOrigin_.X()).arg(sketchOrigin_.Y()).arg(sketchOrigin_.Z())
+                .arg(sketchXDirection_.X()).arg(sketchXDirection_.Y()).arg(sketchXDirection_.Z())
+                .arg(sketchYDirection_.X()).arg(sketchYDirection_.Y()).arg(sketchYDirection_.Z())
+                .arg(sketchNormal_.X()).arg(sketchNormal_.Y()).arg(sketchNormal_.Z())
+                .arg(sketchPreviewFirstPoint_.has_value());
+        }
+        if (point && sketchPreviewTool_ != SketchPreviewTool::None) {
             gp_Pnt world = sketchOrigin_;
             world.Translate(gp_Vec(sketchXDirection_) * point->X()
                 + gp_Vec(sketchYDirection_) * point->Y());
@@ -3762,9 +3854,20 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         && sketchPreviewTool_ != SketchPreviewTool::Extend) {
         const auto point = sketchPointAtScreen(currentPosition);
         if (point && sketchPreviewTool_ != SketchPreviewTool::None) {
+            if (sketchPreviewTool_ == SketchPreviewTool::Rectangle
+                && sketchMouseMovedHandler_) {
+                sketchMouseMovedHandler_(*point, sketchLocalToleranceFromPixels(
+                    currentPosition, SketchTrimHitPixels));
+            }
             gp_Pnt current = sketchOrigin_;
             current.Translate(gp_Vec(sketchXDirection_) * point->X()
                 + gp_Vec(sketchYDirection_) * point->Y());
+            if (sketchPreviewTool_ == SketchPreviewTool::Rectangle
+                && sketchPreviewPointOverride_) {
+                current = sketchWorldPoint(
+                    {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_},
+                    *sketchPreviewPointOverride_);
+            }
             const auto shape = makeSketchPreviewShape(
                 {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_},
                 *sketchPreviewFirstPoint_, current, sketchPreviewTool_,
@@ -4008,6 +4111,7 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
     if (sketchMode_ && event->key() == Qt::Key_Escape) {
         sketchPreviewFirstPoint_.reset();
         sketchPreviewSecondPoint_.reset();
+        sketchPreviewPointOverride_.reset();
         if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
             context_->Remove(sketchPreviewObject_, Standard_True);
         }
