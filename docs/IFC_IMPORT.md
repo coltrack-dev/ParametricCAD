@@ -54,32 +54,44 @@ OCCT headers and libraries. The complete IfcOpenShell source is not vendored.
 The verified build used GCC 13.3.0, `/usr/include/opencascade`, and
 `/usr/lib/x86_64-linux-gnu`; it produced `libIfcGeom.so`, `libIfcParse.so`,
 `libIfcGeom_ifc2x3.a`, and `libIfcGeom_ifc4.a` against that same OCCT runtime.
-IFC support is opt-in:
+IFC support is enabled by default for the canonical Linux development build.
+Use the repository scripts so the configured and launched binary always come
+from `build/`:
+
+```bash
+./configure.sh
+./run.sh
+```
+
+For a manual configure, use:
 
 ```text
-cmake -S . -B build-ifc -G Ninja \
+cmake -S . -B build -G Ninja \
   -DPARAMETRIC_CAD_ENABLE_IFC=ON \
   -DPARAMETRIC_CAD_IFCOPENSHELL_ROOT=/path/to/ifcopenshell-v0.7.1-install
 ```
 
+`build-ifc/` is obsolete as a normal development directory. Keep special
+builds under explicit names such as `build-asan` or `build-release`.
+
 The external build must expose `IfcGeom`, `IfcParse`, `IfcGeom_ifc2x3`, and
 `IfcGeom_ifc4`, and must use the same compiler ABI and OCCT 7.6.3 build. The
-default build has no IfcOpenShell or Python runtime dependency and reports a
-structured diagnostic if IFC support is unavailable.
+A build with IFC explicitly disabled has no IfcOpenShell or Python runtime
+dependency and reports a structured diagnostic if IFC support is unavailable.
 
 When IFC is explicitly enabled, CMake requires these headers and libraries and
 fails during configuration with an actionable error if they are missing. The
 verified developer commands are:
 
 ```text
-cmake -S . -B build-ifc -G Ninja \
+cmake -S . -B build -G Ninja \
   -DPARAMETRIC_CAD_ENABLE_IFC=ON \
   -DPARAMETRIC_CAD_IFCOPENSHELL_ROOT=/tmp/ifcopenshell-v071-install
-cmake --build build-ifc -j
+cmake --build build -j
 LD_LIBRARY_PATH=/tmp/ifcopenshell-v071-install/lib \
-  ./build-ifc/tests/ifc_import_tests
+  ./build/tests/ifc_import_tests
 LD_LIBRARY_PATH=/tmp/ifcopenshell-v071-install/lib \
-  ./build-ifc/tests/ifc_building_acceptance
+  ./build/tests/ifc_building_acceptance
 ```
 
 ## Geometry, placement, and units

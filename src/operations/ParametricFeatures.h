@@ -37,6 +37,7 @@ struct SketchLine
     gp_Pnt2d start;
     gp_Pnt2d end;
     SketchEntityId id;
+    bool construction{false};
 };
 
 struct SketchCircle
@@ -44,6 +45,7 @@ struct SketchCircle
     gp_Pnt2d center;
     double radius{0.0};
     SketchEntityId id;
+    bool construction{false};
 };
 
 struct SketchArc
@@ -54,6 +56,7 @@ struct SketchArc
     double endAngle{0.0};
     bool clockwise{false};
     SketchEntityId id;
+    bool construction{false};
 
     gp_Pnt2d startPoint() const;
     gp_Pnt2d endPoint() const;
@@ -210,6 +213,7 @@ public:
     void removeLastEntity();
     void replaceEntities(std::size_t index, std::size_t count,
                          std::vector<SketchEntity> replacements);
+    void setEntityConstruction(const SketchEntityId& entityId, bool construction);
     const std::vector<SketchConstraint>& constraints() const noexcept;
     std::size_t constraintCount() const noexcept;
     void setConstraints(std::vector<SketchConstraint> constraints);

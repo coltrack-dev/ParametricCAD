@@ -173,14 +173,36 @@ ModelingResult ModelingController::createSketchOnFace(
 }
 
 ModelingResult ModelingController::addSketchLine(
-    const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end)
+    const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
+    const bool construction)
 {
     const auto feature = body_.findFeature(sketchId);
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
     if (!sketch) return {false, {}, "Active Sketch does not exist"};
     try {
         undoStack_.push(new cad::commands::AddSketchEntityCommand(
-            body_, sketch, cad::parametric::SketchLine{start, end}));
+            body_, sketch, cad::parametric::SketchLine{start, end, {}, construction}));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::toggleSketchEntityConstruction(
+    const std::string& sketchId, const std::string& entityId)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    const auto found = std::find_if(sketch->entities().begin(), sketch->entities().end(),
+        [&entityId](const auto& entity) {
+            return std::visit([&entityId](const auto& value) { return value.id == entityId; }, entity);
+        });
+    if (found == sketch->entities().end()) return {false, {}, "Sketch entity does not exist"};
+    const bool before = std::visit([](const auto& value) { return value.construction; }, *found);
+    try {
+        undoStack_.push(new cad::commands::ToggleSketchEntityConstructionCommand(
+            body_, sketch, entityId, before, !before));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);

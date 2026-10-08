@@ -59,6 +59,25 @@ private:
     parametric::SketchEntity entity_;
 };
 
+class ToggleSketchEntityConstructionCommand final : public QUndoCommand
+{
+public:
+    ToggleSketchEntityConstructionCommand(parametric::Body& body,
+                                           std::shared_ptr<parametric::SketchFeature> sketch,
+                                           parametric::SketchEntityId entityId,
+                                           bool before, bool after);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(bool construction);
+    parametric::Body& body_;
+    std::shared_ptr<parametric::SketchFeature> sketch_;
+    parametric::SketchEntityId entityId_;
+    bool before_;
+    bool after_;
+};
+
 class TrimSketchEntityCommand final : public QUndoCommand
 {
 public:

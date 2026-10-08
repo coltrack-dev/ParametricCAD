@@ -33,7 +33,10 @@ public:
     ModelingResult createSketch();
     ModelingResult createSketchOnFace(const SelectionSnapshot& selection);
     ModelingResult addSketchLine(
-        const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end);
+        const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
+        bool construction = false);
+    ModelingResult toggleSketchEntityConstruction(
+        const std::string& sketchId, const std::string& entityId);
     ModelingResult addSketchCircle(
         const std::string& sketchId, const gp_Pnt2d& center, double radius);
     ModelingResult addSketchArc(

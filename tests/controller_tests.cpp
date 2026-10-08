@@ -372,6 +372,65 @@ private slots:
         QVERIFY(volume(pocketController.body().findFeature(pocket.id)->shape()) < boxVolume);
     }
 
+    void constructionGeometryDoesNotAffectProfilesAndIsPersistent()
+    {
+        ModelingController controller;
+        const auto sketch = controller.createSketch();
+        QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0.0, -10.0}, {20.0, -10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20.0, -10.0}, {20.0, 10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20.0, 10.0}, {0.0, 10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0.0, 10.0}, {0.0, -10.0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0.0, -30.0}, {0.0, 30.0}).success);
+        const auto feature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketch.id));
+        QVERIFY(feature);
+        const auto axisId = std::get<SketchLine>(feature->entities().back()).id;
+        QVERIFY(controller.toggleSketchEntityConstruction(sketch.id, axisId).success);
+        QCOMPARE(std::get<SketchLine>(feature->entities().back()).id, axisId);
+        QVERIFY(std::get<SketchLine>(feature->entities().back()).construction);
+        QCOMPARE(cad::operations::SketchProfileBuilder::build(*feature).faces.size(), std::size_t{1});
+
+        controller.undo();
+        QVERIFY(!std::get<SketchLine>(feature->entities().back()).construction);
+        QVERIFY_EXCEPTION_THROWN(cad::operations::SketchProfileBuilder::build(*feature),
+            std::runtime_error);
+        controller.redo();
+        QVERIFY(std::get<SketchLine>(feature->entities().back()).construction);
+        QVERIFY(controller.createExtrudeFromSketch({{
+            {sketch.id, SelectionKind::Object, std::nullopt}}}, 5.0).success);
+
+        cad::parametric::RevolveAxisDefinition axis;
+        axis.type = RevolveAxisType::SketchLine;
+        axis.sketchFeatureId = sketch.id;
+        axis.sketchLineId = axisId;
+        const auto revolve = controller.createRevolve({{
+            {sketch.id, SelectionKind::Object, std::nullopt}}}, axis, 180.0);
+        QVERIFY2(revolve.success, qPrintable(QString::fromStdString(revolve.error)));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("construction.pcad");
+        QVERIFY2(ProjectFile::save(path, controller.document(), controller.body(), error),
+            qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error),
+            qPrintable(error));
+        const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+            loadedBody.findFeature(sketch.id));
+        QVERIFY(loadedSketch);
+        const auto loadedAxis = std::find_if(loadedSketch->entities().begin(),
+            loadedSketch->entities().end(), [&axisId](const auto& entity) {
+                return std::visit([&axisId](const auto& value) { return value.id == axisId; }, entity);
+            });
+        QVERIFY(loadedAxis != loadedSketch->entities().end());
+        QVERIFY(std::visit([](const auto& value) { return value.construction; }, *loadedAxis));
+        QCOMPARE(cad::operations::SketchProfileBuilder::build(*loadedSketch).faces.size(),
+            std::size_t{1});
+    }
+
     void sketchArcMixedProfileIsParametricAndPersistent()
     {
         ModelingController controller;

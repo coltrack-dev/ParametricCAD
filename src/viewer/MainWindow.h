@@ -179,6 +179,8 @@ private:
     QAction* sketchOnFaceAction_{nullptr};
     QAction* editSketchAction_{nullptr};
     QAction* sketchLineAction_{nullptr};
+    QAction* sketchConstructionAction_{nullptr};
+    QAction* toggleSketchConstructionAction_{nullptr};
     QAction* sketchCircleAction_{nullptr};
     QAction* sketchArcAction_{nullptr};
     QAction* sketchRectangleAction_{nullptr};

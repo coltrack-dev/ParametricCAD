@@ -201,6 +201,26 @@ void AddSketchEntityCommand::undo()
     body_.recompute();
 }
 
+ToggleSketchEntityConstructionCommand::ToggleSketchEntityConstructionCommand(
+    parametric::Body& body, std::shared_ptr<parametric::SketchFeature> sketch,
+    parametric::SketchEntityId entityId, const bool before, const bool after)
+    : QUndoCommand("Toggle Sketch Construction"), body_(body), sketch_(std::move(sketch)),
+      entityId_(std::move(entityId)), before_(before), after_(after)
+{
+    if (!sketch_ || body_.findFeature(sketch_->id()) != sketch_)
+        throw std::invalid_argument("Construction command requires an active sketch");
+}
+
+void ToggleSketchEntityConstructionCommand::apply(const bool construction)
+{
+    sketch_->setEntityConstruction(entityId_, construction);
+    body_.markDirtyFrom(sketch_->id());
+    if (!body_.recompute()) throw std::runtime_error(body_.lastError());
+}
+
+void ToggleSketchEntityConstructionCommand::redo() { apply(after_); }
+void ToggleSketchEntityConstructionCommand::undo() { apply(before_); }
+
 DuplicateFeatureCommand::DuplicateFeatureCommand(
     parametric::Body& body,
     parametric::ParametricFeature::Ptr feature,

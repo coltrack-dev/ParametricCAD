@@ -247,13 +247,13 @@ TrimPlan SketchTrimService::analyzeTrim(const cad::parametric::SketchFeature& sk
         result.preview = {result.entityIndex, spanStart, spanEnd};
         result.removedEntities.push_back(cad::parametric::SketchArc{
             circle.center, circle.radius, spanStart * twoPi,
-            (spanEnd > 1.0 ? spanEnd - 1.0 : spanEnd) * twoPi, false});
+            (spanEnd > 1.0 ? spanEnd - 1.0 : spanEnd) * twoPi, false, {}, circle.construction});
         for (std::size_t i = 0; i < boundaries.size(); ++i) {
             const double start = boundaries[i], end = i + 1 < boundaries.size() ? boundaries[i + 1] : boundaries.front() + 1.0;
             if (i == interval) continue;
             const double normalizedEnd = end > 1.0 ? end - 1.0 : end;
             result.replacements.push_back(cad::parametric::SketchArc{circle.center, circle.radius,
-                start * twoPi, normalizedEnd * twoPi, false});
+                start * twoPi, normalizedEnd * twoPi, false, {}, circle.construction});
         }
     } else {
         boundaries.insert(boundaries.begin(), 0.0); boundaries.push_back(1.0);
@@ -265,10 +265,12 @@ TrimPlan SketchTrimService::analyzeTrim(const cad::parametric::SketchFeature& sk
             const auto removedStart = pointAt(*line, boundaries[interval]);
             const auto removedEnd = pointAt(*line, boundaries[interval + 1]);
             if (removedStart.Distance(removedEnd) > minimumLength)
-                result.removedEntities.push_back(cad::parametric::SketchLine{removedStart, removedEnd});
+                result.removedEntities.push_back(cad::parametric::SketchLine{
+                    removedStart, removedEnd, {}, line->construction});
             for (std::size_t i = 0; i + 1 < boundaries.size(); ++i) if (i != interval) {
                 const auto a = pointAt(*line, boundaries[i]), b = pointAt(*line, boundaries[i + 1]);
-                if (a.Distance(b) > minimumLength) result.replacements.push_back(cad::parametric::SketchLine{a, b});
+                if (a.Distance(b) > minimumLength) result.replacements.push_back(
+                    cad::parametric::SketchLine{a, b, {}, line->construction});
             }
         } else {
             const auto& arc = std::get<cad::parametric::SketchArc>(target);
@@ -278,13 +280,14 @@ TrimPlan SketchTrimService::analyzeTrim(const cad::parametric::SketchFeature& sk
                 result.removedEntities.push_back(cad::parametric::SketchArc{
                     arc.center, arc.radius,
                     arc.startAngle + arcSweep(arc) * boundaries[interval],
-                    arc.startAngle + removedSweep, arc.clockwise});
+                    arc.startAngle + removedSweep, arc.clockwise, {}, arc.construction});
             }
             for (std::size_t i = 0; i + 1 < boundaries.size(); ++i) if (i != interval) {
                 const double sweep = arcSweep(arc) * (boundaries[i + 1] - boundaries[i]);
                 if (std::abs(sweep) > tolerance) result.replacements.push_back(cad::parametric::SketchArc{
                     arc.center, arc.radius, arc.startAngle + arcSweep(arc) * boundaries[i],
-                    arc.startAngle + arcSweep(arc) * boundaries[i + 1], arc.clockwise});
+                    arc.startAngle + arcSweep(arc) * boundaries[i + 1], arc.clockwise,
+                    {}, arc.construction});
             }
         }
     }

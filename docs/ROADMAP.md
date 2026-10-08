@@ -73,7 +73,7 @@ for the scope that is actually implemented in the application.
 ## Verification
 
 ```bash
-cmake -S . -B build -G Ninja
+./configure.sh
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```

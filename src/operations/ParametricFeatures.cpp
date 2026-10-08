@@ -490,6 +490,7 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             writePoint2d(end, line->end);
             value.insert("start", start);
             value.insert("end", end);
+            value.insert("construction", line->construction);
         } else if (const auto* circle = std::get_if<SketchCircle>(&entity)) {
             value.insert("type", "Circle");
             value.insert("id", QString::fromStdString(circle->id));
@@ -497,6 +498,7 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             writePoint2d(center, circle->center);
             value.insert("center", center);
             value.insert("radius", circle->radius);
+            value.insert("construction", circle->construction);
         } else {
             const auto& arc = std::get<SketchArc>(entity);
             value.insert("type", "Arc");
@@ -508,6 +510,7 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             value.insert("startAngle", arc.startAngle);
             value.insert("endAngle", arc.endAngle);
             value.insert("clockwise", arc.clockwise);
+            value.insert("construction", arc.construction);
         }
         entities.append(value);
     }
@@ -726,6 +729,21 @@ void SketchFeature::replaceEntities(const std::size_t index, const std::size_t c
                      std::make_move_iterator(replacements.begin()),
                      std::make_move_iterator(replacements.end()));
     markDirty();
+}
+
+void SketchFeature::setEntityConstruction(const SketchEntityId& entityId,
+                                           const bool construction)
+{
+    for (auto& entity : entities_) {
+        const bool matches = std::visit([&entityId](const auto& value) {
+            return value.id == entityId;
+        }, entity);
+        if (!matches) continue;
+        std::visit([construction](auto& value) { value.construction = construction; }, entity);
+        markDirty();
+        return;
+    }
+    throw std::out_of_range("Sketch entity does not exist");
 }
 
 bool SketchFeature::isPlanarFace(const TopoDS_Shape& shape) noexcept

@@ -1017,6 +1017,15 @@ void MainWindow::updateActionState()
     if (editSketchAction_) editSketchAction_->setEnabled(
         state.canEditSketch && activeSketchId_.empty());
     if (sketchOnFaceAction_) sketchOnFaceAction_->setEnabled(state.canSketchOnFace);
+    if (toggleSketchConstructionAction_) {
+        const bool sketchEdge = currentSelection_.items.size() == 1
+            && currentSelection_.items.front().kind == cad::application::SelectionKind::Edge
+            && currentSelection_.items.front().subshapeIndex
+            && modeling_.body().findFeature(currentSelection_.items.front().featureId)
+            && modeling_.body().findFeature(currentSelection_.items.front().featureId)->role()
+                == cad::parametric::FeatureRole::Sketch;
+        toggleSketchConstructionAction_->setEnabled(sketchEdge && activeSketchId_.empty());
+    }
     if (linearPatternAction_) linearPatternAction_->setEnabled(selectedIds().size() == 1);
     if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
     if (filletAction_) filletAction_->setEnabled(state.canFillet);
@@ -1162,6 +1171,24 @@ void MainWindow::createActions()
     sketchLineAction_ = modelingMenu->addAction("Sketch Line");
     sketchLineAction_->setEnabled(false);
     connect(sketchLineAction_, &QAction::triggered, this, &MainWindow::selectSketchLineTool);
+    sketchConstructionAction_ = modelingMenu->addAction("Construction Line");
+    sketchConstructionAction_->setCheckable(true);
+    sketchConstructionAction_->setEnabled(false);
+    sketchConstructionAction_->setToolTip("Draw subsequent lines as construction geometry");
+    toggleSketchConstructionAction_ = modelingMenu->addAction("Toggle Construction");
+    toggleSketchConstructionAction_->setEnabled(false);
+    connect(toggleSketchConstructionAction_, &QAction::triggered, this, [this]() {
+        if (currentSelection_.items.size() != 1) return;
+        cad::parametric::RevolveAxisDefinition axis;
+        const auto& item = currentSelection_.items.front();
+        const auto resolved = modeling_.resolveRevolveAxis(item.featureId, currentSelection_, axis);
+        if (!resolved.success) {
+            statusBar()->showMessage(QString::fromStdString(resolved.error), 3000);
+            return;
+        }
+        reportResult(modeling_.toggleSketchEntityConstruction(
+            item.featureId, axis.sketchLineId));
+    });
     sketchCircleAction_ = modelingMenu->addAction("Sketch Circle");
     sketchCircleAction_->setEnabled(false);
     connect(sketchCircleAction_, &QAction::triggered, this, &MainWindow::selectSketchCircleTool);
@@ -1352,6 +1379,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
             frame.yDirection, frame.normal, QString::fromStdString(sketchId));
         viewer_->setSketchConstraintMarkers(*sketch);
         sketchLineAction_->setEnabled(true);
+        sketchConstructionAction_->setEnabled(true);
         sketchCircleAction_->setEnabled(true);
         sketchArcAction_->setEnabled(true);
         sketchRectangleAction_->setEnabled(true);
@@ -1390,6 +1418,8 @@ void MainWindow::finishSketch()
     constraintFirstPoint_.reset();
     selectedConstraintId_.clear();
     sketchLineAction_->setEnabled(false);
+    sketchConstructionAction_->setEnabled(false);
+    sketchConstructionAction_->setChecked(false);
     sketchCircleAction_->setEnabled(false);
     sketchArcAction_->setEnabled(false);
     sketchRectangleAction_->setEnabled(false);
@@ -1757,7 +1787,8 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     sketchSecondPoint_.reset();
     cad::application::ModelingResult result;
     if (sketchTool_ == SketchTool::Line) {
-        result = modeling_.addSketchLine(activeSketchId_, first, point);
+        result = modeling_.addSketchLine(activeSketchId_, first, point,
+            sketchConstructionAction_ && sketchConstructionAction_->isChecked());
     } else if (sketchTool_ == SketchTool::Circle) {
         result = modeling_.addSketchCircle(activeSketchId_, first, first.Distance(point));
     } else if (sketchTool_ == SketchTool::Arc) {

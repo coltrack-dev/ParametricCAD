@@ -395,6 +395,7 @@ SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& 
     std::vector<cad::parametric::SketchCircle> circles;
     for (const auto& entity : sketch.entities()) {
         if (const auto* line = std::get_if<cad::parametric::SketchLine>(&entity)) {
+            if (line->construction) continue;
             if (distanceSquared2d(line->start, line->end)
                 <= endpointTolerance * endpointTolerance) {
                 throw std::runtime_error("Sketch profile contains a zero-length edge");
@@ -405,9 +406,11 @@ SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& 
             lineItems.push_back({edgeBuilder.Edge(), line->start, line->end,
                 {line->start, line->end}});
         } else if (const auto* arc = std::get_if<cad::parametric::SketchArc>(&entity)) {
+            if (arc->construction) continue;
             lineItems.push_back(arcEdgeItem(frame, *arc));
         } else {
             const auto circle = std::get<cad::parametric::SketchCircle>(entity);
+            if (circle.construction) continue;
             if (!std::isfinite(circle.radius) || circle.radius <= endpointTolerance) {
                 throw std::runtime_error("Sketch circle radius must be greater than zero");
             }

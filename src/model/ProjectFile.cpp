@@ -499,12 +499,14 @@ std::vector<SketchEntity> sketchEntities(const QJsonObject& object)
                  entity.value("start").toArray().at(1).toDouble()},
                 {entity.value("end").toArray().at(0).toDouble(),
                  entity.value("end").toArray().at(1).toDouble()},
-                entity.value("id").toString().toStdString()});
+                entity.value("id").toString().toStdString(),
+                entity.value("construction").toBool(false)});
         } else if (type == "Circle") {
             result.push_back(SketchCircle{
                 {entity.value("center").toArray().at(0).toDouble(),
                  entity.value("center").toArray().at(1).toDouble()},
-                number(entity, "radius"), entity.value("id").toString().toStdString()});
+                number(entity, "radius"), entity.value("id").toString().toStdString(),
+                entity.value("construction").toBool(false)});
         } else if (type == "Arc") {
             result.push_back(SketchArc{
                 {entity.value("center").toArray().at(0).toDouble(),
@@ -512,7 +514,8 @@ std::vector<SketchEntity> sketchEntities(const QJsonObject& object)
                 number(entity, "radius"),
                 number(entity, "startAngle"),
                 number(entity, "endAngle"),
-                boolean(entity, "clockwise"), entity.value("id").toString().toStdString()});
+                boolean(entity, "clockwise"), entity.value("id").toString().toStdString(),
+                entity.value("construction").toBool(false)});
         } else {
             throw std::invalid_argument("Unsupported sketch entity type");
         }

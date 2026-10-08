@@ -148,19 +148,26 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 - Open CASCADE Technology, including visualization and modeling libraries;
 - TBB may be pulled by the OCCT installation, depending on the platform.
 
-Configure, build, and test:
+Linux development uses one canonical build tree. IFC support is enabled in the
+default development configuration, and the scripts below always build and run
+the matching binary from `build/`:
 
 ```bash
-cmake -S . -B build -G Ninja
-cmake --build build -j
+./configure.sh   # first time or after changing dependencies/options
+./run.sh         # rebuild and run build/src/ParametricCAD
+```
+
+To run the tests separately:
+
+```bash
 ctest --test-dir build --output-on-failure
 ```
 
-Run the application:
-
-```bash
-./build/src/ParametricCAD
-```
+The old `build-ifc/` directory is not a normal development target. If it is
+the only correctly configured tree on an existing checkout, migrate it once
+with `mv build-ifc build` (after moving or removing the old `build/` directory)
+or regenerate `build/` with `./configure.sh`. The scripts never delete build
+directories automatically.
 
 The test suite is headless where possible. GUI camera, clipping, and
 interaction checks require a desktop session.

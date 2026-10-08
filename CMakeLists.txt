@@ -13,7 +13,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 option(PARAMETRIC_CAD_BUILD_TESTS "Build unit tests" ON)
-option(PARAMETRIC_CAD_ENABLE_IFC "Enable the optional pinned IfcOpenShell adapter" OFF)
+option(PARAMETRIC_CAD_ENABLE_IFC "Enable the pinned IfcOpenShell adapter" ON)
 
 set(PARAMETRIC_CAD_IFCOPENSHELL_ROOT "" CACHE PATH
     "Root of a separately built IfcOpenShell v0.7.1 installation")

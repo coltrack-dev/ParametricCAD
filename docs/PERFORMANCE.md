@@ -73,7 +73,7 @@ The viewer has opt-in diagnostics for large-model investigations. Start the
 IFC-enabled application with:
 
 ```bash
-PARAMETRIC_CAD_PERF=1 ./build-ifc/src/ParametricCAD
+PARAMETRIC_CAD_PERF=1 ./build/src/ParametricCAD
 ```
 
 This reports the OpenGL vendor/renderer/version when available, AIS and
