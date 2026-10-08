@@ -146,10 +146,13 @@ private slots:
         QVERIFY(controller.addSketchLine(attached.id, {20, 0}, {20, 10}).success);
         QVERIFY(controller.addSketchLine(attached.id, {20, 10}, {0, 10}).success);
         QVERIFY(controller.addSketchLine(attached.id, {0, 10}, {0, 0}).success);
+        QVERIFY(controller.addSketchLine(attached.id, {0, -10}, {0, 20}, true).success);
         QVERIFY(controller.actionState({attached.id}).canExtrude);
+        QVERIFY(controller.actionState({attached.id}).canRevolve);
         const auto attachedSelection = SelectionSnapshot{{
             {attached.id, SelectionKind::Object, std::nullopt}}};
         QVERIFY(controller.actionState(attachedSelection).canExtrude);
+        QVERIFY(controller.actionState(attachedSelection).canRevolve);
         const auto extrude = controller.createExtrudeFromSketch(attachedSelection, 5.0);
         QVERIFY2(extrude.success, qPrintable(QString::fromStdString(extrude.error)));
         QVERIFY(!controller.body().findFeature(extrude.id)->shape().IsNull());
@@ -390,9 +393,13 @@ private slots:
         QCOMPARE(std::get<SketchLine>(feature->entities().back()).id, axisId);
         QVERIFY(std::get<SketchLine>(feature->entities().back()).construction);
         QCOMPARE(cad::operations::SketchProfileBuilder::build(*feature).faces.size(), std::size_t{1});
+        QVERIFY(controller.actionState({sketch.id}).canRevolve);
+        QVERIFY(controller.actionState(SelectionSnapshot{{
+            {sketch.id, SelectionKind::Object, std::nullopt}}}).canRevolve);
 
         controller.undo();
         QVERIFY(!std::get<SketchLine>(feature->entities().back()).construction);
+        QVERIFY(!controller.actionState({sketch.id}).canRevolve);
         QVERIFY_EXCEPTION_THROWN(cad::operations::SketchProfileBuilder::build(*feature),
             std::runtime_error);
         controller.redo();

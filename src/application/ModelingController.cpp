@@ -1395,13 +1395,15 @@ ModelingActionState ModelingController::actionState(
         if (feature && feature->role() == cad::parametric::FeatureRole::Sketch) {
             const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
             std::string profileError;
-            state.canExtrude = sketch && validateSketchProfile(*sketch, profileError);
+            const bool profileValid = sketch && validateSketchProfile(*sketch, profileError);
+            state.canExtrude = profileValid;
             state.canPocket = sketch && sketch->supportType() == cad::parametric::SketchSupportType::Face
                 && sketch->faceReference()
                 && body_.findFeature(sketch->faceReference()->featureId);
             if (state.canPocket) {
-                state.canPocket = validateSketchProfile(*sketch, profileError);
+                state.canPocket = profileValid;
             }
+            state.canRevolve = profileValid;
         }
     }
     return state;
@@ -1415,6 +1417,7 @@ ModelingActionState ModelingController::actionState(
     if (selection.items.size() != 1
         || selection.items.front().kind != SelectionKind::Object) {
         state.canExtrude = false;
+        state.canRevolve = false;
     }
     if (!selection.items.empty()) {
         const auto& first = selection.items.front();
@@ -1433,13 +1436,6 @@ ModelingActionState ModelingController::actionState(
             const auto source = body_.findFeature(selection.featureIds().front());
         state.canShell = source && !source->shape().IsNull()
                 && source->role() != cad::parametric::FeatureRole::Sketch;
-        }
-        const auto feature = body_.findFeature(selection.featureIds().front());
-        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
-        if (sketch && selection.items.size() == 1
-            && selection.items.front().kind == SelectionKind::Object) {
-            std::string profileError;
-            state.canRevolve = validateSketchProfile(*sketch, profileError);
         }
         if (selection.items.size() == 1 && first.kind == SelectionKind::Face
             && first.subshapeIndex && !first.featureId.empty()) {

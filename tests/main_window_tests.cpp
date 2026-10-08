@@ -4,9 +4,13 @@
 
 #define private public
 #include "viewer/MainWindow.h"
+#include "viewer/FeatureEditorPanel.h"
 #undef private
 #include "viewer/CadViewer.h"
 #include "viewer/SketchEntityPicker.h"
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
+#include <QMouseEvent>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -153,6 +157,145 @@ private slots:
         QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
         window.applySelection({QString::fromStdString(sketch.id)});
         QVERIFY(window.revolveAction_->isEnabled());
+    }
+
+    void finishedSketchWithConstructionLineEnablesVisibleRevolveAction()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("OCCT CadViewer requires an X display for MainWindow tests");
+        }
+        MainWindow window;
+        const auto sketch = window.modeling_.createSketch();
+        QVERIFY(sketch.success);
+        window.refreshModelView();
+        window.enterSketchEditing(sketch.id);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, -10}, {0, 20}, true).success);
+
+        window.finishSketch();
+
+        QTreeWidgetItem* sketchItem = nullptr;
+        for (QTreeWidgetItemIterator iterator(window.featureEditorPanel_->tree_);
+             *iterator; ++iterator) {
+            if ((*iterator)->data(0, Qt::UserRole + 1).toString()
+                == QString::fromStdString(sketch.id)) {
+                sketchItem = *iterator;
+                break;
+            }
+        }
+        QVERIFY(sketchItem != nullptr);
+        window.featureEditorPanel_->tree_->clearSelection();
+        sketchItem->setSelected(true);
+        window.featureEditorPanel_->tree_->setCurrentItem(sketchItem);
+        QCoreApplication::processEvents();
+        QVERIFY(window.revolveAction_->isEnabled());
+    }
+
+    void constructionToggleActionMarksSelectedSketchLine()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("OCCT CadViewer requires an X display for MainWindow tests");
+        }
+        MainWindow window;
+        const auto sketch = window.modeling_.createSketch();
+        QVERIFY(sketch.success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
+        const auto separateLine = window.modeling_.addSketchLine(
+            sketch.id, {0, -10}, {0, 20});
+        QVERIFY(separateLine.success);
+        const auto sketchFeature = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(sketchFeature);
+        const auto lineId = std::get<cad::parametric::SketchLine>(
+            sketchFeature->entities().back()).id;
+
+        std::optional<std::size_t> edgeIndex;
+        for (std::size_t index = 1; index <= 16; ++index) {
+            cad::parametric::RevolveAxisDefinition axis;
+            const auto resolved = window.modeling_.resolveRevolveAxis(
+                sketch.id,
+                cad::application::SelectionSnapshot{{
+                    {sketch.id, cad::application::SelectionKind::Edge, index}}},
+                axis);
+            if (resolved.success && axis.sketchLineId == lineId) {
+                edgeIndex = index;
+                break;
+            }
+        }
+        QVERIFY(edgeIndex.has_value());
+
+        window.applySelectionSnapshot(cad::application::SelectionSnapshot{{
+            {sketch.id, cad::application::SelectionKind::Edge, edgeIndex}}}, false);
+        QVERIFY(window.sketchConstructionAction_->isEnabled());
+        QVERIFY(!window.sketchConstructionAction_->isChecked());
+        window.sketchConstructionAction_->trigger();
+
+        const auto updated = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(updated);
+        QCOMPARE(std::get<cad::parametric::SketchLine>(updated->entities().back()).id, lineId);
+        QVERIFY(std::get<cad::parametric::SketchLine>(updated->entities().back()).construction);
+        window.applySelection({QString::fromStdString(sketch.id)});
+        QVERIFY(window.revolveAction_->isEnabled());
+    }
+
+    void sketchLineAxisPickerConsumesClickAndCreatesRevolve()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("OCCT CadViewer requires an X display for MainWindow tests");
+        }
+        MainWindow window;
+        window.show();
+        QCoreApplication::processEvents();
+        const auto sketch = window.modeling_.createSketch();
+        QVERIFY(sketch.success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, -10}, {0, 20}, true).success);
+        window.refreshModelView(false);
+        window.applySelection({QString::fromStdString(sketch.id)});
+        const auto sketchFeature = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(sketchFeature);
+        const auto axisId = std::get<cad::parametric::SketchLine>(
+            sketchFeature->entities().back()).id;
+
+        window.beginRevolveAxisPick(QString::fromStdString(sketch.id), "SketchLine", false);
+        QVERIFY(window.revolveAxisPicking_);
+        QPoint hit;
+        for (int y = 0; y < window.viewer_->height() && hit.isNull(); y += 2) {
+            for (int x = 0; x < window.viewer_->width(); x += 2) {
+                if (window.viewer_->sketchLineAtScreen({x, y}) == axisId) {
+                    hit = {x, y};
+                    break;
+                }
+            }
+        }
+        QVERIFY(!hit.isNull());
+        QMouseEvent event(QEvent::MouseButtonPress, QPointF(hit), QPointF(hit),
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        window.viewer_->mousePressEvent(&event);
+        QCoreApplication::processEvents();
+
+        QVERIFY(!window.revolveAxisPicking_);
+        std::shared_ptr<cad::parametric::RevolveFeature> revolve;
+        for (const auto& feature : window.modeling_.body().features()) {
+            revolve = std::dynamic_pointer_cast<cad::parametric::RevolveFeature>(feature);
+            if (revolve) break;
+        }
+        QVERIFY(revolve);
+        QVERIFY(!revolve->shape().IsNull());
+        QCOMPARE(revolve->axisDefinition().type,
+            cad::parametric::RevolveAxisType::SketchLine);
+        QCOMPARE(revolve->axisDefinition().sketchLineId, axisId);
     }
 
     void cancellingAxisPickPreservesRevolveSession()

@@ -10,6 +10,7 @@
 #include "operations/SketchExtendService.h"
 #include "operations/SketchConstraintSolver.h"
 #include "operations/ImportedFeature.h"
+#include "operations/SketchProfileBuilder.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -32,11 +33,44 @@
 #include <QToolBar>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+#include <cstdio>
+#include <type_traits>
 
 namespace
 {
 constexpr int ModelPanelWidth = 320;
 constexpr qint64 ProjectLoadTimeBudgetMs = 30;
+
+void traceActionState(const char* event, const QString& details)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) return;
+    static unsigned long long sequence = 0;
+    const auto text = details.toUtf8();
+    std::fprintf(stderr, "[ACTION %llu] %s %s\n", ++sequence, event, text.constData());
+    std::fflush(stderr);
+}
+
+void traceSketchEntities(const char* event, const cad::parametric::SketchFeature& sketch)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) return;
+    QString details = QString("sketch=%1 entityCount=%2")
+        .arg(QString::fromStdString(sketch.id()))
+        .arg(static_cast<int>(sketch.entities().size()));
+    for (const auto& entity : sketch.entities()) {
+        std::visit([&details](const auto& value) {
+            using Entity = std::decay_t<decltype(value)>;
+            const char* type = "Unknown";
+            if constexpr (std::is_same_v<Entity, cad::parametric::SketchLine>) type = "Line";
+            else if constexpr (std::is_same_v<Entity, cad::parametric::SketchCircle>) type = "Circle";
+            else if constexpr (std::is_same_v<Entity, cad::parametric::SketchArc>) type = "Arc";
+            details += QString(" [%1 id=%2 construction=%3]")
+                .arg(type)
+                .arg(QString::fromStdString(value.id))
+                .arg(value.construction);
+        }, entity);
+    }
+    traceActionState(event, details);
+}
 
 std::string pointRoleText(const cad::parametric::SketchPointRole role)
 {
@@ -947,6 +981,10 @@ void MainWindow::applySelection(
     const bool updateViewer
 )
 {
+    traceActionState("applySelection", QString("ids=%1 updateViewer=%2 activeSketch=%3")
+        .arg(featureIds.join(','))
+        .arg(updateViewer)
+        .arg(QString::fromStdString(activeSketchId_)));
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
@@ -978,6 +1016,10 @@ void MainWindow::applySelectionSnapshot(
     const bool updateViewer
 )
 {
+    traceActionState("applySelectionSnapshot", QString("items=%1 updateViewer=%2 activeSketch=%3")
+        .arg(static_cast<int>(selection.items.size()))
+        .arg(updateViewer)
+        .arg(QString::fromStdString(activeSketchId_)));
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
     operationSession_.cancel();
@@ -1017,21 +1059,111 @@ void MainWindow::updateActionState()
     if (editSketchAction_) editSketchAction_->setEnabled(
         state.canEditSketch && activeSketchId_.empty());
     if (sketchOnFaceAction_) sketchOnFaceAction_->setEnabled(state.canSketchOnFace);
+    bool selectedSketchEdge = currentSelection_.items.size() == 1
+        && currentSelection_.items.front().kind == cad::application::SelectionKind::Edge
+        && currentSelection_.items.front().subshapeIndex
+        && modeling_.body().findFeature(currentSelection_.items.front().featureId)
+        && modeling_.body().findFeature(currentSelection_.items.front().featureId)->role()
+            == cad::parametric::FeatureRole::Sketch;
     if (toggleSketchConstructionAction_) {
-        const bool sketchEdge = currentSelection_.items.size() == 1
-            && currentSelection_.items.front().kind == cad::application::SelectionKind::Edge
-            && currentSelection_.items.front().subshapeIndex
-            && modeling_.body().findFeature(currentSelection_.items.front().featureId)
-            && modeling_.body().findFeature(currentSelection_.items.front().featureId)->role()
-                == cad::parametric::FeatureRole::Sketch;
-        toggleSketchConstructionAction_->setEnabled(sketchEdge && activeSketchId_.empty());
+        toggleSketchConstructionAction_->setEnabled(selectedSketchEdge && activeSketchId_.empty());
+    }
+    if (sketchConstructionAction_) {
+        sketchConstructionAction_->setEnabled(
+            !activeSketchId_.empty() || (selectedSketchEdge && activeSketchId_.empty()));
+        if (selectedSketchEdge && activeSketchId_.empty()) {
+            cad::parametric::RevolveAxisDefinition axis;
+            const auto resolved = modeling_.resolveRevolveAxis(
+                currentSelection_.items.front().featureId, currentSelection_, axis);
+            if (resolved.success) {
+                const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+                    modeling_.body().findFeature(currentSelection_.items.front().featureId));
+                if (sketch) {
+                    for (const auto& entity : sketch->entities()) {
+                        if (!std::visit([&axis](const auto& value) {
+                            return value.id == axis.sketchLineId;
+                        }, entity)) continue;
+                        sketchConstructionAction_->setChecked(std::visit(
+                            [](const auto& value) { return value.construction; }, entity));
+                        break;
+                    }
+                }
+            }
+        }
     }
     if (linearPatternAction_) linearPatternAction_->setEnabled(selectedIds().size() == 1);
     if (pathPatternAction_) pathPatternAction_->setEnabled(selectedIds().size() == 2);
     if (filletAction_) filletAction_->setEnabled(state.canFillet);
     if (chamferAction_) chamferAction_->setEnabled(state.canChamfer);
     if (shellAction_) shellAction_->setEnabled(state.canShell);
-    if (revolveAction_) revolveAction_->setEnabled(state.canRevolve);
+    if (revolveAction_) {
+        QString profileDetails = "none";
+        if (currentSelection_.items.size() == 1
+            && !currentSelection_.items.front().featureId.empty()) {
+            const auto feature = modeling_.body().findFeature(
+                currentSelection_.items.front().featureId);
+            const auto sketch = feature
+                ? std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature)
+                : nullptr;
+            if (sketch) {
+                std::size_t constructionCount = 0;
+                for (const auto& entity : sketch->entities()) {
+                    constructionCount += std::visit(
+                        [](const auto& value) { return value.construction ? 1U : 0U; }, entity);
+                }
+                std::size_t profileCount = 0;
+                try {
+                    profileCount = cad::operations::SketchProfileBuilder::build(*sketch).faces.size();
+                } catch (...) {
+                }
+                profileDetails = QString("entities=%1 construction=%2 nonConstruction=%3 profiles=%4")
+                    .arg(static_cast<int>(sketch->entities().size()))
+                    .arg(static_cast<int>(constructionCount))
+                    .arg(static_cast<int>(sketch->entities().size() - constructionCount))
+                    .arg(static_cast<int>(profileCount));
+                traceSketchEntities("revolveAction.profile", *sketch);
+            }
+        }
+        QString selectedIdsText;
+        int selectedFeatureRole = -1;
+        if (currentSelection_.items.size() == 1) {
+            const auto selectedFeature = modeling_.body().findFeature(
+                currentSelection_.items.front().featureId);
+            if (selectedFeature) selectedFeatureRole = static_cast<int>(selectedFeature->role());
+        }
+        for (const auto& id : selectedIds()) {
+            if (!selectedIdsText.isEmpty()) selectedIdsText += ',';
+            selectedIdsText += QString::fromStdString(id);
+        }
+        traceActionState("revolveAction.setEnabled", QString(
+            "enabled=%1 selectedIds=%2 primary=%3 featureRole=%4 items=%5 mode=%6 activeSketch=%7 actionState=SelectionSnapshot canRevolve=%8 profile=%9")
+            .arg(state.canRevolve)
+            .arg(selectedIdsText)
+            .arg(currentSelection_.items.empty()
+                ? QString{}
+                : QString::fromStdString(currentSelection_.items.front().featureId))
+            .arg(selectedFeatureRole)
+            .arg(static_cast<int>(currentSelection_.items.size()))
+            .arg(static_cast<int>(viewer_->selectionMode()))
+            .arg(QString::fromStdString(activeSketchId_))
+            .arg(state.canRevolve)
+            .arg(profileDetails));
+        revolveAction_->setEnabled(state.canRevolve);
+        QString associated;
+        for (auto* object : revolveAction_->associatedObjects()) {
+            const auto widget = qobject_cast<QWidget*>(object);
+            if (!widget) continue;
+            if (!associated.isEmpty()) associated += ',';
+            associated += QString("%1:%2")
+                .arg(widget->objectName().isEmpty() ? widget->metaObject()->className()
+                                                     : widget->objectName())
+                .arg(widget->isEnabled());
+        }
+        traceActionState("revolveAction.afterSetEnabled", QString(
+            "isEnabled=%1 associated=%2")
+            .arg(revolveAction_->isEnabled())
+            .arg(associated));
+    }
 }
 
 void MainWindow::reportResult(const cad::application::ModelingResult& result)
@@ -1174,21 +1306,19 @@ void MainWindow::createActions()
     sketchConstructionAction_ = modelingMenu->addAction("Construction Line");
     sketchConstructionAction_->setCheckable(true);
     sketchConstructionAction_->setEnabled(false);
-    sketchConstructionAction_->setToolTip("Draw subsequent lines as construction geometry");
+    sketchConstructionAction_->setToolTip(
+        "Construction mode for new lines, or Construction property for a selected Sketch line");
+    connect(sketchConstructionAction_, &QAction::triggered, this, [this]() {
+        if (activeSketchId_.empty()
+            && currentSelection_.items.size() == 1
+            && currentSelection_.items.front().kind == cad::application::SelectionKind::Edge) {
+            toggleSelectedSketchConstruction();
+        }
+    });
     toggleSketchConstructionAction_ = modelingMenu->addAction("Toggle Construction");
     toggleSketchConstructionAction_->setEnabled(false);
-    connect(toggleSketchConstructionAction_, &QAction::triggered, this, [this]() {
-        if (currentSelection_.items.size() != 1) return;
-        cad::parametric::RevolveAxisDefinition axis;
-        const auto& item = currentSelection_.items.front();
-        const auto resolved = modeling_.resolveRevolveAxis(item.featureId, currentSelection_, axis);
-        if (!resolved.success) {
-            statusBar()->showMessage(QString::fromStdString(resolved.error), 3000);
-            return;
-        }
-        reportResult(modeling_.toggleSketchEntityConstruction(
-            item.featureId, axis.sketchLineId));
-    });
+    connect(toggleSketchConstructionAction_, &QAction::triggered, this,
+        &MainWindow::toggleSelectedSketchConstruction);
     sketchCircleAction_ = modelingMenu->addAction("Sketch Circle");
     sketchCircleAction_->setEnabled(false);
     connect(sketchCircleAction_, &QAction::triggered, this, &MainWindow::selectSketchCircleTool);
@@ -1256,6 +1386,7 @@ void MainWindow::createActions()
     pocketAction_->setEnabled(false);
     connect(pocketAction_, &QAction::triggered, this, &MainWindow::createPocket);
     revolveAction_ = modelingMenu->addAction("Revolve");
+    traceActionState("revolveAction.created", "initial enabled=false");
     revolveAction_->setEnabled(false);
     revolveAction_->setToolTip("Revolve a Sketch profile");
     connect(revolveAction_, &QAction::triggered, this, &MainWindow::createRevolve);
@@ -1409,6 +1540,9 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
 
 void MainWindow::finishSketch()
 {
+    traceActionState("finishSketch.begin", QString("activeSketch=%1 mode=%2")
+        .arg(QString::fromStdString(activeSketchId_))
+        .arg(static_cast<int>(viewer_->selectionMode())));
     const QString finishedSketchId = QString::fromStdString(activeSketchId_);
     viewer_->exitSketchMode();
     activeSketchId_.clear();
@@ -1449,6 +1583,11 @@ void MainWindow::finishSketch()
         // the stale pre-edit Face selection.
         applySelection({finishedSketchId});
     }
+    traceActionState("finishSketch.end", QString("finishedSketch=%1 activeSketch=%2 mode=%3 revolveEnabled=%4")
+        .arg(finishedSketchId)
+        .arg(QString::fromStdString(activeSketchId_))
+        .arg(static_cast<int>(viewer_->selectionMode()))
+        .arg(revolveAction_ && revolveAction_->isEnabled()));
 }
 
 void MainWindow::selectSketchLineTool()
@@ -1603,6 +1742,37 @@ void MainWindow::selectSketchEqualTool()
     sketchTool_ = SketchTool::AngleBetweenLines;
     constraintFirstPoint_.reset();
     statusBar()->showMessage("Equal: click two compatible entities");
+}
+
+void MainWindow::toggleSelectedSketchConstruction()
+{
+    if (currentSelection_.items.size() != 1
+        || currentSelection_.items.front().kind != cad::application::SelectionKind::Edge) {
+        return;
+    }
+    const auto selection = currentSelection_;
+    const auto& item = selection.items.front();
+    cad::parametric::RevolveAxisDefinition axis;
+    const auto resolved = modeling_.resolveRevolveAxis(item.featureId, selection, axis);
+    if (!resolved.success) {
+        statusBar()->showMessage(QString::fromStdString(resolved.error), 3000);
+        return;
+    }
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(item.featureId));
+    if (sketch) traceSketchEntities("toggleConstruction.before", *sketch);
+    traceActionState("toggleConstruction.target", QString("sketch=%1 entityId=%2")
+        .arg(QString::fromStdString(item.featureId))
+        .arg(QString::fromStdString(axis.sketchLineId)));
+    const auto result = modeling_.toggleSketchEntityConstruction(
+        item.featureId, axis.sketchLineId);
+    if (!result.success) {
+        reportResult(result);
+        return;
+    }
+    refreshModelView(false);
+    applySelectionSnapshot(selection, false);
+    if (sketch) traceSketchEntities("toggleConstruction.after", *sketch);
 }
 
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
@@ -1991,7 +2161,13 @@ void MainWindow::beginRevolveAxisPick(
     revolvePendingAxisType_ = type;
     revolvePreviousSelectionMode_ = static_cast<int>(viewer_->selectionMode());
     viewer_->setAxisPickCancelHandler([this]() { cancelRevolveAxisPick(); });
-    viewer_->setSelectionMode(CadViewer::SelectionMode::Edge);
+    if (type == cad::parametric::RevolveAxisType::ModelEdge) {
+        viewer_->setSelectionMode(CadViewer::SelectionMode::Edge);
+    }
+    traceActionState("revolve.beginAxisPick", QString("source=%1 axisType=%2 mode=%3")
+        .arg(featureId)
+        .arg(axisType)
+        .arg(static_cast<int>(viewer_->selectionMode())));
     if (type == cad::parametric::RevolveAxisType::SketchLine) {
         const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
             modeling_.body().findFeature(revolveProfileFeatureId_.toStdString()));
@@ -2021,6 +2197,8 @@ void MainWindow::beginRevolveAxisPick(
 void MainWindow::cancelRevolveAxisPick()
 {
     if (!revolveAxisPicking_) return;
+    traceActionState("revolve.endAxisPick", QString("source=%1")
+        .arg(revolveProfileFeatureId_));
     revolveRestoringSelectionMode_ = true;
     viewer_->setAxisPickCancelHandler({});
     viewer_->clearSketchLinePickTarget();
@@ -2034,6 +2212,9 @@ void MainWindow::cancelRevolveAxisPick()
 void MainWindow::handleSketchLineAxisPicked(const cad::parametric::SketchEntityId& entityId)
 {
     if (!revolveAxisPicking_) return;
+    traceActionState("revolve.sketchLineAccepted", QString("source=%1 entity=%2")
+        .arg(revolveProfileFeatureId_)
+        .arg(QString::fromStdString(entityId)));
     cad::parametric::RevolveAxisDefinition axis;
     axis.type = cad::parametric::RevolveAxisType::SketchLine;
     axis.sketchFeatureId = revolveProfileFeatureId_.toStdString();
@@ -2053,6 +2234,10 @@ void MainWindow::handleSketchLineAxisPicked(const cad::parametric::SketchEntityI
             profileSelection, std::move(axis), revolvePendingAngleDegrees_);
         if (!result.success) cancelOperation(); else commitOperation();
     }
+    traceActionState("revolve.commitResult", QString("success=%1 id=%2 axisType=SketchLine entity=%3")
+        .arg(result.success)
+        .arg(QString::fromStdString(result.id))
+        .arg(QString::fromStdString(entityId)));
     reportResult(result);
 }
 

@@ -2471,6 +2471,12 @@ void CadViewer::setSketchLinePickTarget(
     std::function<void(const cad::parametric::SketchEntityId&)> pickedHandler,
     std::function<void(const std::optional<cad::parametric::SketchEntityId>&)> hoveredHandler)
 {
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
+        std::fprintf(stderr, "[REV] beginSketchLinePick source=%s entities=%zu\n",
+            sketch ? sketch->id().c_str() : "<null>",
+            sketch ? sketch->entities().size() : 0U);
+        std::fflush(stderr);
+    }
     sketchLinePickSketch_ = std::move(sketch);
     sketchLinePickedHandler_ = std::move(pickedHandler);
     sketchLineHoveredHandler_ = std::move(hoveredHandler);
@@ -2481,6 +2487,10 @@ void CadViewer::setSketchLinePickTarget(
 
 void CadViewer::clearSketchLinePickTarget()
 {
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
+        std::fprintf(stderr, "[REV] endSketchLinePick\n");
+        std::fflush(stderr);
+    }
     sketchLinePickSketch_.reset();
     sketchLinePickedHandler_ = {};
     sketchLineHoveredHandler_ = {};
@@ -2523,6 +2533,12 @@ void CadViewer::updateSketchLinePickHover(const QPoint& position)
     }
     if (id == sketchLineHoveredId_) return;
     sketchLineHoveredId_ = id;
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
+        const auto text = id ? QString::fromStdString(*id) : QStringLiteral("<none>");
+        std::fprintf(stderr, "[REV] hover position=%d,%d entity=%s\n",
+            position.x(), position.y(), text.toUtf8().constData());
+        std::fflush(stderr);
+    }
     if (sketchLineHoveredHandler_) sketchLineHoveredHandler_(id);
 
     if (!context_ || !view_) return;
@@ -3446,7 +3462,19 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         } catch (const std::exception&) {
             id.reset();
         }
-        if (id && sketchLinePickedHandler_) sketchLinePickedHandler_(*id);
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
+            const auto text = id ? QString::fromStdString(*id) : QStringLiteral("<none>");
+            std::fprintf(stderr, "[REV] click position=%d,%d entity=%s\n",
+                lastMousePosition_.x(), lastMousePosition_.y(), text.toUtf8().constData());
+            std::fflush(stderr);
+        }
+        if (id && sketchLinePickedHandler_) {
+            if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
+                std::fprintf(stderr, "[REV] entity accepted=%s\n", id->c_str());
+                std::fflush(stderr);
+            }
+            sketchLinePickedHandler_(*id);
+        }
         return;
     }
 

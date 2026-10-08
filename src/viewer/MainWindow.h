@@ -104,6 +104,7 @@ private:
     void selectSketchAngleBetweenLinesTool();
     void selectSketchTangentTool();
     void selectSketchEqualTool();
+    void toggleSelectedSketchConstruction();
     void enterSketchEditing(const std::string& sketchId);
     void refreshConstraintManager();
     void selectSketchConstraint(const QString& constraintId);
