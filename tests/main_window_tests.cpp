@@ -1,5 +1,7 @@
 #include <QApplication>
 #include <QAction>
+#include <QLabel>
+#include <QPushButton>
 #include <QtTest/QtTest>
 
 #define private public
@@ -314,6 +316,45 @@ private slots:
         QVERIFY(!window.revolveAxisPicking_);
         QVERIFY(window.operationSession_.active());
         window.operationSession_.cancel();
+    }
+
+    void sweepStagesPathBeforeCommit()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("OCCT CadViewer requires an X display for MainWindow tests");
+        }
+        MainWindow window;
+        const auto sketch = window.modeling_.createSketch();
+        QVERIFY(sketch.success);
+        QVERIFY(window.modeling_.addSketchCircle(sketch.id, {0.0, 0.0}, 5.0).success);
+        const auto box = window.modeling_.createBox();
+        QVERIFY(box.success);
+        window.refreshModelView();
+        window.applySelection({QString::fromStdString(sketch.id)});
+
+        window.createSweep();
+        QVERIFY(window.operationSession_.active());
+        QVERIFY(window.sweepDialog_);
+        QCOMPARE(window.sweepPathLabel_->text(), QString("Path: <not selected>"));
+        QVERIFY(!window.sweepPathSelection_);
+        QVERIFY(!window.modeling_.body().findFeature("sweep"));
+
+        window.pickSweepPath();
+        const cad::application::SelectionSnapshot pathSelection{{
+            {box.id, cad::application::SelectionKind::Edge, 1}}};
+        QVERIFY(window.handleSweepPathSelection(pathSelection));
+        QVERIFY(window.sweepPathSelection_);
+        QVERIFY(window.sweepPathReference_);
+        QVERIFY(window.operationSession_.active());
+        QCOMPARE(window.sweepPathLabel_->text(), QString("Path: Box | Edge 1"));
+        QVERIFY(window.sweepCommitButton_->isEnabled());
+        QVERIFY(window.modeling_.body().features().size() == 2);
+
+        window.commitSweep();
+        QVERIFY(!window.operationSession_.active());
+        QVERIFY(!window.sweepDialog_);
+        QVERIFY(window.modeling_.body().features().size() == 3);
+        QVERIFY(window.modeling_.body().features().back()->typeId() == std::string("Sweep"));
     }
 
     void faceAttachedSketchLineToolSurvivesRepeatedLines_data()

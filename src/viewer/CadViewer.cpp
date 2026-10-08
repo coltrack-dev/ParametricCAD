@@ -3487,7 +3487,9 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
             && sketchPreviewTool_ != SketchPreviewTool::Extend
             && !context_.IsNull()) {
             context_->MoveTo(lastMousePosition_.x(), lastMousePosition_.y(), view_, Standard_False);
-            const auto detected = context_->DetectedInteractive();
+            const auto detected = context_->HasDetected()
+                ? context_->DetectedInteractive()
+                : Handle(AIS_InteractiveObject)();
             for (const auto& marker : sketchConstraintMarkers_) {
                 if (!marker.presentation.IsNull() && detected == marker.presentation) {
                     if (sketchConstraintMarkerClickedHandler_)
@@ -3645,7 +3647,9 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
     if (sketchMode_ && sketchPreviewTool_ == SketchPreviewTool::None && !context_.IsNull()) {
         context_->MoveTo(currentPosition.x(), currentPosition.y(), view_, Standard_False);
         std::string hovered;
-        const auto detected = context_->DetectedInteractive();
+        const auto detected = context_->HasDetected()
+            ? context_->DetectedInteractive()
+            : Handle(AIS_InteractiveObject)();
         for (const auto& marker : sketchConstraintMarkers_) {
             if (!marker.presentation.IsNull() && detected == marker.presentation) { hovered = marker.constraintId; break; }
         }

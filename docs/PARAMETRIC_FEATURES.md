@@ -193,6 +193,8 @@ construction geometry is ignored. The path is persisted as its owner feature
 ID plus a geometry-signature `TopologicalReference`, then resolved again after
 recompute and load. The current orientation is Frenet/tangent-following.
 
-Workflow: select the valid Sketch in the model tree, activate Sweep, pick one
-model Edge in the viewport, and confirm. Cancel leaves the model unchanged.
+Workflow: select the valid Sketch in the model tree and activate Sweep. The
+staged dialog shows the profile and `Path: <not selected>`. Click `Pick Path`,
+select one model Edge in the viewport, then click `Commit`; no SweepFeature is
+inserted before Commit. Cancel leaves the model unchanged.
 Lofting, multiple rails, and a multi-edge Wire picker are outside this MVP.

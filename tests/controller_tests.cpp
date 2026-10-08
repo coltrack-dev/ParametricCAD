@@ -49,6 +49,29 @@ FacePick firstPlanarFace(const TopoDS_Shape& shape)
     return {0, {}};
 }
 
+int edgeAtOriginAlongX(const TopoDS_Shape& shape)
+{
+    TopTools_IndexedMapOfShape edges;
+    TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+    const gp_Pnt origin;
+    for (int index = 1; index <= edges.Extent(); ++index) {
+        const auto edge = TopoDS::Edge(edges.FindKey(index));
+        BRepAdaptor_Curve curve(edge);
+        if (curve.GetType() != GeomAbs_Line) continue;
+        const auto first = curve.Value(curve.FirstParameter());
+        const auto last = curve.Value(curve.LastParameter());
+        const auto other = first.Distance(origin) <= 1.0e-6 ? last
+            : last.Distance(origin) <= 1.0e-6 ? first : gp_Pnt(1.0, 1.0, 1.0);
+        if ((first.Distance(origin) <= 1.0e-6 || last.Distance(origin) <= 1.0e-6)
+            && other.X() > 1.0e-6
+            && std::abs(other.Y()) <= 1.0e-6
+            && std::abs(other.Z()) <= 1.0e-6) {
+            return index;
+        }
+    }
+    return 0;
+}
+
 double volume(const TopoDS_Shape& shape)
 {
     GProp_GProps properties;
@@ -350,18 +373,22 @@ private slots:
     void sweepUsesPersistentEdgeReference()
     {
         ModelingController controller;
-        const auto sketch = controller.createSketch();
+        const auto sketch = controller.createSketch(SketchSupportType::YZ);
         QVERIFY(sketch.success);
         QVERIFY(controller.addSketchCircle(sketch.id, {0.0, 0.0}, 5.0).success);
-        QVERIFY(controller.addSketchLine(
-            sketch.id, {20.0, 0.0}, {20.0, 10.0}, true).success);
 
         const auto path = controller.createBox();
         QVERIFY(path.success);
         const SelectionSnapshot profileSelection{{
             {sketch.id, SelectionKind::Object, std::nullopt}}};
+        const auto pathEdge = edgeAtOriginAlongX(
+            controller.body().findFeature(path.id)->shape());
+        QVERIFY(pathEdge > 0);
         const SelectionSnapshot pathSelection{{
-            {path.id, SelectionKind::Edge, 1}}};
+            {path.id, SelectionKind::Edge, pathEdge}}};
+        const auto missingPath = controller.createSweep(profileSelection, {});
+        QVERIFY(!missingPath.success);
+        QVERIFY(controller.body().features().size() == 2);
         const auto sweep = controller.createSweep(profileSelection, pathSelection);
         QVERIFY2(sweep.success, qPrintable(QString::fromStdString(sweep.error)));
         const auto feature = std::dynamic_pointer_cast<SweepFeature>(
@@ -371,6 +398,10 @@ private slots:
         QVERIFY(feature->pathReference());
         QCOMPARE(feature->pathReference()->featureId, path.id);
         QVERIFY(!feature->shape().IsNull());
+        int solidCount = 0;
+        for (TopExp_Explorer explorer(feature->shape(), TopAbs_SOLID);
+             explorer.More(); explorer.Next()) ++solidCount;
+        QVERIFY(solidCount > 0);
         QVERIFY(volume(feature->shape()) > 0.0);
 
         controller.undo();

@@ -206,8 +206,8 @@ interaction checks require a desktop session.
 
 ### Sweep from a Sketch
 
-Select a valid closed Sketch, activate `Sweep`, pick one model Edge, and
-confirm. The feature stores the path owner ID and persistent
+Select a valid closed Sketch and activate `Sweep`. In the staged dialog click
+`Pick Path`, select one model Edge, then click `Commit`. The feature stores the path owner ID and persistent
 `TopologicalReference`, not an OCCT subshape index. Construction geometry does
 not affect profile eligibility. The MVP currently implements one Edge and
 Frenet/tangent-following orientation; Loft, multiple rails, and multi-edge

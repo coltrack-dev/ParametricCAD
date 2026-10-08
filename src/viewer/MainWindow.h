@@ -10,6 +10,7 @@
 #include "application/VisibilityManager.h"
 #include "application/BimNavigationModel.h"
 #include "application/InteractiveOperation.h"
+#include "model/TopologicalReference.h"
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
 #include "application/IfcImporter.h"
 #endif
@@ -23,6 +24,9 @@ class CadViewer;
 class FeatureEditorPanel;
 class BimNavigationPanel;
 class BimInspectorPanel;
+class QDialog;
+class QLabel;
+class QPushButton;
 namespace cad::viewer { class ModelPresenter; }
 
 class MainWindow final : public QMainWindow
@@ -121,6 +125,8 @@ private:
     void createShell();
     void createRevolve();
     void createSweep();
+    void pickSweepPath();
+    void commitSweep();
     bool handleSweepPathSelection(const cad::application::SelectionSnapshot& selection);
     void beginRevolveAxisPick(const QString& featureId, const QString& axisType,
                               bool editingExisting = false);
@@ -181,6 +187,11 @@ private:
     bool sweepPathPicking_{false};
     int sweepPreviousSelectionMode_{0};
     cad::application::SelectionSnapshot sweepProfileSelection_;
+    std::optional<cad::application::SelectionSnapshot> sweepPathSelection_;
+    std::optional<cad::topology::TopologicalReference> sweepPathReference_;
+    QDialog* sweepDialog_{nullptr};
+    QLabel* sweepPathLabel_{nullptr};
+    QPushButton* sweepCommitButton_{nullptr};
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     QAction* importIfcAction_{nullptr};
 #endif
