@@ -137,6 +137,7 @@ private:
     bool beginOperation(
         cad::application::InteractiveOperationKind kind,
         const std::vector<std::string>& sourceFeatureIds);
+    void cancelInteractiveSession(const char* reason);
     void cancelOperation();
     bool commitOperation();
     void deleteFeature();
@@ -185,6 +186,7 @@ private:
     cad::parametric::RevolveAxisType revolvePendingAxisType_{
         cad::parametric::RevolveAxisType::GlobalY};
     bool sweepPathPicking_{false};
+    bool sweepRestoringSelectionMode_{false};
     int sweepPreviousSelectionMode_{0};
     cad::application::SelectionSnapshot sweepProfileSelection_;
     std::optional<cad::application::SelectionSnapshot> sweepPathSelection_;

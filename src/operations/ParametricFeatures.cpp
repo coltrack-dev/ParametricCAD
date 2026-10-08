@@ -6,6 +6,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepGProp.hxx>
@@ -34,6 +35,8 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 #include <stdexcept>
 #include <string>
@@ -44,6 +47,31 @@ namespace cad::parametric {
 namespace {
 
 constexpr double sketchTwoPi = 6.283185307179586476925286766559;
+
+bool sweepTraceEnabled()
+{
+    return std::getenv("PARAMETRICCAD_TRACE_ACTIONS") != nullptr;
+}
+
+std::string sweepBounds(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return "<null>";
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) return "<void>";
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    return "[" + std::to_string(xmin) + "," + std::to_string(ymin) + ","
+        + std::to_string(zmin) + "]..[" + std::to_string(xmax) + ","
+        + std::to_string(ymax) + "," + std::to_string(zmax) + "]";
+}
+
+void traceSweep(const char* event, const std::string& details)
+{
+    if (!sweepTraceEnabled()) return;
+    std::fprintf(stderr, "[SWEEP] %s %s\n", event, details.c_str());
+    std::fflush(stderr);
+}
 
 const char* revolveAxisTypeName(const RevolveAxisType type)
 {
@@ -2795,6 +2823,14 @@ TopoDS_Shape SweepFeature::build() const
         if (profiles.faces.size() != 1)
             throw std::runtime_error("Sweep requires exactly one closed Sketch profile");
         profileShape = profiles.faces.front();
+        const auto frame = sketch->currentFrame();
+        traceSweep("profile", "feature=" + sketch->id()
+            + " support=" + std::to_string(static_cast<int>(sketch->supportType()))
+            + " frameOrigin=(" + std::to_string(frame.origin.X()) + ","
+            + std::to_string(frame.origin.Y()) + "," + std::to_string(frame.origin.Z()) + ")"
+            + " frameNormal=(" + std::to_string(frame.normal.X()) + ","
+            + std::to_string(frame.normal.Y()) + "," + std::to_string(frame.normal.Z()) + ")"
+            + " bounds=" + sweepBounds(profileShape));
     } else {
         profileShape = profile_->shape();
     }
@@ -2816,10 +2852,48 @@ TopoDS_Shape SweepFeature::build() const
     } else {
         path = pathFeature_ ? wireFromFeature(pathFeature_) : path_;
     }
-    return cad::modeling::BasicFeatures::sweep(
-        path,
-        profileShape
-    );
+    if (sweepTraceEnabled()) {
+        const auto edge = TopoDS::Edge(TopExp_Explorer(path, TopAbs_EDGE).Value());
+        BRepAdaptor_Curve curve(edge);
+        const auto start = curve.Value(curve.FirstParameter());
+        const auto end = curve.Value(curve.LastParameter());
+        std::string pathDetails = "owner="
+            + (pathOwner_ ? pathOwner_->id() : "wire")
+            + " start=(" + std::to_string(start.X()) + ","
+            + std::to_string(start.Y()) + "," + std::to_string(start.Z()) + ")"
+            + " end=(" + std::to_string(end.X()) + ","
+            + std::to_string(end.Y()) + "," + std::to_string(end.Z()) + ")"
+            + " length=" + std::to_string(start.Distance(end))
+            + " bounds=" + sweepBounds(path);
+        if (const auto sketch = std::dynamic_pointer_cast<SketchFeature>(profile_)) {
+            const auto frame = sketch->currentFrame();
+            pathDetails += " startPlaneDistance=" + std::to_string(
+                std::abs(gp_Vec(frame.origin, start).Dot(gp_Vec(frame.normal))));
+        }
+        traceSweep("path", pathDetails);
+    }
+    traceSweep("MakePipe.called", "profileBounds=" + sweepBounds(profileShape)
+        + " pathBounds=" + sweepBounds(path));
+    try {
+        const auto result = cad::modeling::BasicFeatures::sweep(path, profileShape);
+        int solidCount = 0;
+        for (TopExp_Explorer explorer(result, TopAbs_SOLID);
+             explorer.More(); explorer.Next()) ++solidCount;
+        GProp_GProps properties;
+        BRepGProp::VolumeProperties(result, properties);
+        traceSweep("result", "null=" + std::to_string(result.IsNull() ? 1 : 0)
+            + " shapeType=" + std::to_string(static_cast<int>(result.ShapeType()))
+            + " solids=" + std::to_string(solidCount)
+            + " volume=" + std::to_string(properties.Mass())
+            + " bounds=" + sweepBounds(result));
+        return result;
+    } catch (const std::exception& error) {
+        traceSweep("failed", error.what());
+        throw;
+    } catch (const Standard_Failure& error) {
+        traceSweep("failed", error.GetMessageString());
+        throw;
+    }
 }
 
 void SweepFeature::writeParameters(QJsonObject& object) const

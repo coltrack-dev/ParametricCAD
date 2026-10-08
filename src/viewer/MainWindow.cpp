@@ -26,10 +26,14 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
+#include <Bnd_Box.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopoDS.hxx>
 #include <QStandardPaths>
 #include <QDockWidget>
 #include <QElapsedTimer>
@@ -80,6 +84,35 @@ void traceSketchEntities(const char* event, const cad::parametric::SketchFeature
         }, entity);
     }
     traceActionState(event, details);
+}
+
+QString shapeBounds(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return "<null>";
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) return "<void>";
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    return QString("[%1,%2,%3]..[%4,%5,%6]")
+        .arg(xmin).arg(ymin).arg(zmin).arg(xmax).arg(ymax).arg(zmax);
+}
+
+QString dialogAddress(const QDialog* dialog)
+{
+    return dialog ? QString("0x%1").arg(
+        reinterpret_cast<quintptr>(dialog), 0, 16) : QString("<null>");
+}
+
+const char* sketchSupportName(const cad::parametric::SketchSupportType support)
+{
+    switch (support) {
+    case cad::parametric::SketchSupportType::XY: return "XY";
+    case cad::parametric::SketchSupportType::XZ: return "XZ";
+    case cad::parametric::SketchSupportType::YZ: return "YZ";
+    case cad::parametric::SketchSupportType::Face: return "Face";
+    }
+    return "Unknown";
 }
 
 std::string pointRoleText(const cad::parametric::SketchPointRole role)
@@ -998,7 +1031,7 @@ void MainWindow::applySelection(
         .arg(QString::fromStdString(activeSketchId_)));
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
-    operationSession_.cancel();
+    cancelInteractiveSession("external feature selection");
     // This is the single MainWindow projection point for both viewer -> tree
     // and tree -> viewer selection paths. Keep the viewer update optional to
     // preserve feedback-loop suppression for featureSelectionChanged.
@@ -1033,7 +1066,19 @@ void MainWindow::applySelectionSnapshot(
         .arg(QString::fromStdString(activeSketchId_)));
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
-    operationSession_.cancel();
+    const bool preserveSweepSession = operationSession_.active()
+        && operationSession_.context().kind
+            == cad::application::InteractiveOperationKind::Sweep
+        && (sweepPathPicking_ || sweepRestoringSelectionMode_);
+    if (preserveSweepSession) {
+        traceActionState("sweep.selectionUpdate.preserveSession", QString(
+            "items=%1 pathPicking=%2 pathSelected=%3")
+            .arg(static_cast<int>(selection.items.size()))
+            .arg(sweepPathPicking_)
+            .arg(sweepPathSelection_.has_value()));
+    } else {
+        cancelInteractiveSession("selection change not owned by Sweep path picker");
+    }
     currentSelection_ = selection;
     const auto featureIds = selection.featureIds();
     QStringList ids;
@@ -1458,12 +1503,37 @@ bool MainWindow::beginOperation(
 {
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
-    operationSession_.cancel();
+    cancelInteractiveSession("beginOperation replaces previous session");
     return operationSession_.beginCreate(kind, sourceFeatureIds);
+}
+
+void MainWindow::cancelInteractiveSession(const char* reason)
+{
+    const auto operation = operationSession_.active()
+        ? static_cast<int>(operationSession_.context().kind) : -1;
+    traceActionState("interactiveSession.cancel", QString(
+        "reason=%1 active=%2 operation=%3 dialog=%4 selectionMode=%5 "
+        "selectionItems=%6 sweepPathPicking=%7 pathSelected=%8")
+        .arg(reason)
+        .arg(operationSession_.active())
+        .arg(operation)
+        .arg(dialogAddress(sweepDialog_))
+        .arg(static_cast<int>(viewer_->selectionMode()))
+        .arg(static_cast<int>(currentSelection_.items.size()))
+        .arg(sweepPathPicking_)
+        .arg(sweepPathSelection_.has_value()));
+    operationSession_.cancel();
+    traceActionState("interactiveSession.cancelled", QString(
+        "reason=%1 active=%2 operation=-1 dialog=%3")
+        .arg(reason).arg(operationSession_.active()).arg(dialogAddress(sweepDialog_)));
 }
 
 void MainWindow::cancelOperation()
 {
+    traceActionState("sweep.cancelOperation", QString("dialog=%1 sessionActive=%2 pathSelected=%3")
+        .arg(dialogAddress(sweepDialog_))
+        .arg(operationSession_.active())
+        .arg(sweepPathSelection_.has_value()));
     cancelRevolveAxisPick();
     if (sweepPathPicking_) {
         sweepPathPicking_ = false;
@@ -1472,6 +1542,7 @@ void MainWindow::cancelOperation()
         sweepProfileSelection_ = {};
         statusBar()->showMessage("Sweep path pick cancelled", 2000);
     }
+    sweepRestoringSelectionMode_ = false;
     sweepPathSelection_.reset();
     sweepPathReference_.reset();
     if (sweepDialog_) {
@@ -1482,12 +1553,22 @@ void MainWindow::cancelOperation()
         dialog->close();
         dialog->deleteLater();
     }
-    operationSession_.cancel();
+    cancelInteractiveSession("explicit operation cancel");
 }
 
 bool MainWindow::commitOperation()
 {
-    return operationSession_.commit().has_value();
+    traceActionState("interactiveSession.commit", QString(
+        "active=%1 operation=%2 dialog=%3")
+        .arg(operationSession_.active())
+        .arg(operationSession_.active()
+            ? static_cast<int>(operationSession_.context().kind) : -1)
+        .arg(dialogAddress(sweepDialog_)));
+    const bool committed = operationSession_.commit().has_value();
+    traceActionState("interactiveSession.committed", QString(
+        "success=%1 active=%2 dialog=%3")
+        .arg(committed).arg(operationSession_.active()).arg(dialogAddress(sweepDialog_)));
+    return committed;
 }
 
 void MainWindow::createSketch()
@@ -2184,10 +2265,12 @@ void MainWindow::createSweep()
     if (!profile || profile->role() != cad::parametric::FeatureRole::Sketch) return;
     if (!beginOperation(cad::application::InteractiveOperationKind::Sweep,
             {profile->id()})) return;
-    traceActionState("sweep.begin", QString("profile=%1 sessionActive=%2 pathSelected=%3")
+    traceActionState("sweep.begin", QString("profile=%1 sessionActive=%2 pathSelected=%3 dialog=%4 operation=%5")
         .arg(QString::fromStdString(profile->id()))
         .arg(operationSession_.active())
-        .arg(sweepPathSelection_.has_value()));
+        .arg(sweepPathSelection_.has_value())
+        .arg(dialogAddress(sweepDialog_))
+        .arg(static_cast<int>(operationSession_.context().kind)));
     sweepProfileSelection_ = currentSelection_;
     sweepPathSelection_.reset();
     sweepPathReference_.reset();
@@ -2210,12 +2293,30 @@ void MainWindow::createSweep()
     layout->addLayout(buttons);
     sweepDialog_ = dialog;
     connect(pickButton, &QPushButton::clicked, this, &MainWindow::pickSweepPath);
-    connect(sweepCommitButton_, &QPushButton::clicked, this, &MainWindow::commitSweep);
+    connect(sweepCommitButton_, &QPushButton::clicked, this, [this]() {
+        traceActionState("sweep.commitButton.clicked", QString(
+            "dialog=%1 sessionActive=%2 pathSelected=%3 profile=%4 pathOwner=%5 refValid=%6 enabled=%7 visible=%8")
+            .arg(dialogAddress(sweepDialog_))
+            .arg(operationSession_.active())
+            .arg(sweepPathSelection_.has_value())
+            .arg(sweepProfileSelection_.items.empty() ? QString("<none>")
+                : QString::fromStdString(sweepProfileSelection_.items.front().featureId))
+            .arg(sweepPathSelection_ && !sweepPathSelection_->items.empty()
+                ? QString::fromStdString(sweepPathSelection_->items.front().featureId)
+                : QString("<none>"))
+            .arg(sweepPathReference_.has_value())
+            .arg(sweepCommitButton_ && sweepCommitButton_->isEnabled())
+            .arg(sweepDialog_ && sweepDialog_->isVisible()));
+        commitSweep();
+    });
     connect(cancelButton, &QPushButton::clicked, this, &MainWindow::cancelOperation);
     connect(dialog, &QDialog::rejected, this, [this]() {
         if (sweepDialog_) cancelOperation();
     });
     dialog->show();
+    traceActionState("sweep.dialog.created", QString("dialog=%1 visible=%2 commitEnabled=%3")
+        .arg(dialogAddress(dialog)).arg(dialog->isVisible())
+        .arg(sweepCommitButton_->isEnabled()));
     statusBar()->showMessage("Sweep staged: click Pick Path");
 }
 
@@ -2230,22 +2331,105 @@ void MainWindow::pickSweepPath()
     sweepPathPicking_ = true;
     viewer_->setAxisPickCancelHandler([this]() { cancelOperation(); });
     viewer_->setSelectionMode(CadViewer::SelectionMode::Edge);
-    traceActionState("sweep.beginPickPath", QString("profile=%1 mode=%2")
+    traceActionState("sweep.beginPickPath", QString("profile=%1 mode=%2 dialog=%3 visible=%4")
         .arg(QString::fromStdString(sweepProfileSelection_.items.front().featureId))
-        .arg(static_cast<int>(viewer_->selectionMode())));
+        .arg(static_cast<int>(viewer_->selectionMode()))
+        .arg(dialogAddress(sweepDialog_))
+        .arg(sweepDialog_ && sweepDialog_->isVisible()));
     statusBar()->showMessage("Pick Sweep path edge");
 }
 
 void MainWindow::commitSweep()
 {
-    if (!operationSession_.active() || !sweepPathSelection_) {
+    traceActionState("sweep.commit.enter", QString(
+        "dialog=%1 sessionActive=%2 operation=%3 pathSelected=%4 refValid=%5 profileItems=%6 pathItems=%7")
+        .arg(dialogAddress(sweepDialog_))
+        .arg(operationSession_.active())
+        .arg(operationSession_.active()
+            ? static_cast<int>(operationSession_.context().kind) : -1)
+        .arg(sweepPathSelection_.has_value())
+        .arg(sweepPathReference_.has_value())
+        .arg(static_cast<int>(sweepProfileSelection_.items.size()))
+        .arg(sweepPathSelection_ ? static_cast<int>(sweepPathSelection_->items.size()) : 0));
+    if (!operationSession_.active()) {
+        traceActionState("sweep.commit.return", "reason=session inactive");
+        if (sweepCommitButton_) sweepCommitButton_->setEnabled(false);
+        if (sweepDialog_) {
+            traceActionState("sweep.invalidSession", QString(
+                "dialog=%1 action=close").arg(dialogAddress(sweepDialog_)));
+            cancelOperation();
+        }
+        statusBar()->showMessage("Sweep session is no longer active", 3000);
+        return;
+    }
+    if (operationSession_.context().kind
+        != cad::application::InteractiveOperationKind::Sweep) {
+        traceActionState("sweep.commit.return", "reason=operation is not Sweep");
+        statusBar()->showMessage("Active operation is not Sweep", 3000);
+        return;
+    }
+    if (sweepProfileSelection_.items.size() != 1) {
+        traceActionState("sweep.commit.return", "reason=profile missing");
+        statusBar()->showMessage("Sweep profile is missing", 3000);
+        return;
+    }
+    if (!sweepPathSelection_ || sweepPathSelection_->items.size() != 1) {
+        traceActionState("sweep.commit.return", "reason=path missing");
         statusBar()->showMessage("Sweep requires a selected path Edge", 3000);
+        return;
+    }
+    if (!sweepPathReference_) {
+        traceActionState("sweep.commit.return", "reason=persistent path reference missing");
+        statusBar()->showMessage("Sweep path reference is missing", 3000);
         return;
     }
     traceActionState("sweep.commit.begin", QString("profile=%1 pathItems=%2")
         .arg(QString::fromStdString(sweepProfileSelection_.items.front().featureId))
         .arg(static_cast<int>(sweepPathSelection_->items.size())));
+    const auto profile = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(sweepProfileSelection_.items.front().featureId));
+    const auto pathItem = sweepPathSelection_->items.front();
+    const auto pathOwner = modeling_.body().findFeature(pathItem.featureId);
+    if (profile && pathOwner && sweepPathReference_) {
+        const auto frame = profile->currentFrame();
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *sweepPathReference_, pathOwner->shape());
+        QString geometryDetails = QString("support=%1 frameOrigin=(%2,%3,%4) "
+            "frameNormal=(%5,%6,%7) profileBounds=%8 pathOwner=%9")
+            .arg(sketchSupportName(profile->supportType()))
+            .arg(frame.origin.X()).arg(frame.origin.Y()).arg(frame.origin.Z())
+            .arg(frame.normal.X()).arg(frame.normal.Y()).arg(frame.normal.Z())
+            .arg(shapeBounds(profile->shape()))
+            .arg(QString::fromStdString(pathOwner->id()));
+        if (resolved.status == cad::topology::ResolveStatus::Resolved
+            && resolved.shape && resolved.shape->ShapeType() == TopAbs_EDGE) {
+            const auto edge = TopoDS::Edge(*resolved.shape);
+            BRepAdaptor_Curve curve(edge);
+            const auto start = curve.Value(curve.FirstParameter());
+            const auto end = curve.Value(curve.LastParameter());
+            const gp_Vec startFromPlane(frame.origin, start);
+            geometryDetails += QString(" pathStart=(%1,%2,%3) pathEnd=(%4,%5,%6) "
+                "pathLength=%7 startPlaneDistance=%8 pathBounds=%9")
+                .arg(start.X()).arg(start.Y()).arg(start.Z())
+                .arg(end.X()).arg(end.Y()).arg(end.Z())
+                .arg(start.Distance(end))
+                .arg(std::abs(startFromPlane.Dot(gp_Vec(frame.normal))))
+                .arg(shapeBounds(edge));
+        } else {
+            geometryDetails += QString(" pathResolveStatus=%1")
+                .arg(static_cast<int>(resolved.status));
+        }
+        traceActionState("sweep.geometry", geometryDetails);
+    }
+    traceActionState("sweep.MakePipe.called", "backend Sweep build begins");
+    traceActionState("sweep.commit.beforeCreate", QString("profile=%1 pathOwner=%2 refValid=%3")
+        .arg(QString::fromStdString(sweepProfileSelection_.items.front().featureId))
+        .arg(QString::fromStdString(sweepPathSelection_->items.front().featureId))
+        .arg(sweepPathReference_.has_value()));
     const auto result = modeling_.createSweep(sweepProfileSelection_, *sweepPathSelection_);
+    traceActionState("sweep.commit.afterCreate", QString("success=%1 featureId=%2 error=%3")
+        .arg(result.success).arg(QString::fromStdString(result.id))
+        .arg(QString::fromStdString(result.error)));
     if (!result.success) {
         traceActionState("sweep.commit.failed", QString::fromStdString(result.error));
         reportResult(result);
@@ -2258,14 +2442,15 @@ void MainWindow::commitSweep()
             ++solidCount;
         GProp_GProps volumeProperties;
         BRepGProp::VolumeProperties(sweep->shape(), volumeProperties);
-        traceActionState("sweep.shape", QString("feature=%1 null=%2 shapeType=%3 solids=%4 volume=%5 state=%6 error=%7")
+        traceActionState("sweep.shape", QString("feature=%1 null=%2 shapeType=%3 solids=%4 volume=%5 state=%6 error=%7 bounds=%8")
             .arg(QString::fromStdString(result.id))
             .arg(sweep->shape().IsNull())
             .arg(static_cast<int>(sweep->shape().ShapeType()))
             .arg(solidCount)
             .arg(volumeProperties.Mass())
             .arg(static_cast<int>(sweep->state()))
-            .arg(QString::fromStdString(sweep->error())));
+            .arg(QString::fromStdString(sweep->error()))
+            .arg(shapeBounds(sweep->shape())));
     }
     if (sweepDialog_) {
         auto* dialog = sweepDialog_;
@@ -2277,7 +2462,15 @@ void MainWindow::commitSweep()
     }
     viewer_->setAxisPickCancelHandler({});
     sweepPathPicking_ = false;
+    traceActionState("sweep.commit.sessionBeforeFinish", QString(
+        "active=%1 operation=%2 dialog=%3")
+        .arg(operationSession_.active())
+        .arg(operationSession_.active()
+            ? static_cast<int>(operationSession_.context().kind) : -1)
+        .arg(dialogAddress(sweepDialog_)));
     operationSession_.commit();
+    traceActionState("sweep.commit.sessionFinished", QString(
+        "active=%1 operation=-1").arg(operationSession_.active()));
     traceActionState("sweep.commit.done", QString("feature=%1 sessionActive=%2")
         .arg(QString::fromStdString(result.id)).arg(operationSession_.active()));
     sweepProfileSelection_ = {};
@@ -2313,8 +2506,10 @@ bool MainWindow::handleSweepPathSelection(
     sweepPathSelection_ = selection;
     viewer_->setAxisPickCancelHandler({});
     sweepPathPicking_ = false;
+    sweepRestoringSelectionMode_ = true;
     viewer_->setSelectionMode(static_cast<CadViewer::SelectionMode>(
         sweepPreviousSelectionMode_));
+    sweepRestoringSelectionMode_ = false;
     if (sweepPathLabel_) {
         sweepPathLabel_->setText(QString("Path: %1 | Edge %2")
             .arg(owner ? QString::fromStdString(owner->name())
@@ -2322,10 +2517,16 @@ bool MainWindow::handleSweepPathSelection(
             .arg(*item.subshapeIndex));
     }
     if (sweepCommitButton_) sweepCommitButton_->setEnabled(true);
-    traceActionState("sweep.pathAccepted", QString("owner=%1 edge=%2 commitEnabled=%3")
+    traceActionState("sweep.pathAccepted", QString("owner=%1 edge=%2 sessionActive=%3 operation=%4 buttonEnabled=%5 buttonVisible=%6 dialog=%7 dialogVisible=%8")
         .arg(QString::fromStdString(item.featureId))
         .arg(*item.subshapeIndex)
-        .arg(sweepCommitButton_ && sweepCommitButton_->isEnabled()));
+        .arg(operationSession_.active())
+        .arg(operationSession_.active()
+            ? static_cast<int>(operationSession_.context().kind) : -1)
+        .arg(sweepCommitButton_ && sweepCommitButton_->isEnabled())
+        .arg(sweepCommitButton_ && sweepCommitButton_->isVisible())
+        .arg(dialogAddress(sweepDialog_))
+        .arg(sweepDialog_ && sweepDialog_->isVisible()));
     statusBar()->showMessage("Sweep path selected; click Commit");
     return true;
 }
@@ -2431,7 +2632,7 @@ void MainWindow::handleSketchLineAxisPicked(const cad::parametric::SketchEntityI
         result = modeling_.updateRevolveAxis(
             revolveAxisFeatureId_.toStdString(), std::move(axis));
         if (result.success) operationSession_.commit();
-        else operationSession_.cancel();
+        else cancelInteractiveSession("Revolve axis edit failed");
     } else {
         const cad::application::SelectionSnapshot profileSelection{{
             {revolveProfileFeatureId_.toStdString(),
@@ -2466,7 +2667,7 @@ bool MainWindow::handleRevolveAxisSelection(
         result = modeling_.updateRevolveAxis(
             revolveAxisFeatureId_.toStdString(), std::move(axis));
         if (result.success) operationSession_.commit();
-        else operationSession_.cancel();
+        else cancelInteractiveSession("Revolve axis edit failed");
     } else {
         const cad::application::SelectionSnapshot profileSelection{{
             {revolveProfileFeatureId_.toStdString(),
@@ -2498,7 +2699,7 @@ void MainWindow::clearDocument()
 {
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
-    operationSession_.cancel();
+    cancelInteractiveSession("clear document");
     modeling_.clearProject();
     applySelection({});
     featureEditorPanel_->refresh();
@@ -2556,7 +2757,7 @@ void MainWindow::newDocument()
     if (!confirmReplacement()) return;
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
-    operationSession_.cancel();
+    cancelInteractiveSession("new project");
     project_.newProject();
     presenter_->clear();
     applySelection({});
@@ -2755,7 +2956,7 @@ void MainWindow::startProjectLoad(const QString& path)
 {
     cancelRevolveAxisPick();
     viewer_->cancelActiveOperation();
-    operationSession_.cancel();
+    cancelInteractiveSession("load project");
     projectLoading_ = true;
     pendingProjectPath_ = path;
     projectLoadLoaded_ = std::make_shared<std::atomic<int>>(0);

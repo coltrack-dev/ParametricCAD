@@ -339,22 +339,64 @@ private slots:
         QVERIFY(!window.sweepPathSelection_);
         QVERIFY(!window.modeling_.body().findFeature("sweep"));
 
-        window.pickSweepPath();
+        const auto buttons = window.sweepDialog_->findChildren<QPushButton*>();
+        const auto pickButton = std::find_if(buttons.begin(), buttons.end(),
+            [](const auto* button) { return button->text() == "Pick Path"; });
+        const auto commitButton = std::find_if(buttons.begin(), buttons.end(),
+            [](const auto* button) { return button->text() == "Commit"; });
+        QVERIFY(pickButton != buttons.end());
+        QVERIFY(commitButton != buttons.end());
+        (*pickButton)->click();
+        window.applySelectionSnapshot({});
+        QVERIFY(window.operationSession_.active());
         const cad::application::SelectionSnapshot pathSelection{{
             {box.id, cad::application::SelectionKind::Edge, 1}}};
         QVERIFY(window.handleSweepPathSelection(pathSelection));
         QVERIFY(window.sweepPathSelection_);
         QVERIFY(window.sweepPathReference_);
         QVERIFY(window.operationSession_.active());
+        QCOMPARE(window.operationSession_.context().kind,
+            cad::application::InteractiveOperationKind::Sweep);
         QCOMPARE(window.sweepPathLabel_->text(), QString("Path: Box | Edge 1"));
         QVERIFY(window.sweepCommitButton_->isEnabled());
         QVERIFY(window.modeling_.body().features().size() == 2);
 
-        window.commitSweep();
+        (*commitButton)->click();
         QVERIFY(!window.operationSession_.active());
         QVERIFY(!window.sweepDialog_);
         QVERIFY(window.modeling_.body().features().size() == 3);
         QVERIFY(window.modeling_.body().features().back()->typeId() == std::string("Sweep"));
+    }
+
+    void cancellingSweepLeavesModelUnchanged()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("OCCT CadViewer requires an X display for MainWindow tests");
+        }
+        MainWindow window;
+        const auto sketch = window.modeling_.createSketch();
+        QVERIFY(sketch.success);
+        QVERIFY(window.modeling_.addSketchCircle(sketch.id, {0.0, 0.0}, 5.0).success);
+        const auto box = window.modeling_.createBox();
+        QVERIFY(box.success);
+        window.refreshModelView();
+        window.applySelection({QString::fromStdString(sketch.id)});
+        window.createSweep();
+        QVERIFY(window.operationSession_.active());
+        QVERIFY(window.sweepDialog_);
+
+        const auto buttons = window.sweepDialog_->findChildren<QPushButton*>();
+        const auto cancelButton = std::find_if(buttons.begin(), buttons.end(),
+            [](const auto* button) { return button->text() == "Cancel"; });
+        QVERIFY(cancelButton != buttons.end());
+        (*cancelButton)->click();
+
+        QVERIFY(!window.operationSession_.active());
+        QVERIFY(!window.sweepDialog_);
+        QCOMPARE(window.modeling_.body().features().size(), std::size_t(2));
+        for (const auto& feature : window.modeling_.body().features()) {
+            QVERIFY(feature->typeId() != std::string("Sweep"));
+        }
     }
 
     void faceAttachedSketchLineToolSurvivesRepeatedLines_data()

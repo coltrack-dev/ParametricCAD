@@ -1629,6 +1629,12 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
     // native decomposition picking on some OCCT viewer configurations.
     context_->Display(interactiveShape,
         bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")
+        && featureId.startsWith("sweep-")) {
+        qInfo().noquote() << "[SWEEP] AIS display feature=" << featureId
+                          << "displayed=" << context_->IsDisplayed(interactiveShape)
+                          << "visibility=" << static_cast<int>(featureVisibilityMode(featureId));
+    }
     traceSelectionLifecycle(QString("AIS register feature=%1 obj=%2 after Display")
         .arg(featureId).arg(selectionObjectPointer(interactiveShape)));
     traceSelectionLifecycle(QString("AIS state after Display feature=%1 obj=%2 displayed=%3 activeModes=%4")
@@ -1753,6 +1759,12 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     configureSketchPresentation(object, featureId);
     setFeatureTransparency(featureId, object);
     if (object->Shape().IsEqual(shape)) {
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")
+            && featureId.startsWith("sweep-")) {
+            qInfo().noquote() << "[SWEEP] AIS update unchanged feature=" << featureId
+                              << "displayed=" << context_->IsDisplayed(object)
+                              << "visibility=" << static_cast<int>(featureVisibilityMode(featureId));
+        }
         if (featureId.startsWith("sketch-")) {
             context_->Redisplay(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
         }
@@ -1766,6 +1778,12 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     traceSelectionLifecycle(QString("AIS replace feature=%1 obj=%2 before SetShape")
         .arg(featureId).arg(selectionObjectPointer(object)));
     updateManagedShape(featureId, object, shape);
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")
+        && featureId.startsWith("sweep-")) {
+        qInfo().noquote() << "[SWEEP] AIS update replaced feature=" << featureId
+                          << "displayed=" << context_->IsDisplayed(object)
+                          << "visibility=" << static_cast<int>(featureVisibilityMode(featureId));
+    }
     traceSelectionLifecycle(QString("AIS replace feature=%1 obj=%2 after Redisplay")
         .arg(featureId).arg(selectionObjectPointer(object)));
     if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
