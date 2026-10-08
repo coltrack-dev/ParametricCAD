@@ -2514,10 +2514,20 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 
 void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolerance)
 {
-    if (activeSketchId_.empty() || sketchTool_ == SketchTool::None) return;
+    if (activeSketchId_.empty()) {
+        traceActionState("rectangle.commit.skipped", "reason=missing active sketch");
+        return;
+    }
+    if (sketchTool_ == SketchTool::None) {
+        traceActionState("rectangle.commit.skipped", "reason=no active sketch tool");
+        return;
+    }
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
         modeling_.body().findFeature(activeSketchId_));
-    if (!sketch) return;
+    if (!sketch) {
+        traceActionState("rectangle.commit.skipped", "reason=active sketch feature missing");
+        return;
+    }
     if (sketchTool_ == SketchTool::Rectangle) {
         traceActionState("rectangle.mousePoint", QString(
             "sketch=%1 state=%2 first=%3 second=%4 point=(%5,%6) entities=%7")
@@ -2712,6 +2722,7 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     if (!sketchFirstPoint_) {
         sketchFirstPoint_ = point;
         if (sketchTool_ == SketchTool::Rectangle) {
+            traceActionState("rectangle.stateTransition", "old=Ready new=Drawing");
             rectangleState_ = RectangleState::Drawing;
             rectangleCursorPoint_ = point;
             rectangleDirectionX_ = 1;
@@ -2745,6 +2756,41 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
             ? "Arc: pick point on arc" : "Center Arc: pick end point");
         return;
     }
+    if (sketchTool_ == SketchTool::Rectangle) {
+        traceActionState("rectangle.secondPoint.accepted", QString(
+            "sketch=%1 state=%2 first=(%3,%4) second=(%5,%6)")
+            .arg(QString::fromStdString(activeSketchId_))
+            .arg(static_cast<int>(rectangleState_))
+            .arg(sketchFirstPoint_->X()).arg(sketchFirstPoint_->Y())
+            .arg(point.X()).arg(point.Y()));
+        if (rectangleState_ != RectangleState::Drawing
+            && rectangleState_ != RectangleState::NumericInput) {
+            traceActionState("rectangle.commit.skipped", QString("reason=invalid state %1")
+                .arg(static_cast<int>(rectangleState_)));
+            return;
+        }
+        updateRectangleInput(point);
+        const auto end = rectanglePointForCursor(point);
+        if (!end) {
+            traceActionState("rectangle.commit.skipped", "reason=invalid width or height");
+            statusBar()->showMessage("Rectangle width and height must be positive", 2500);
+            return;
+        }
+        const bool committed = commitRectangle(*end);
+        if (!committed) {
+            traceActionState("rectangle.commit.failed", "reason=commitRectangle returned false");
+            return;
+        }
+        sketchFirstPoint_.reset();
+        sketchSecondPoint_.reset();
+        clearRectangleInput();
+        traceActionState("rectangle.stateTransition", "old=Drawing new=Ready");
+        rectangleState_ = RectangleState::Ready;
+        traceActionState("rectangle.commit.success", QString("entities=%1")
+            .arg(static_cast<int>(sketch->entities().size())));
+        return;
+    }
+
     const auto first = *sketchFirstPoint_;
     sketchFirstPoint_.reset();
     const auto second = sketchSecondPoint_;
@@ -2759,20 +2805,6 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
         result = modeling_.addSketchThreePointArc(activeSketchId_, first, *second, point);
     } else if (sketchTool_ == SketchTool::CenterArc) {
         result = modeling_.addSketchArc(activeSketchId_, first, *second, point);
-    } else if (sketchTool_ == SketchTool::Rectangle) {
-        if (rectangleState_ != RectangleState::Drawing
-            && rectangleState_ != RectangleState::NumericInput) return;
-        updateRectangleInput(point);
-        const auto end = rectanglePointForCursor(point);
-        if (!end) {
-            statusBar()->showMessage("Rectangle width and height must be positive", 2500);
-            return;
-        }
-        const bool committed = commitRectangle(*end);
-        if (committed) {
-            clearRectangleInput();
-            rectangleState_ = RectangleState::Ready;
-        }
     } else {
         result = modeling_.addSketchLine(activeSketchId_, first,
             {point.X(), first.Y()});
@@ -2782,11 +2814,6 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
             point, {first.X(), point.Y()});
         if (result.success) result = modeling_.addSketchLine(activeSketchId_,
             {first.X(), point.Y()}, first);
-    }
-    if (sketchTool_ == SketchTool::Rectangle) {
-        sketchFirstPoint_.reset();
-        sketchSecondPoint_.reset();
-        return;
     }
     if (!result.success) {
         QMessageBox::warning(this, "Sketch entity failed",

@@ -759,6 +759,58 @@ private slots:
         }
     }
 
+    void rectangleMouseClickCommitsExactlyFourEntities_data()
+    {
+        QTest::addColumn<bool>("faceAttached");
+        QTest::newRow("xy") << false;
+        QTest::newRow("face-attached") << true;
+    }
+
+    void rectangleMouseClickCommitsExactlyFourEntities()
+    {
+        QFETCH(bool, faceAttached);
+        if (qEnvironmentVariable("DISPLAY").isEmpty()
+            || qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen") {
+            QSKIP("Native OCCT viewer is required for Qt mouse Rectangle tests");
+        }
+        MainWindow window;
+        const auto box = window.modeling_.createBox();
+        const auto sketch = faceAttached
+            ? window.modeling_.createSketchOnFace({{
+                {box.id, cad::application::SelectionKind::Face, 1}}})
+            : window.modeling_.createSketch();
+        QVERIFY(!faceAttached || box.success);
+        QVERIFY(sketch.success);
+
+        window.show();
+        QCoreApplication::processEvents();
+        window.enterSketchEditing(sketch.id);
+        window.selectSketchRectangleTool();
+        QCoreApplication::processEvents();
+
+        const auto first = window.viewer_->sketchPointToScreen({0.0, 0.0});
+        const auto second = window.viewer_->sketchPointToScreen({40.0, 20.0});
+        QVERIFY(first);
+        QVERIFY(second);
+        QVERIFY(window.viewer_->rect().contains(*first));
+        QVERIFY(window.viewer_->rect().contains(*second));
+        const auto selectionBefore = window.viewer_->selectionSnapshot();
+
+        QTest::mouseClick(window.viewer_, Qt::LeftButton, Qt::NoModifier, *first);
+        QTest::mouseMove(window.viewer_, *second);
+        QTest::mouseClick(window.viewer_, Qt::LeftButton, Qt::NoModifier, *second);
+        QCoreApplication::processEvents();
+
+        const auto updated = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketch.id));
+        QVERIFY(updated);
+        QCOMPARE(updated->entityCount(), std::size_t{4});
+        QCOMPARE(window.rectangleState_, MainWindow::RectangleState::Ready);
+        QVERIFY(!window.sketchFirstPoint_.has_value());
+        QVERIFY(window.viewer_->sketchPreviewObject_.IsNull());
+        QCOMPARE(window.viewer_->selectionSnapshot().items, selectionBefore.items);
+    }
+
     void shapeReplacementReleasesSelectionBeforeMutation()
     {
         if (qEnvironmentVariable("DISPLAY").isEmpty()
