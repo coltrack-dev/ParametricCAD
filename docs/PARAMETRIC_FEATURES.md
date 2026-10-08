@@ -25,6 +25,22 @@ world-normalized native OCCT shape with identity ParametricCAD placement and
 generic IFC provenance metadata. Its B-Rep payload is serialized by the
 persistence layer, so reopening a `.pcad` does not require the source IFC.
 
+## Sketch creation workflow
+
+`Create Sketch` is the single user-facing Sketch creation command. With no
+face selected it offers `XY Plane`, `XZ Plane`, and `YZ Plane`. With exactly
+one selected planar face it also offers `Selected Planar Face`. Each choice
+creates the same `SketchFeature` and immediately enters Sketch edit mode.
+
+Rectangle is a normal Sketch drawing tool, alongside Line, Circle, Arc, Trim,
+and Extend; there is no separate Rectangle Sketch modeling feature. Global
+planes use `SketchSupportType::XY`, `XZ`, or `YZ`, while face-attached sketches
+use `SketchSupportType::Face` and the persistent topological face reference.
+`SketchFeature::currentFrame()` remains the common frame used by editing and
+downstream operations. Geometry and constraints retain stable `SketchEntityId`
+values through save/load. The former `Add Rectangle Sketch` UI action was only
+a shortcut for creating the default XY Sketch and is no longer presented.
+
 ## Revolve
 
 `RevolveFeature` consumes a validated closed `SketchFeature` profile and stores
@@ -168,3 +184,15 @@ recompute through `Body`, and then use `ModelPresenter::refreshModel()`.
 Visibility-only commands use `refreshVisibility()` and must not call
 `Body::recompute()`. Viewer camera, clipping, and saved-view restoration are
 also presentation-only operations.
+
+## Sweep (MVP)
+
+`SweepFeature` consumes exactly one valid closed Sketch profile and one model
+Edge path. Profile extraction uses the canonical `SketchProfileBuilder`, so
+construction geometry is ignored. The path is persisted as its owner feature
+ID plus a geometry-signature `TopologicalReference`, then resolved again after
+recompute and load. The current orientation is Frenet/tangent-following.
+
+Workflow: select the valid Sketch in the model tree, activate Sweep, pick one
+model Edge in the viewport, and confirm. Cancel leaves the model unchanged.
+Lofting, multiple rails, and a multi-edge Wire picker are outside this MVP.

@@ -16,7 +16,8 @@ compressed containers; legacy JSON projects remain readable.
 ### Modeling
 
 - Parametric Box, Cylinder, Cone, Sphere, Torus, and Hexagon primitives.
-- Rectangle `Sketch` and `Face` profile workflow.
+- Unified Sketch creation on the XY, XZ, and YZ global planes or a selected
+  planar face, with Rectangle, Line, Circle, and Arc drawing tools.
 - Extrude, Pocket, Push/Pull, Revolve, Boolean Fuse/Cut/Common, Fillet,
   Chamfer, Shell, Offset, Loft, and Sweep feature classes.
 - Linear and Path Pattern feature classes.
@@ -31,13 +32,15 @@ for compatibility and legacy input conversion.
 
 ### Sketch
 
-The current Sketch MVP supports editable rectangle profiles on the XY plane,
-Sketch-to-Face conversion, and downstream Extrude/Pocket workflows. The
-sketch subsystem also contains line, circle, arc, trimming, extending, and
-constraint services used by the current editing tools. It is not yet a full
-general-purpose constraint CAD system; advanced profile and solver coverage is
-still limited. See [docs/PARAMETRIC_FEATURES.md](docs/PARAMETRIC_FEATURES.md)
-and the focused sketch documents for the current scope.
+Create sketches through one command: choose `XY Plane`, `XZ Plane`, `YZ Plane`,
+or (when one planar face is selected) `Selected Planar Face`. The command then
+enters normal Sketch edit mode, where Rectangle, Line, Circle, Arc, Trim,
+Extend, and constraint tools create the same stable-ID Sketch entities. A
+global XY rectangle can be finished and extruded; XZ and YZ sketches are
+available for profiles and future independent path workflows. The sketch
+subsystem is not yet a full general-purpose constraint CAD system; advanced
+profile and solver coverage is still limited. See
+[docs/PARAMETRIC_FEATURES.md](docs/PARAMETRIC_FEATURES.md) for the model scope.
 
 ### Revolve from a Sketch
 
@@ -200,6 +203,15 @@ directories automatically.
 
 The test suite is headless where possible. GUI camera, clipping, and
 interaction checks require a desktop session.
+
+### Sweep from a Sketch
+
+Select a valid closed Sketch, activate `Sweep`, pick one model Edge, and
+confirm. The feature stores the path owner ID and persistent
+`TopologicalReference`, not an OCCT subshape index. Construction geometry does
+not affect profile eligibility. The MVP currently implements one Edge and
+Frenet/tangent-following orientation; Loft, multiple rails, and multi-edge
+Wire picking are not included.
 
 ## Example project
 

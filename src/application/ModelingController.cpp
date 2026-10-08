@@ -140,10 +140,11 @@ ModelingResult ModelingController::createCylinder()
         id("cylinder"), 25.0, 60.0));
 }
 
-ModelingResult ModelingController::createSketch()
+ModelingResult ModelingController::createSketch(
+    const cad::parametric::SketchSupportType support)
 {
     return addFeature(std::make_shared<cad::parametric::SketchFeature>(
-        id("sketch"), 100.0, 60.0));
+        id("sketch"), support, 100.0, 60.0));
 }
 
 ModelingResult ModelingController::createSketchOnFace(
@@ -924,6 +925,41 @@ ModelingResult ModelingController::createRevolve(
     }
 }
 
+ModelingResult ModelingController::createSweep(
+    const SelectionSnapshot& profileSelection,
+    const SelectionSnapshot& pathSelection)
+{
+    if (profileSelection.items.size() != 1
+        || profileSelection.items.front().kind != SelectionKind::Object) {
+        return {false, {}, "Sweep requires exactly one Sketch object"};
+    }
+    const auto profile = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(profileSelection.items.front().featureId));
+    if (!profile) return {false, {}, "Sweep requires a Sketch profile"};
+    std::string profileError;
+    if (!validateSketchProfile(*profile, profileError)) return {false, {}, profileError};
+    if (pathSelection.items.size() != 1
+        || pathSelection.items.front().kind != SelectionKind::Edge
+        || !pathSelection.items.front().subshapeIndex) {
+        return {false, {}, "Sweep requires exactly one path Edge"};
+    }
+    const auto& item = pathSelection.items.front();
+    const auto owner = body_.findFeature(item.featureId);
+    if (!owner) return {false, {}, "Sweep path owner does not exist"};
+    try {
+        SelectionResolver resolver(body_);
+        const auto edge = resolver.resolve(item);
+        if (!edge || edge->ShapeType() != TopAbs_EDGE)
+            return {false, {}, "Sweep path selection is not an Edge"};
+        const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            owner->id(), owner->shape(), *edge);
+        return addFeature(std::make_shared<cad::parametric::SweepFeature>(
+            id("sweep"), owner, reference, profile));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::resolveRevolveAxis(
     const std::string& profileFeatureId,
     const SelectionSnapshot& selection,
@@ -1404,6 +1440,7 @@ ModelingActionState ModelingController::actionState(
                 state.canPocket = profileValid;
             }
             state.canRevolve = profileValid;
+            state.canSweep = profileValid;
         }
     }
     return state;
@@ -1418,6 +1455,7 @@ ModelingActionState ModelingController::actionState(
         || selection.items.front().kind != SelectionKind::Object) {
         state.canExtrude = false;
         state.canRevolve = false;
+        state.canSweep = false;
     }
     if (!selection.items.empty()) {
         const auto& first = selection.items.front();

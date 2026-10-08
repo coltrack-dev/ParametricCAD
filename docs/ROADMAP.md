@@ -13,6 +13,9 @@ for the scope that is actually implemented in the application.
 - Legacy Document/Feature compatibility and legacy primitive conversion.
 - Parametric primitive, profile, operation, pattern, transform, and Push/Pull
   paths present in the current source tree.
+- Sweep MVP: one closed Sketch profile, one persistent model Edge path, and
+  Frenet/tangent-following orientation. Multi-edge wires, multiple rails, and
+  Loft remain future work.
 
 ### Selection subsystem migration
 

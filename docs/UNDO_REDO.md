@@ -86,7 +86,8 @@ Sketch -> Face -> Extrude remains editable after loading. No undo commands are s
 1. Create Hexagon and Cylinder in the Model panel; set Cylinder radius to 5.
 2. Zoom, pan and orbit; create Cut. Undo/Redo and verify operands/result visibility.
 3. Edit a dimension, finish editing, then Undo/Redo from both menu and editor focus.
-4. Create Rectangle Sketch -> Face -> Extrude Face. Change sketch width, then Undo;
+4. Create Sketch -> draw a rectangle -> Face -> Extrude Face. Change sketch
+   width, then Undo;
    confirm Face and Extrude update while the camera stays fixed.
 5. Delete Sketch with dependent Face/Extrude: cancel first, then confirm; Undo restores
    the entire chain in one step. Delete Cut and verify operands become visible;

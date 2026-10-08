@@ -80,7 +80,7 @@ private:
     std::vector<std::string> selectedIds() const;
     void createBox();
     void createCylinder();
-    void createRectangleSketch();
+    void createSketch();
     void createSketchOnFace();
     void editSelectedSketch();
     void editSketchById(const QString& sketchId);
@@ -120,6 +120,8 @@ private:
     void createChamfer();
     void createShell();
     void createRevolve();
+    void createSweep();
+    bool handleSweepPathSelection(const cad::application::SelectionSnapshot& selection);
     void beginRevolveAxisPick(const QString& featureId, const QString& axisType,
                               bool editingExisting = false);
     void cancelRevolveAxisPick();
@@ -166,6 +168,7 @@ private:
     QAction* chamferAction_{nullptr};
     QAction* shellAction_{nullptr};
     QAction* revolveAction_{nullptr};
+    QAction* sweepAction_{nullptr};
     bool revolveAxisPicking_{false};
     bool revolveRestoringSelectionMode_{false};
     bool revolveAxisPickEditing_{false};
@@ -175,10 +178,13 @@ private:
     double revolvePendingAngleDegrees_{360.0};
     cad::parametric::RevolveAxisType revolvePendingAxisType_{
         cad::parametric::RevolveAxisType::GlobalY};
+    bool sweepPathPicking_{false};
+    int sweepPreviousSelectionMode_{0};
+    cad::application::SelectionSnapshot sweepProfileSelection_;
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     QAction* importIfcAction_{nullptr};
 #endif
-    QAction* sketchOnFaceAction_{nullptr};
+    QAction* createSketchAction_{nullptr};
     QAction* editSketchAction_{nullptr};
     QAction* sketchLineAction_{nullptr};
     QAction* sketchConstructionAction_{nullptr};

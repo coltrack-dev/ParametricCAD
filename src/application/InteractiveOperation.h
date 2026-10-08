@@ -17,6 +17,7 @@ enum class InteractiveOperationKind
     Chamfer,
     Shell,
     Revolve,
+    Sweep,
     FeatureEdit
 };
 

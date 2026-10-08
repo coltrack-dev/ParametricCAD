@@ -856,13 +856,22 @@ public:
         const Ptr& pathFeature,
         const Ptr& profile
     );
+    SweepFeature(
+        std::string id,
+        const Ptr& pathOwner,
+        const cad::topology::TopologicalReference& pathReference,
+        const Ptr& profile
+    );
     const char* typeId() const noexcept override { return "Sweep"; }
     Ptr clone(std::string newId) const override;
+    std::vector<FeatureProperty> properties() const override;
 
     void setPath(TopoDS_Wire path);
 
     const TopoDS_Wire& path() const noexcept;
     const Ptr& profile() const noexcept;
+    const Ptr& pathOwner() const noexcept;
+    const std::optional<cad::topology::TopologicalReference>& pathReference() const noexcept;
 
 protected:
     TopoDS_Shape build() const override;
@@ -872,6 +881,8 @@ private:
     TopoDS_Wire path_;
     Ptr pathFeature_;
     Ptr profile_;
+    Ptr pathOwner_;
+    std::optional<cad::topology::TopologicalReference> pathReference_;
 };
 
 } // namespace cad::parametric

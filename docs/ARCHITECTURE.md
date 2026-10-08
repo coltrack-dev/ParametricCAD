@@ -1,5 +1,18 @@
 # Architecture
 
+## Unified Sketch creation
+
+The modeling UI exposes one `Create Sketch` command. It is enabled without a
+selection for global `XY Plane`, `XZ Plane`, and `YZ Plane` sketches, and a
+single selected planar face adds the `Selected Planar Face` placement choice.
+All choices create a `SketchFeature` and enter the same edit lifecycle; the
+Sketch tools create Lines, Rectangles, Circles, Arcs, and other entities with
+stable `SketchEntityId` values. Placement is represented by the existing
+`SketchSupportType` and `currentFrame()` model APIs, so downstream operations,
+selection lifecycle, and persistence do not need a special Rectangle Sketch
+path. The legacy `Add Rectangle Sketch` shortcut is intentionally absent from
+the normal UI.
+
 ParametricCAD is a C++20 / Qt 6 / Open CASCADE desktop application. The
 runtime separates the editable parametric model, application policy, and OCCT
 presentation. The model is the source of geometry and dependencies; the
@@ -121,8 +134,8 @@ After commit or property edit, the normal path is:
 ModelingController -> Body dirty/recompute -> ModelPresenter -> CadViewer
 ```
 
-Extrude, Pocket, Fillet, Chamfer, Shell, and Revolve use the session for staged numeric
-operation input; Push/Pull additionally uses it for its lightweight AIS drag
+Extrude, Pocket, Fillet, Chamfer, Shell, Revolve, and Sweep use the session for
+staged operation input; Push/Pull additionally uses it for its lightweight AIS drag
 preview. Their geometry construction remains in the corresponding feature and
 controller code. This keeps preview responsive while making persistent results,
 selection, and Undo/Redo use one model refresh pipeline.

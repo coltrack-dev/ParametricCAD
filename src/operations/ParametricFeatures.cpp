@@ -12,6 +12,7 @@
 #include <BRep_Builder.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
@@ -28,6 +29,7 @@
 #include <QJsonArray>
 #include <QUuid>
 #include <Standard_Failure.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 
 #include <array>
 #include <algorithm>
@@ -400,7 +402,7 @@ SketchFeature::SketchFeature(std::string id, double width, double height)
 SketchFeature::SketchFeature(
     std::string id, const SketchSupportType support, const double width, const double height,
     std::vector<SketchEntity> entities)
-    : ParametricFeature(std::move(id), "Rectangle Sketch"),
+    : ParametricFeature(std::move(id), "Sketch"),
       width_(width), height_(height), supportType_(support), frame_(globalSketchFrame(support)),
       entities_(std::move(entities))
 {
@@ -415,7 +417,7 @@ SketchFeature::SketchFeature(
     cad::topology::TopologicalReference faceReference,
     std::vector<SketchEntity> entities
 )
-    : ParametricFeature(std::move(id), "Sketch on Face"),
+    : ParametricFeature(std::move(id), "Sketch"),
       width_(0.0), height_(0.0), supportType_(SketchSupportType::Face),
       supportSource_(supportSource), faceReference_(std::move(faceReference)),
       entities_(std::move(entities))
@@ -845,7 +847,7 @@ FaceFeature::FaceFeature(std::string id, const Ptr& source)
 {
     requireFeature(source, "Sketch source");
     if (source->role() != FeatureRole::Sketch) {
-        throw std::invalid_argument("Face source must be a Rectangle Sketch");
+        throw std::invalid_argument("Face source must be a Sketch");
     }
     sourceFeatureId_ = source->id();
     addDependency(source);
@@ -2725,6 +2727,25 @@ SweepFeature::SweepFeature(
     addDependency(profile_);
 }
 
+SweepFeature::SweepFeature(
+    std::string id,
+    const Ptr& pathOwner,
+    const cad::topology::TopologicalReference& pathReference,
+    const Ptr& profile
+)
+    : ParametricFeature(std::move(id), "Sweep"),
+      profile_(profile), pathOwner_(pathOwner), pathReference_(pathReference)
+{
+    requireFeature(pathOwner_, "sweep path owner");
+    requireFeature(profile_, "profile");
+    if (pathReference_->featureId != pathOwner_->id()
+        || pathReference_->kind != cad::topology::TopologicalKind::Edge) {
+        throw std::invalid_argument("Sweep path reference must identify an Edge of its owner");
+    }
+    addDependency(pathOwner_);
+    if (pathOwner_->id() != profile_->id()) addDependency(profile_);
+}
+
 void SweepFeature::setPath(
     TopoDS_Wire path
 )
@@ -2745,17 +2766,72 @@ SweepFeature::profile() const noexcept
     return profile_;
 }
 
+const ParametricFeature::Ptr&
+SweepFeature::pathOwner() const noexcept
+{
+    return pathOwner_;
+}
+
+const std::optional<cad::topology::TopologicalReference>&
+SweepFeature::pathReference() const noexcept
+{
+    return pathReference_;
+}
+
+std::vector<FeatureProperty> SweepFeature::properties() const
+{
+    const auto pathName = pathOwner_ ? pathOwner_->name()
+        : (pathFeature_ ? pathFeature_->name() : "Unresolved");
+    return {textProperty("profileFeatureId", "Profile", profile_ ? profile_->name() : "Unresolved"),
+            textProperty("pathFeatureId", "Path", pathName),
+            textProperty("orientation", "Orientation", "Frenet")};
+}
+
 TopoDS_Shape SweepFeature::build() const
 {
-    const auto path = pathFeature_ ? wireFromFeature(pathFeature_) : path_;
+    TopoDS_Shape profileShape;
+    if (const auto sketch = std::dynamic_pointer_cast<SketchFeature>(profile_)) {
+        const auto profiles = cad::operations::SketchProfileBuilder::build(*sketch);
+        if (profiles.faces.size() != 1)
+            throw std::runtime_error("Sweep requires exactly one closed Sketch profile");
+        profileShape = profiles.faces.front();
+    } else {
+        profileShape = profile_->shape();
+    }
+    TopoDS_Wire path;
+    if (pathOwner_ && pathReference_) {
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *pathReference_, pathOwner_->shape());
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+            || resolved.shape->ShapeType() != TopAbs_EDGE) {
+            throw std::runtime_error("Sweep path Edge reference could not be resolved");
+        }
+        const auto edge = TopoDS::Edge(*resolved.shape);
+        BRepAdaptor_Curve curve(edge);
+        if (curve.FirstParameter() == curve.LastParameter())
+            throw std::runtime_error("Sweep path Edge has zero length");
+        BRepBuilderAPI_MakeWire wireBuilder(edge);
+        if (!wireBuilder.IsDone()) throw std::runtime_error("Sweep path Edge is invalid");
+        path = wireBuilder.Wire();
+    } else {
+        path = pathFeature_ ? wireFromFeature(pathFeature_) : path_;
+    }
     return cad::modeling::BasicFeatures::sweep(
         path,
-        profile_->shape()
+        profileShape
     );
 }
 
 void SweepFeature::writeParameters(QJsonObject& object) const
 {
+    if (pathOwner_ && pathReference_) {
+        object.insert("pathFeatureId", QString::fromStdString(pathOwner_->id()));
+        object.insert("pathReference", cad::topology::toJson(*pathReference_));
+        object.insert("profileFeatureId", QString::fromStdString(profile_->id()));
+        object.insert("solid", true);
+        object.insert("frenet", false);
+        return;
+    }
     if (!pathFeature_)
         throw std::runtime_error("Sweep has no serializable path feature reference");
     object.insert("pathFeatureId", QString::fromStdString(pathFeature_->id()));
@@ -2930,9 +3006,11 @@ ParametricFeature::Ptr LoftFeature::clone(std::string newId) const
 
 ParametricFeature::Ptr SweepFeature::clone(std::string newId) const
 {
-    auto copy = pathFeature_
-        ? std::make_shared<SweepFeature>(std::move(newId), pathFeature_, profile_)
-        : std::make_shared<SweepFeature>(std::move(newId), path_, profile_);
+    auto copy = (pathOwner_ && pathReference_)
+        ? std::make_shared<SweepFeature>(std::move(newId), pathOwner_, *pathReference_, profile_)
+        : (pathFeature_
+            ? std::make_shared<SweepFeature>(std::move(newId), pathFeature_, profile_)
+            : std::make_shared<SweepFeature>(std::move(newId), path_, profile_));
     copyPlacementTo(copy);
     return copy;
 }

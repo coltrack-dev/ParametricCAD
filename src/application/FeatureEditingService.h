@@ -39,6 +39,7 @@ struct ModelingActionState
     bool canChamfer{false};
     bool canShell{false};
     bool canRevolve{false};
+    bool canSweep{false};
     bool canSketchOnFace{false};
     bool canEditSketch{false};
 };

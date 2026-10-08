@@ -122,6 +122,67 @@ private slots:
         QVERIFY(controller.actionState({box.id, cylinder.id}).canBoolean);
     }
 
+    void createSketchSupportsAllPlacementsAndRoundTrips()
+    {
+        ModelingController controller;
+        const auto xy = controller.createSketch(SketchSupportType::XY);
+        const auto xz = controller.createSketch(SketchSupportType::XZ);
+        const auto yz = controller.createSketch(SketchSupportType::YZ);
+        QVERIFY(xy.success && xz.success && yz.success);
+
+        QVERIFY(controller.addSketchLine(xy.id, {0, 0}, {20, 0}).success);
+        QVERIFY(controller.addSketchLine(xy.id, {20, 0}, {20, 10}).success);
+        QVERIFY(controller.addSketchLine(xy.id, {20, 10}, {0, 10}).success);
+        QVERIFY(controller.addSketchLine(xy.id, {0, 10}, {0, 0}).success);
+        QVERIFY(controller.addSketchCircle(xz.id, {0, 0}, 5.0).success);
+        QVERIFY(controller.addSketchCircle(yz.id, {0, 0}, 5.0).success);
+
+        const auto xyFeature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(xy.id));
+        QVERIFY(xyFeature);
+        QCOMPARE(xyFeature->supportType(), SketchSupportType::XY);
+        QCOMPARE(xyFeature->role(), FeatureRole::Sketch);
+        QCOMPARE(xyFeature->name(), std::string("Sketch"));
+        QVERIFY(!cad::operations::SketchProfileBuilder::build(*xyFeature).faces.empty());
+        const auto firstLineId = std::visit(
+            [](const auto& entity) { return entity.id; }, xyFeature->entities().front());
+        QVERIFY(controller.addSketchHorizontal(xy.id, firstLineId).success);
+
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto face = firstPlanarFace(controller.body().findFeature(box.id)->shape());
+        QVERIFY(face.index > 0);
+        const auto attached = controller.createSketchOnFace({{
+            {box.id, SelectionKind::Face, face.index}}});
+        QVERIFY(attached.success);
+        QVERIFY(controller.addSketchCircle(attached.id, {0, 0}, 3.0).success);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("sketch-placements.pcad");
+        QVERIFY(ProjectFile::save(path, controller.document(), controller.body(), error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+
+        const auto loadedXY = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(xy.id));
+        const auto loadedXZ = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(xz.id));
+        const auto loadedYZ = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(yz.id));
+        const auto loadedFace = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(attached.id));
+        QVERIFY(loadedXY && loadedXZ && loadedYZ && loadedFace);
+        QCOMPARE(loadedXY->supportType(), SketchSupportType::XY);
+        QCOMPARE(loadedXZ->supportType(), SketchSupportType::XZ);
+        QCOMPARE(loadedYZ->supportType(), SketchSupportType::YZ);
+        QCOMPARE(loadedFace->supportType(), SketchSupportType::Face);
+        QCOMPARE(loadedXY->entityCount(), std::size_t{4});
+        QCOMPARE(loadedXZ->entityCount(), std::size_t{1});
+        QCOMPARE(loadedYZ->entityCount(), std::size_t{1});
+        QCOMPARE(loadedFace->entityCount(), std::size_t{1});
+        QCOMPARE(loadedXY->constraints().size(), std::size_t{1});
+        QVERIFY(loadedFace->faceReference().has_value());
+    }
+
     void sketchExtrudeEligibilityIncludesFaceAttachedProfiles()
     {
         ModelingController controller;
@@ -284,6 +345,54 @@ private slots:
             {openSketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
         QVERIFY(!openExtrude.success);
         QVERIFY(openController.body().features().size() == 1);
+    }
+
+    void sweepUsesPersistentEdgeReference()
+    {
+        ModelingController controller;
+        const auto sketch = controller.createSketch();
+        QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchCircle(sketch.id, {0.0, 0.0}, 5.0).success);
+        QVERIFY(controller.addSketchLine(
+            sketch.id, {20.0, 0.0}, {20.0, 10.0}, true).success);
+
+        const auto path = controller.createBox();
+        QVERIFY(path.success);
+        const SelectionSnapshot profileSelection{{
+            {sketch.id, SelectionKind::Object, std::nullopt}}};
+        const SelectionSnapshot pathSelection{{
+            {path.id, SelectionKind::Edge, 1}}};
+        const auto sweep = controller.createSweep(profileSelection, pathSelection);
+        QVERIFY2(sweep.success, qPrintable(QString::fromStdString(sweep.error)));
+        const auto feature = std::dynamic_pointer_cast<SweepFeature>(
+            controller.body().findFeature(sweep.id));
+        QVERIFY(feature);
+        QVERIFY(feature->pathOwner());
+        QVERIFY(feature->pathReference());
+        QCOMPARE(feature->pathReference()->featureId, path.id);
+        QVERIFY(!feature->shape().IsNull());
+        QVERIFY(volume(feature->shape()) > 0.0);
+
+        controller.undo();
+        QVERIFY(!controller.body().findFeature(sweep.id));
+        controller.redo();
+        QVERIFY(controller.body().findFeature(sweep.id));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        QVERIFY2(ProjectFile::save(directory.filePath("sweep.pcad"),
+            controller.document(), controller.body(), error), qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(directory.filePath("sweep.pcad"),
+            loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<SweepFeature>(
+            loadedBody.findFeature(sweep.id));
+        QVERIFY(loaded);
+        QVERIFY(loaded->pathReference());
+        QVERIFY(!loaded->shape().IsNull());
+        QVERIFY(volume(loaded->shape()) > 0.0);
     }
 
     void sketchProfileBuilderSupportsHolesAndDisconnectedRegions()

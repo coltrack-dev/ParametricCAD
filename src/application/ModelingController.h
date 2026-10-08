@@ -30,7 +30,8 @@ public:
     std::vector<FeatureDescriptor> features() const override;
     ModelingResult createBox();
     ModelingResult createCylinder();
-    ModelingResult createSketch();
+    ModelingResult createSketch(
+        cad::parametric::SketchSupportType support = cad::parametric::SketchSupportType::XY);
     ModelingResult createSketchOnFace(const SelectionSnapshot& selection);
     ModelingResult addSketchLine(
         const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
@@ -117,6 +118,10 @@ public:
         const SelectionSnapshot& selection,
         cad::parametric::RevolveAxisDefinition axis,
         double angleDegrees = 360.0
+    );
+    ModelingResult createSweep(
+        const SelectionSnapshot& profileSelection,
+        const SelectionSnapshot& pathSelection
     );
     ModelingResult resolveRevolveAxis(
         const std::string& profileFeatureId,

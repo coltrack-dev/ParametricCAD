@@ -518,6 +518,7 @@ void MainWindow::createParametricPanel()
         [this](const cad::application::SelectionSnapshot& selection) {
             if (revolveRestoringSelectionMode_) return;
             if (handleRevolveAxisSelection(selection)) return;
+            if (handleSweepPathSelection(selection)) return;
             applySelectionSnapshot(selection);
     });
 
@@ -1058,7 +1059,7 @@ void MainWindow::updateActionState()
     if (pocketAction_) pocketAction_->setEnabled(state.canPocket);
     if (editSketchAction_) editSketchAction_->setEnabled(
         state.canEditSketch && activeSketchId_.empty());
-    if (sketchOnFaceAction_) sketchOnFaceAction_->setEnabled(state.canSketchOnFace);
+    if (createSketchAction_) createSketchAction_->setEnabled(activeSketchId_.empty());
     bool selectedSketchEdge = currentSelection_.items.size() == 1
         && currentSelection_.items.front().kind == cad::application::SelectionKind::Edge
         && currentSelection_.items.front().subshapeIndex
@@ -1164,6 +1165,7 @@ void MainWindow::updateActionState()
             .arg(revolveAction_->isEnabled())
             .arg(associated));
     }
+    if (sweepAction_) sweepAction_->setEnabled(state.canSweep && activeSketchId_.empty());
 }
 
 void MainWindow::reportResult(const cad::application::ModelingResult& result)
@@ -1292,11 +1294,8 @@ void MainWindow::createActions()
     toolBar->addAction(cylinderAction);
 
     modelingMenu->addSeparator();
-    auto* sketchAction = modelingMenu->addAction("Add Rectangle Sketch");
-    connect(sketchAction, &QAction::triggered, this, &MainWindow::createRectangleSketch);
-    sketchOnFaceAction_ = modelingMenu->addAction("Sketch on Face");
-    sketchOnFaceAction_->setEnabled(false);
-    connect(sketchOnFaceAction_, &QAction::triggered, this, &MainWindow::createSketchOnFace);
+    createSketchAction_ = modelingMenu->addAction("Create Sketch");
+    connect(createSketchAction_, &QAction::triggered, this, &MainWindow::createSketch);
     editSketchAction_ = modelingMenu->addAction("Edit Sketch");
     editSketchAction_->setEnabled(false);
     connect(editSketchAction_, &QAction::triggered, this, &MainWindow::editSelectedSketch);
@@ -1391,6 +1390,11 @@ void MainWindow::createActions()
     revolveAction_->setToolTip("Revolve a Sketch profile");
     connect(revolveAction_, &QAction::triggered, this, &MainWindow::createRevolve);
     toolBar->addAction(revolveAction_);
+    sweepAction_ = modelingMenu->addAction("Sweep");
+    sweepAction_->setEnabled(false);
+    sweepAction_->setToolTip("Sweep a Sketch profile along a model Edge");
+    connect(sweepAction_, &QAction::triggered, this, &MainWindow::createSweep);
+    toolBar->addAction(sweepAction_);
     linearPatternAction_ = modelingMenu->addAction("Linear Pattern");
     linearPatternAction_->setEnabled(false);
     linearPatternAction_->setToolTip("Create a linear pattern from the selected object");
@@ -1451,6 +1455,13 @@ bool MainWindow::beginOperation(
 void MainWindow::cancelOperation()
 {
     cancelRevolveAxisPick();
+    if (sweepPathPicking_) {
+        sweepPathPicking_ = false;
+        viewer_->setSelectionMode(static_cast<CadViewer::SelectionMode>(
+            sweepPreviousSelectionMode_));
+        sweepProfileSelection_ = {};
+        statusBar()->showMessage("Sweep path pick cancelled", 2000);
+    }
     operationSession_.cancel();
 }
 
@@ -1459,9 +1470,28 @@ bool MainWindow::commitOperation()
     return operationSession_.commit().has_value();
 }
 
-void MainWindow::createRectangleSketch()
+void MainWindow::createSketch()
 {
-    const auto result = modeling_.createSketch();
+    const auto state = modeling_.actionState(currentSelection_);
+    QStringList placements{"XY Plane", "XZ Plane", "YZ Plane"};
+    if (state.canSketchOnFace) placements.prepend("Selected Planar Face");
+
+    bool accepted = false;
+    const auto placement = QInputDialog::getItem(
+        this, "Create Sketch", "Placement:", placements, 0, false, &accepted);
+    if (!accepted) return;
+
+    cad::application::ModelingResult result;
+    if (placement == "Selected Planar Face") {
+        result = modeling_.createSketchOnFace(currentSelection_);
+    } else {
+        const auto support = placement == "XZ Plane"
+            ? cad::parametric::SketchSupportType::XZ
+            : placement == "YZ Plane"
+                ? cad::parametric::SketchSupportType::YZ
+                : cad::parametric::SketchSupportType::XY;
+        result = modeling_.createSketch(support);
+    }
     reportResult(result);
     if (result.success) enterSketchEditing(result.id);
 }
@@ -2122,6 +2152,48 @@ void MainWindow::createRevolve()
     const auto result = modeling_.createRevolve(currentSelection_, axis, angle);
     if (!result.success) cancelOperation(); else commitOperation();
     reportResult(result);
+}
+
+void MainWindow::createSweep()
+{
+    if (currentSelection_.items.size() != 1
+        || currentSelection_.items.front().kind != cad::application::SelectionKind::Object) {
+        return;
+    }
+    const auto profile = modeling_.body().findFeature(currentSelection_.items.front().featureId);
+    if (!profile || profile->role() != cad::parametric::FeatureRole::Sketch) return;
+    if (!beginOperation(cad::application::InteractiveOperationKind::Sweep,
+            {profile->id()})) return;
+    sweepProfileSelection_ = currentSelection_;
+    sweepPreviousSelectionMode_ = static_cast<int>(viewer_->selectionMode());
+    sweepPathPicking_ = true;
+    viewer_->setAxisPickCancelHandler([this]() { cancelOperation(); });
+    viewer_->setSelectionMode(CadViewer::SelectionMode::Edge);
+    statusBar()->showMessage("Pick a model Edge for the Sweep path");
+}
+
+bool MainWindow::handleSweepPathSelection(
+    const cad::application::SelectionSnapshot& selection)
+{
+    if (!sweepPathPicking_) return false;
+    if (selection.items.size() != 1
+        || selection.items.front().kind != cad::application::SelectionKind::Edge) {
+        return true;
+    }
+    const auto result = modeling_.createSweep(sweepProfileSelection_, selection);
+    viewer_->setAxisPickCancelHandler({});
+    sweepPathPicking_ = false;
+    viewer_->setSelectionMode(static_cast<CadViewer::SelectionMode>(
+        sweepPreviousSelectionMode_));
+    sweepProfileSelection_ = {};
+    if (!result.success) {
+        operationSession_.cancel();
+        reportResult(result);
+        return true;
+    }
+    operationSession_.commit();
+    reportResult(result);
+    return true;
 }
 
 void MainWindow::beginRevolveAxisPick(

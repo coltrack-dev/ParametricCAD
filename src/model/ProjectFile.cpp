@@ -815,6 +815,11 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             const auto path = body.findFeature(string(o, "pathFeatureId"));
             const auto profile = body.findFeature(string(o, "profileFeatureId"));
             require(path && profile, "Sweep references missing path or profile");
+            if (o.contains("pathReference")) {
+                return std::make_shared<SweepFeature>(string(o, "id"), path,
+                    cad::topology::topologicalReferenceFromJson(
+                        o.value("pathReference").toObject()), profile);
+            }
             return std::make_shared<SweepFeature>(string(o, "id"), path, profile);
         }},
         {"LinearPattern", [](const QJsonObject& o, const Body& body) {
