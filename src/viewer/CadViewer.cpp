@@ -284,8 +284,10 @@ void configureSketchPresentation(
 TopoDS_Shape makeSketchPreviewShape(
     const gp_Pnt& first,
     const gp_Pnt& current,
+    const gp_Dir& xDirection,
     const gp_Dir& normal,
-    const CadViewer::SketchPreviewTool tool)
+    const CadViewer::SketchPreviewTool tool,
+    const std::optional<gp_Pnt>& second)
 {
     BRep_Builder builder;
     TopoDS_Compound compound;
@@ -293,12 +295,30 @@ TopoDS_Shape makeSketchPreviewShape(
 
     const double radius = first.Distance(current);
     if (tool == CadViewer::SketchPreviewTool::Circle && radius > 1.0e-9) {
-        const gp_Circ circle(gp_Ax2(first, normal), radius);
+        const gp_Circ circle(gp_Ax2(first, normal, xDirection), radius);
         auto circleEdge = BRepBuilderAPI_MakeEdge(circle);
         if (circleEdge.IsDone()) {
             const TopoDS_Shape edge = circleEdge.Edge();
             builder.Add(compound, edge);
         }
+    }
+
+    if (tool == CadViewer::SketchPreviewTool::Arc && second
+        && first.Distance(*second) > 1.0e-9) {
+        const gp_Circ circle(gp_Ax2(first, normal, xDirection), first.Distance(*second));
+        const auto startVector = gp_Vec(first, *second);
+        const auto endVector = gp_Vec(first, current);
+        const auto yDirection = gp_Vec(normal).Crossed(gp_Vec(xDirection));
+        const double startAngle = std::atan2(
+            startVector.Dot(yDirection), startVector.Dot(gp_Vec(xDirection)));
+        const double endAngle = std::atan2(
+            endVector.Dot(yDirection), endVector.Dot(gp_Vec(xDirection)));
+        double sweep = endAngle - startAngle;
+        while (sweep <= 0.0) sweep += 2.0 * std::acos(-1.0);
+        while (sweep > 2.0 * std::acos(-1.0)) sweep -= 2.0 * std::acos(-1.0);
+        auto arcBuilder = BRepBuilderAPI_MakeEdge(
+            circle, startAngle, startAngle + sweep);
+        if (arcBuilder.IsDone()) builder.Add(compound, arcBuilder.Edge());
     }
 
     auto radiusEdge = BRepBuilderAPI_MakeEdge(first, current);
@@ -340,7 +360,8 @@ TopoDS_Shape makeTrimPreviewShape(
                 sketchWorldPoint(frame, line->start), sketchWorldPoint(frame, line->end));
             if (edgeBuilder.IsDone()) edge = edgeBuilder.Edge();
         } else if (const auto* arc = std::get_if<cad::parametric::SketchArc>(&entity)) {
-            const gp_Circ circle(gp_Ax2(sketchWorldPoint(frame, arc->center), frame.normal), arc->radius);
+            const gp_Circ circle(gp_Ax2(
+                sketchWorldPoint(frame, arc->center), frame.normal, frame.xDirection), arc->radius);
             const double sweep = arc->signedSweep();
             if (sweep > 0.0) {
                 auto edgeBuilder = BRepBuilderAPI_MakeEdge(circle, arc->startAngle,
@@ -699,6 +720,7 @@ void CadViewer::exitSketchMode()
         traceSelectionLifecycle("ClearSelected AFTER");
     }
     sketchPreviewFirstPoint_.reset();
+    sketchPreviewSecondPoint_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
         traceSelectionLifecycle(QString("AIS Remove sketchPreview obj=%1 before")
             .arg(selectionObjectPointer(sketchPreviewObject_)));
@@ -730,6 +752,7 @@ void CadViewer::setSketchPreviewTool(const SketchPreviewTool tool)
         .arg(static_cast<int>(tool)).arg(selectionObjectPointer(sketchPreviewObject_)));
     sketchPreviewTool_ = tool;
     sketchPreviewFirstPoint_.reset();
+    sketchPreviewSecondPoint_.reset();
     if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
         traceSelectionLifecycle(QString("AIS Remove sketchPreview obj=%1 before")
             .arg(selectionObjectPointer(sketchPreviewObject_)));
@@ -2420,6 +2443,7 @@ void CadViewer::clear()
         sketchPreviewObject_.Nullify();
     }
     sketchPreviewFirstPoint_.reset();
+    sketchPreviewSecondPoint_.reset();
     context_->RemoveAll(Standard_True);
     spatialBoxObject_.Nullify();
     displayedShapes_.clear();
@@ -3521,14 +3545,43 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
             gp_Pnt world = sketchOrigin_;
             world.Translate(gp_Vec(sketchXDirection_) * point->X()
                 + gp_Vec(sketchYDirection_) * point->Y());
-            if (!sketchPreviewFirstPoint_) {
-                sketchPreviewFirstPoint_ = world;
-            } else {
-                sketchPreviewFirstPoint_.reset();
-                if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
-                    context_->Remove(sketchPreviewObject_, Standard_True);
+            if (sketchPreviewTool_ == SketchPreviewTool::Arc
+                && qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) {
+                qInfo().noquote() << QString(
+                    "[ARC] click screen=(%1,%2) world=(%3,%4,%5) local=(%6,%7) "
+                    "frameOrigin=(%8,%9,%10) frameX=(%11,%12,%13) frameY=(%14,%15,%16) "
+                    "frameNormal=(%17,%18,%19)")
+                    .arg(lastMousePosition_.x()).arg(lastMousePosition_.y())
+                    .arg(world.X()).arg(world.Y()).arg(world.Z())
+                    .arg(point->X()).arg(point->Y())
+                    .arg(sketchOrigin_.X()).arg(sketchOrigin_.Y()).arg(sketchOrigin_.Z())
+                    .arg(sketchXDirection_.X()).arg(sketchXDirection_.Y()).arg(sketchXDirection_.Z())
+                    .arg(sketchYDirection_.X()).arg(sketchYDirection_.Y()).arg(sketchYDirection_.Z())
+                    .arg(sketchNormal_.X()).arg(sketchNormal_.Y()).arg(sketchNormal_.Z());
+            }
+            if (sketchPreviewTool_ == SketchPreviewTool::Arc) {
+                if (!sketchPreviewFirstPoint_) {
+                    sketchPreviewFirstPoint_ = world;
+                } else if (!sketchPreviewSecondPoint_) {
+                    sketchPreviewSecondPoint_ = world;
+                } else {
+                    sketchPreviewFirstPoint_.reset();
+                    sketchPreviewSecondPoint_.reset();
+                    if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+                        context_->Remove(sketchPreviewObject_, Standard_True);
+                    }
+                    sketchPreviewObject_.Nullify();
                 }
-                sketchPreviewObject_.Nullify();
+            } else {
+                if (!sketchPreviewFirstPoint_) {
+                    sketchPreviewFirstPoint_ = world;
+                } else {
+                    sketchPreviewFirstPoint_.reset();
+                    if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
+                        context_->Remove(sketchPreviewObject_, Standard_True);
+                    }
+                    sketchPreviewObject_.Nullify();
+                }
             }
         }
         if (sketchPointClickedHandler_) {
@@ -3694,7 +3747,8 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
             current.Translate(gp_Vec(sketchXDirection_) * point->X()
                 + gp_Vec(sketchYDirection_) * point->Y());
             const auto shape = makeSketchPreviewShape(
-                *sketchPreviewFirstPoint_, current, sketchNormal_, sketchPreviewTool_);
+                *sketchPreviewFirstPoint_, current, sketchXDirection_, sketchNormal_,
+                sketchPreviewTool_, sketchPreviewSecondPoint_);
             if (sketchPreviewObject_.IsNull()) {
                 sketchPreviewObject_ = new AIS_Shape(shape);
                 sketchPreviewObject_->SetDisplayMode(AIS_WireFrame);
@@ -3933,6 +3987,7 @@ void CadViewer::keyPressEvent(QKeyEvent* event)
 {
     if (sketchMode_ && event->key() == Qt::Key_Escape) {
         sketchPreviewFirstPoint_.reset();
+        sketchPreviewSecondPoint_.reset();
         if (!sketchPreviewObject_.IsNull() && !context_.IsNull()) {
             context_->Remove(sketchPreviewObject_, Standard_True);
         }

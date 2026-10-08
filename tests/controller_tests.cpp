@@ -1711,6 +1711,57 @@ private slots:
         QVERIFY(!cylinderController.createSketchOnFace(curvedFace).success);
     }
 
+    void arcUsesSketchFrameForGlobalAndFaceAttachedSketches()
+    {
+        const auto verifyArc = [](ModelingController& controller,
+                                  const std::string& sketchId) {
+            QVERIFY(controller.addSketchArc(
+                sketchId, {10.0, 10.0}, {15.0, 10.0}, {10.0, 15.0}).success);
+            const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+                controller.body().findFeature(sketchId));
+            QVERIFY(sketch);
+            const auto frame = sketch->currentFrame();
+            const auto worldPoint = [&frame](const gp_Pnt2d& point) {
+                gp_Pnt result = frame.origin;
+                result.Translate(gp_Vec(frame.xDirection) * point.X()
+                    + gp_Vec(frame.yDirection) * point.Y());
+                return result;
+            };
+            const auto expectedCenter = worldPoint({10.0, 10.0});
+            const auto expectedStart = worldPoint({15.0, 10.0});
+            const auto expectedEnd = worldPoint({10.0, 15.0});
+
+            TopTools_IndexedMapOfShape edges;
+            TopExp::MapShapes(sketch->shape(), TopAbs_EDGE, edges);
+            QVERIFY(edges.Extent() == 1);
+            const BRepAdaptor_Curve curve(TopoDS::Edge(edges.FindKey(1)));
+            QCOMPARE(curve.GetType(), GeomAbs_Circle);
+            QVERIFY(curve.Circle().Location().Distance(expectedCenter) < 1.0e-6);
+            const auto first = curve.Value(curve.FirstParameter());
+            const auto last = curve.Value(curve.LastParameter());
+            QVERIFY((first.Distance(expectedStart) < 1.0e-6
+                && last.Distance(expectedEnd) < 1.0e-6)
+                || (first.Distance(expectedEnd) < 1.0e-6
+                    && last.Distance(expectedStart) < 1.0e-6));
+        };
+
+        for (const auto support : {SketchSupportType::XY, SketchSupportType::XZ,
+                                   SketchSupportType::YZ}) {
+            ModelingController controller;
+            const auto sketch = controller.createSketch(support);
+            QVERIFY(sketch.success);
+            verifyArc(controller, sketch.id);
+        }
+
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto sketch = controller.createSketchOnFace(SelectionSnapshot{{
+            {box.id, SelectionKind::Face, 1}}});
+        QVERIFY(sketch.success);
+        verifyArc(controller, sketch.id);
+    }
+
     void duplicateCreatesIndependentFeatureAndRepeatsDelta()
     {
         ModelingController controller;

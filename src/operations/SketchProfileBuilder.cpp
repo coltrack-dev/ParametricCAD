@@ -221,7 +221,7 @@ SketchEdgeItem arcEdgeItem(const cad::parametric::SketchFrame& frame,
         throw std::runtime_error("Sketch arc has invalid sweep");
     }
     const gp_Circ circle(
-        gp_Ax2(worldPoint(frame, arc.center), frame.normal), arc.radius);
+        gp_Ax2(worldPoint(frame, arc.center), frame.normal, frame.xDirection), arc.radius);
     BRepBuilderAPI_MakeEdge edgeBuilder;
     if (sweep > 0.0) {
         edgeBuilder = BRepBuilderAPI_MakeEdge(

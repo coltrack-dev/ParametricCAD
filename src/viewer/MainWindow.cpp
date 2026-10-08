@@ -1749,7 +1749,7 @@ void MainWindow::selectSketchArcTool()
     sketchTool_ = SketchTool::Arc;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
-    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Arc);
     refreshConstraintManager();
     statusBar()->showMessage("Arc: select center, start, then end");
 }
@@ -1919,6 +1919,26 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
         modeling_.body().findFeature(activeSketchId_));
     if (!sketch) return;
+    if (sketchTool_ == SketchTool::Arc) {
+        const auto frame = sketch->currentFrame();
+        gp_Pnt world = frame.origin;
+        world.Translate(gp_Vec(frame.xDirection) * point.X()
+            + gp_Vec(frame.yDirection) * point.Y());
+        const auto clickNumber = sketchFirstPoint_
+            ? (sketchSecondPoint_ ? 3 : 2) : 1;
+        traceActionState("arc.click", QString(
+            "click=%1 local=(%2,%3) world=(%4,%5,%6) support=%7 "
+            "frameOrigin=(%8,%9,%10) frameX=(%11,%12,%13) frameY=(%14,%15,%16) "
+            "frameNormal=(%17,%18,%19)")
+            .arg(clickNumber)
+            .arg(point.X()).arg(point.Y())
+            .arg(world.X()).arg(world.Y()).arg(world.Z())
+            .arg(sketchSupportName(sketch->supportType()))
+            .arg(frame.origin.X()).arg(frame.origin.Y()).arg(frame.origin.Z())
+            .arg(frame.xDirection.X()).arg(frame.xDirection.Y()).arg(frame.xDirection.Z())
+            .arg(frame.yDirection.X()).arg(frame.yDirection.Y()).arg(frame.yDirection.Z())
+            .arg(frame.normal.X()).arg(frame.normal.Y()).arg(frame.normal.Z()));
+    }
     if (sketchTool_ == SketchTool::Horizontal || sketchTool_ == SketchTool::Vertical) {
         const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
             sketch->entities(), point, hitTolerance);
@@ -2114,6 +2134,20 @@ void MainWindow::handleSketchPoint(const gp_Pnt2d& point, const double hitTolera
     if (!result.success) {
         QMessageBox::warning(this, "Sketch entity failed",
             QString::fromStdString(result.error));
+    } else if (sketchTool_ == SketchTool::Arc) {
+        const auto updated = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(activeSketchId_));
+        if (updated && !updated->entities().empty()) {
+            if (const auto* arc = std::get_if<cad::parametric::SketchArc>(
+                    &updated->entities().back())) {
+                traceActionState("arc.stored", QString(
+                    "center=(%1,%2) start=(%3,%4) end=(%5,%6) radius=%7")
+                    .arg(arc->center.X()).arg(arc->center.Y())
+                    .arg(arc->startPoint().X()).arg(arc->startPoint().Y())
+                    .arg(arc->endPoint().X()).arg(arc->endPoint().Y())
+                    .arg(arc->radius));
+            }
+        }
     }
 }
 

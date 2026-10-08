@@ -208,7 +208,8 @@ gp_Pnt worldPoint(const SketchFrame& frame, const gp_Pnt2d& point)
 
 TopoDS_Edge makeArcEdge(const SketchFrame& frame, const SketchArc& arc)
 {
-    const gp_Circ circle(gp_Ax2(worldPoint(frame, arc.center), frame.normal), arc.radius);
+    const gp_Circ circle(
+        gp_Ax2(worldPoint(frame, arc.center), frame.normal, frame.xDirection), arc.radius);
     const double sweep = arc.signedSweep();
     if (sweep > 0.0) {
         return BRepBuilderAPI_MakeEdge(
