@@ -1,7 +1,10 @@
 #include <QApplication>
 #include <QAction>
+#include <QActionGroup>
 #include <QLabel>
 #include <QPushButton>
+#include <QToolBar>
+#include <QSettings>
 #include <QtTest/QtTest>
 
 #define private public
@@ -22,6 +25,54 @@ class MainWindowTests final : public QObject
     Q_OBJECT
 
 private slots:
+    void groupedToolbarsReuseExistingActions()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("Native MainWindow is required for toolbar construction tests");
+        }
+        MainWindow window;
+        const auto toolbar = [&window](const QString& objectName) {
+            return window.findChild<QToolBar*>(objectName);
+        };
+        for (const auto& name : {QStringLiteral("File and HistoryToolBar"),
+                                 QStringLiteral("SketchToolBar"),
+                                 QStringLiteral("ConstraintsToolBar"),
+                                 QStringLiteral("Solid ModelingToolBar"),
+                                 QStringLiteral("ModifyToolBar"),
+                                 QStringLiteral("TransformToolBar"),
+                                 QStringLiteral("SelectionToolBar"),
+                                 QStringLiteral("ViewToolBar"),
+                                 QStringLiteral("VisibilityToolBar"),
+                                 QStringLiteral("BIMToolBar")}) {
+            QVERIFY(toolbar(name));
+            QCOMPARE(toolbar(name)->iconSize(), QSize(24, 24));
+        }
+        QVERIFY(window.findChild<QToolBar*>("SketchToolBar")->actions().contains(
+            window.createSketchAction_));
+        QVERIFY(window.findChild<QToolBar*>("Solid ModelingToolBar")->actions().contains(
+            window.sweepAction_));
+        QVERIFY(window.findChild<QToolBar*>("File and HistoryToolBar")->actions().contains(
+            window.undoAction_));
+        QVERIFY(window.newAction_->shortcut() == QKeySequence::New);
+        QVERIFY(!window.createSketchAction_->icon().isNull());
+        QVERIFY(!window.sweepAction_->icon().isNull());
+        QVERIFY(window.viewer_->objectSelectionAction()->actionGroup());
+        QVERIFY(window.viewer_->objectSelectionAction()->actionGroup()->isExclusive());
+        QVERIFY(window.viewer_->faceSelectionAction()->actionGroup()
+            == window.viewer_->objectSelectionAction()->actionGroup());
+        QVERIFY(!window.saveState(1).isEmpty());
+        QSettings settings("ParametricCAD", "ParametricCAD");
+        const auto oldGeometry = settings.value("mainWindow/geometry");
+        const auto oldState = settings.value("mainWindow/state");
+        window.saveWindowLayout();
+        QVERIFY(settings.value("mainWindow/geometry").isValid());
+        QVERIFY(settings.value("mainWindow/state").isValid());
+        if (oldGeometry.isValid()) settings.setValue("mainWindow/geometry", oldGeometry);
+        else settings.remove("mainWindow/geometry");
+        if (oldState.isValid()) settings.setValue("mainWindow/state", oldState);
+        else settings.remove("mainWindow/state");
+    }
+
     void sketchLinePickerChoosesNearestAndPrefersConstructionOnOverlap()
     {
         const std::vector<cad::viewer::SketchLineScreenCandidate> candidates{

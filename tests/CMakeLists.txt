@@ -159,6 +159,7 @@ set_tests_properties(undo_panel_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_D
 
 add_executable(main_window_tests
     main_window_tests.cpp
+    ../src/resources/toolbar_icons.qrc
     ../src/viewer/MainWindow.cpp
     ../src/viewer/ModelPresenter.cpp
     ../src/viewer/PushPullDrag.cpp

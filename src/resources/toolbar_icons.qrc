@@ -1,0 +1,14 @@
+<RCC>
+    <qresource prefix="/toolbar">
+        <file>file.svg</file>
+        <file>sketch.svg</file>
+        <file>constraint.svg</file>
+        <file>solid.svg</file>
+        <file>modify.svg</file>
+        <file>transform.svg</file>
+        <file>selection.svg</file>
+        <file>view.svg</file>
+        <file>visibility.svg</file>
+        <file>bim.svg</file>
+    </qresource>
+</RCC>

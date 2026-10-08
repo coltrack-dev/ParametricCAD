@@ -17,6 +17,19 @@ The `Arc` tool picks start, end, then a point on the arc. `Center Arc` keeps
 the center, start, end sequence; both are converted to the same persistent
 `SketchArc` representation.
 
+## Toolbar architecture
+
+`MainWindow::setupToolbars()` groups existing `QAction` instances into movable
+and dockable File & History, Sketch, Constraints, Solid Modeling, Modify,
+Transform, Selection, View, Visibility, and BIM toolbars. Menu and toolbar
+commands therefore share handlers, shortcuts, enabled state, checked state,
+and undo behavior. Stable toolbar object names are restored with
+`QMainWindow::restoreState()` and `QSettings`, together with window geometry.
+Toolbar icons are bundled SVG resources under `src/resources` and are selected
+by command category, with native Qt style icons as a fallback.
+Unsupported inventory items such as Loft, Offset, Boolean operations, standard
+orthographic view buttons, and snap settings are not presented as fake actions.
+
 ParametricCAD is a C++20 / Qt 6 / Open CASCADE desktop application. The
 runtime separates the editable parametric model, application policy, and OCCT
 presentation. The model is the source of geometry and dependencies; the

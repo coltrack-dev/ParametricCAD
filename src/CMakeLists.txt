@@ -1,4 +1,5 @@
 set(PARAMETRIC_CAD_SOURCES
+    resources/toolbar_icons.qrc
     app/main.cpp
     application/ModelingController.cpp
     application/ModelingController.h

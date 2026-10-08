@@ -46,6 +46,13 @@ profile and solver coverage is still limited. See
 `Center Arc` retains the center, start, end workflow. Both create the same
 persistent Arc entity.
 
+The main window groups existing commands into movable, dockable File & History,
+Sketch, Constraints, Solid Modeling, Modify, Transform, Selection, View,
+Visibility, and BIM toolbars. Toolbar visibility, ordering, docking, and window
+geometry are persisted with Qt `QSettings`.
+The toolbars use a bundled, theme-safe SVG icon set from
+`src/resources/toolbar_icons.qrc`.
+
 ### Revolve from a Sketch
 
 The complete native workflow is:

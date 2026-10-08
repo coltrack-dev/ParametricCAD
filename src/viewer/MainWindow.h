@@ -60,6 +60,9 @@ private:
     bool saveTo(const QString& path);
     void updateTitle();
     void createActions();
+    void setupToolbars();
+    void restoreWindowLayout();
+    void saveWindowLayout();
     void createParametricPanel();
     void createBimPanel();
     void updateBimInspector(const QStringList& featureIds);
@@ -165,6 +168,21 @@ private:
     cad::application::VisibilityManager visibilityManager_;
     cad::application::ProjectController project_;
     QString currentFile_;
+    QAction* newAction_{nullptr};
+    QAction* openAction_{nullptr};
+    QAction* saveAction_{nullptr};
+    QAction* undoAction_{nullptr};
+    QAction* redoAction_{nullptr};
+    QAction* boxAction_{nullptr};
+    QAction* cylinderAction_{nullptr};
+    QAction* fitAllAction_{nullptr};
+    QAction* sectionXAction_{nullptr};
+    QAction* sectionYAction_{nullptr};
+    QAction* sectionZAction_{nullptr};
+    QAction* flipSectionAction_{nullptr};
+    QAction* clearSectionAction_{nullptr};
+    QAction* modelDockAction_{nullptr};
+    std::vector<QAction*> displayModeActions_;
     QAction* deleteAction_{nullptr};
     QAction* duplicateAction_{nullptr};
     QAction* faceAction_{nullptr};
@@ -175,6 +193,9 @@ private:
     QAction* filletAction_{nullptr};
     QAction* chamferAction_{nullptr};
     QAction* shellAction_{nullptr};
+    QAction* booleanFuseAction_{nullptr};
+    QAction* booleanCutAction_{nullptr};
+    QAction* booleanCommonAction_{nullptr};
     QAction* revolveAction_{nullptr};
     QAction* sweepAction_{nullptr};
     bool revolveAxisPicking_{false};
@@ -198,6 +219,8 @@ private:
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     QAction* importIfcAction_{nullptr};
 #endif
+    QAction* bimNavigatorAction_{nullptr};
+    QAction* bimInspectorAction_{nullptr};
     QAction* createSketchAction_{nullptr};
     QAction* editSketchAction_{nullptr};
     QAction* sketchLineAction_{nullptr};

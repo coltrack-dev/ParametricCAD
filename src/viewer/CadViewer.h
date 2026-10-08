@@ -147,6 +147,13 @@ public:
     void clear();
     bool hasDisplayedShapes() const;
     void fitAll();
+    QAction* objectSelectionAction() const noexcept { return selectObjectAction_; }
+    QAction* faceSelectionAction() const noexcept { return selectFaceAction_; }
+    QAction* edgeSelectionAction() const noexcept { return selectEdgeAction_; }
+    QAction* vertexSelectionAction() const noexcept { return selectVertexAction_; }
+    QAction* pushPullAction() const noexcept { return pushPullAction_; }
+    QAction* transformAction() const noexcept { return transformAction_; }
+    QAction* xRayAction() const noexcept { return xRayAction_; }
 
     void setSelectionMode(SelectionMode mode);
     SelectionMode selectionMode() const;

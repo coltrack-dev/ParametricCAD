@@ -46,6 +46,9 @@
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QToolBar>
+#include <QSettings>
+#include <QStyle>
+#include <QIcon>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cstdio>
@@ -145,6 +148,8 @@ MainWindow::MainWindow(QWidget* parent)
     createActions();
     createParametricPanel();
     createBimPanel();
+    setupToolbars();
+    restoreWindowLayout();
     featureEditorPanel_->setSketchConstraintSelectionHandler(
         [this](const QString& id) { selectSketchConstraint(id); });
     featureEditorPanel_->setSketchConstraintEditHandler(
@@ -578,6 +583,8 @@ void MainWindow::createParametricPanel()
         Qt::LeftDockWidgetArea,
         dockWidget
     );
+    modelDockAction_ = dockWidget->toggleViewAction();
+    modelDockAction_->setText("Constraint Manager / Model");
 }
 
 void MainWindow::createBimPanel()
@@ -621,7 +628,12 @@ void MainWindow::createBimPanel()
         auto* menu = action->menu();
         if (menu && menu->title() == QStringLiteral("&View")) {
             menu->addSeparator();
-            menu->addAction(dockWidget->toggleViewAction());
+            bimNavigatorAction_ = dockWidget->toggleViewAction();
+            bimNavigatorAction_->setText("BIM Navigator");
+            menu->addAction(bimNavigatorAction_);
+            bimInspectorAction_ = inspectorDock->toggleViewAction();
+            bimInspectorAction_->setText("BIM Inspector");
+            menu->addAction(bimInspectorAction_);
             break;
         }
     }
@@ -1119,6 +1131,9 @@ void MainWindow::updateActionState()
     faceAction_->setEnabled(state.canCreateFace);
     extrudeAction_->setEnabled(state.canExtrude);
     if (pocketAction_) pocketAction_->setEnabled(state.canPocket);
+    if (booleanFuseAction_) booleanFuseAction_->setEnabled(state.canBoolean);
+    if (booleanCutAction_) booleanCutAction_->setEnabled(state.canBoolean);
+    if (booleanCommonAction_) booleanCommonAction_->setEnabled(state.canBoolean);
     if (editSketchAction_) editSketchAction_->setEnabled(
         state.canEditSketch && activeSketchId_.empty());
     if (createSketchAction_) createSketchAction_->setEnabled(activeSketchId_.empty());
@@ -1244,35 +1259,35 @@ void MainWindow::reportResult(const cad::application::ModelingResult& result)
 void MainWindow::createActions()
 {
     auto* fileMenu = menuBar()->addMenu("&File");
-    auto* newAction = fileMenu->addAction("&New");
-    newAction->setShortcut(QKeySequence::New);
-    connect(newAction, &QAction::triggered, this, &MainWindow::newDocument);
-    auto* openAction = fileMenu->addAction("&Open...");
-    openAction->setShortcut(QKeySequence::Open);
-    connect(openAction, &QAction::triggered, this, &MainWindow::openDocument);
+    newAction_ = fileMenu->addAction("&New");
+    newAction_->setShortcut(QKeySequence::New);
+    connect(newAction_, &QAction::triggered, this, &MainWindow::newDocument);
+    openAction_ = fileMenu->addAction("&Open...");
+    openAction_->setShortcut(QKeySequence::Open);
+    connect(openAction_, &QAction::triggered, this, &MainWindow::openDocument);
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     importIfcAction_ = fileMenu->addAction("Import IFC...");
     connect(importIfcAction_, &QAction::triggered, this, &MainWindow::importIfc);
 #endif
-    auto* saveAction = fileMenu->addAction("&Save");
-    saveAction->setShortcut(QKeySequence::Save);
-    connect(saveAction, &QAction::triggered, this, [this]() { saveDocument(); });
+    saveAction_ = fileMenu->addAction("&Save");
+    saveAction_->setShortcut(QKeySequence::Save);
+    connect(saveAction_, &QAction::triggered, this, [this]() { saveDocument(); });
     auto* saveAsAction = fileMenu->addAction("Save &As...");
     saveAsAction->setShortcut(QKeySequence::SaveAs);
     connect(saveAsAction, &QAction::triggered, this, [this]() { saveDocumentAs(); });
 
     auto* editMenu = menuBar()->addMenu("&Edit");
     connect(editMenu, &QMenu::aboutToShow, this, [this]() { featureEditorPanel_->commitPendingEdits(); });
-    auto* undoAction = modeling_.undoStack().createUndoAction(this, "Undo");
+    undoAction_ = modeling_.undoStack().createUndoAction(this, "Undo");
     auto undoKeys = QKeySequence::keyBindings(QKeySequence::Undo);
     if (!undoKeys.contains(QKeySequence(Qt::CTRL | Qt::Key_Z))) undoKeys.append(QKeySequence(Qt::CTRL | Qt::Key_Z));
-    undoAction->setShortcuts(undoKeys);
-    editMenu->addAction(undoAction);
-    auto* redoAction = modeling_.undoStack().createRedoAction(this, "Redo");
+    undoAction_->setShortcuts(undoKeys);
+    editMenu->addAction(undoAction_);
+    redoAction_ = modeling_.undoStack().createRedoAction(this, "Redo");
     auto redoKeys = QKeySequence::keyBindings(QKeySequence::Redo);
     if (!redoKeys.contains(QKeySequence(Qt::CTRL | Qt::Key_Y))) redoKeys.append(QKeySequence(Qt::CTRL | Qt::Key_Y));
-    redoAction->setShortcuts(redoKeys);
-    editMenu->addAction(redoAction);
+    redoAction_->setShortcuts(redoKeys);
+    editMenu->addAction(redoAction_);
     editMenu->addSeparator();
     deleteAction_ = editMenu->addAction("Delete");
     deleteAction_->setShortcut(QKeySequence(Qt::Key_Delete));
@@ -1300,20 +1315,20 @@ void MainWindow::createActions()
     auto* clearSpatialAction = viewMenu->addAction("Clear Spatial Visibility");
     connect(clearSpatialAction, &QAction::triggered, this, &MainWindow::clearSpatialVisibility);
     viewMenu->addSeparator();
-    auto* sectionXAction = viewMenu->addAction("Section X");
-    connect(sectionXAction, &QAction::triggered, this,
+    sectionXAction_ = viewMenu->addAction("Section X");
+    connect(sectionXAction_, &QAction::triggered, this,
         [this]() { viewer_->activateSection(CadViewer::SectionAxis::X); });
-    auto* sectionYAction = viewMenu->addAction("Section Y");
-    connect(sectionYAction, &QAction::triggered, this,
+    sectionYAction_ = viewMenu->addAction("Section Y");
+    connect(sectionYAction_, &QAction::triggered, this,
         [this]() { viewer_->activateSection(CadViewer::SectionAxis::Y); });
-    auto* sectionZAction = viewMenu->addAction("Section Z");
-    connect(sectionZAction, &QAction::triggered, this,
+    sectionZAction_ = viewMenu->addAction("Section Z");
+    connect(sectionZAction_, &QAction::triggered, this,
         [this]() { viewer_->activateSection(CadViewer::SectionAxis::Z); });
-    auto* flipSectionAction = viewMenu->addAction("Flip Section");
-    connect(flipSectionAction, &QAction::triggered, this,
+    flipSectionAction_ = viewMenu->addAction("Flip Section");
+    connect(flipSectionAction_, &QAction::triggered, this,
         [this]() { viewer_->flipSection(); });
-    auto* clearSectionAction = viewMenu->addAction("Clear Section");
-    connect(clearSectionAction, &QAction::triggered, this,
+    clearSectionAction_ = viewMenu->addAction("Clear Section");
+    connect(clearSectionAction_, &QAction::triggered, this,
         [this]() { viewer_->clearSection(); });
     viewMenu->addSeparator();
     auto* displayModeMenu = viewMenu->addMenu("Display Mode");
@@ -1325,6 +1340,7 @@ void MainWindow::createActions()
         action->setCheckable(true);
         action->setChecked(viewer_->displayMode() == mode);
         displayModes->addAction(action);
+        displayModeActions_.push_back(action);
         connect(action, &QAction::triggered, this, [this, mode]() {
             viewer_->setDisplayMode(mode);
         });
@@ -1342,18 +1358,11 @@ void MainWindow::createActions()
     auto* deleteViewAction = viewMenu->addAction("Delete View");
     connect(deleteViewAction, &QAction::triggered, this, &MainWindow::deleteSavedView);
 
-    auto* toolBar = addToolBar("Modeling");
-    toolBar->addAction(deleteAction_);
+    boxAction_ = modelingMenu->addAction("Box");
+    connect(boxAction_, &QAction::triggered, this, &MainWindow::createBox);
 
-    auto* boxAction = new QAction("Box", this);
-    connect(boxAction, &QAction::triggered, this, &MainWindow::createBox);
-    modelingMenu->addAction(boxAction);
-    toolBar->addAction(boxAction);
-
-    auto* cylinderAction = new QAction("Cylinder", this);
-    connect(cylinderAction, &QAction::triggered, this, &MainWindow::createCylinder);
-    modelingMenu->addAction(cylinderAction);
-    toolBar->addAction(cylinderAction);
+    cylinderAction_ = modelingMenu->addAction("Cylinder");
+    connect(cylinderAction_, &QAction::triggered, this, &MainWindow::createCylinder);
 
     modelingMenu->addSeparator();
     createSketchAction_ = modelingMenu->addAction("Create Sketch");
@@ -1455,47 +1464,228 @@ void MainWindow::createActions()
     revolveAction_->setEnabled(false);
     revolveAction_->setToolTip("Revolve a Sketch profile");
     connect(revolveAction_, &QAction::triggered, this, &MainWindow::createRevolve);
-    toolBar->addAction(revolveAction_);
     sweepAction_ = modelingMenu->addAction("Sweep");
     sweepAction_->setEnabled(false);
     sweepAction_->setToolTip("Sweep a Sketch profile along an Edge or Sketch path");
     connect(sweepAction_, &QAction::triggered, this, &MainWindow::createSweep);
-    toolBar->addAction(sweepAction_);
     linearPatternAction_ = modelingMenu->addAction("Linear Pattern");
     linearPatternAction_->setEnabled(false);
     linearPatternAction_->setToolTip("Create a linear pattern from the selected object");
     connect(linearPatternAction_, &QAction::triggered, this, &MainWindow::createLinearPattern);
-    toolBar->addAction(linearPatternAction_);
     pathPatternAction_ = modelingMenu->addAction("Path Pattern");
     pathPatternAction_->setEnabled(false);
     pathPatternAction_->setToolTip("Create a pattern along the selected path");
     connect(pathPatternAction_, &QAction::triggered, this, &MainWindow::createPathPattern);
-    toolBar->addAction(pathPatternAction_);
     filletAction_ = modelingMenu->addAction("Fillet");
     filletAction_->setEnabled(false);
     filletAction_->setToolTip("Fillet selected edges");
     connect(filletAction_, &QAction::triggered, this, &MainWindow::createFillet);
-    toolBar->addAction(filletAction_);
     chamferAction_ = modelingMenu->addAction("Chamfer");
     chamferAction_->setEnabled(false);
     chamferAction_->setToolTip("Chamfer selected edges");
     connect(chamferAction_, &QAction::triggered, this, &MainWindow::createChamfer);
-    toolBar->addAction(chamferAction_);
     shellAction_ = modelingMenu->addAction("Shell");
     shellAction_->setEnabled(false);
     shellAction_->setToolTip("Shell selected solid and opening Faces");
     connect(shellAction_, &QAction::triggered, this, &MainWindow::createShell);
-    toolBar->addAction(shellAction_);
+    booleanFuseAction_ = modelingMenu->addAction("Boolean Fuse");
+    booleanFuseAction_->setEnabled(false);
+    connect(booleanFuseAction_, &QAction::triggered, this, [this]() {
+        reportResult(modeling_.createBoolean(
+            cad::application::BooleanKind::Fuse, selectedIds()));
+    });
+    booleanCutAction_ = modelingMenu->addAction("Boolean Cut");
+    booleanCutAction_->setEnabled(false);
+    connect(booleanCutAction_, &QAction::triggered, this, [this]() {
+        reportResult(modeling_.createBoolean(
+            cad::application::BooleanKind::Cut, selectedIds()));
+    });
+    booleanCommonAction_ = modelingMenu->addAction("Boolean Common");
+    booleanCommonAction_->setEnabled(false);
+    connect(booleanCommonAction_, &QAction::triggered, this, [this]() {
+        reportResult(modeling_.createBoolean(
+            cad::application::BooleanKind::Common, selectedIds()));
+    });
     modelingMenu->addSeparator();
 
-    auto* clearAction = new QAction("Clear", this);
+    auto* clearAction = modelingMenu->addAction("Clear");
     connect(clearAction, &QAction::triggered, this, &MainWindow::clearDocument);
-    modelingMenu->addAction(clearAction);
 
-    auto* fitAllAction = new QAction("Fit All", this);
-    connect(fitAllAction, &QAction::triggered, viewer_, &CadViewer::fitAll);
-    viewMenu->addAction(fitAllAction);
-    toolBar->addAction(fitAllAction);
+    fitAllAction_ = viewMenu->addAction("Fit All");
+    connect(fitAllAction_, &QAction::triggered, viewer_, &CadViewer::fitAll);
+}
+
+void MainWindow::setupToolbars()
+{
+    setDockOptions(QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks
+        | QMainWindow::AnimatedDocks);
+
+    const auto addToolbar = [this](const char* name) {
+        auto* toolbar = addToolBar(QString::fromLatin1(name));
+        toolbar->setObjectName(QString::fromLatin1(name) + "ToolBar");
+        toolbar->setMovable(true);
+        toolbar->setFloatable(true);
+        toolbar->setIconSize(QSize(24, 24));
+        toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        return toolbar;
+    };
+    const auto prepare = [this](QAction* action, const QStyle::StandardPixmap icon) {
+        if (!action) return;
+        const auto label = action->text().remove('&');
+        if (!label.isEmpty()) {
+            action->setToolTip(label);
+            action->setStatusTip(action->toolTip());
+        }
+        const auto lower = label.toLower();
+        QString resource;
+        if (lower.contains("sketch") || lower.contains("arc") || lower.contains("line")
+            || lower.contains("circle") || lower.contains("rectangle")
+            || lower.contains("trim") || lower.contains("extend")) resource = "sketch";
+        else if (lower.contains("constraint") || lower == "coincident"
+            || lower == "horizontal" || lower == "vertical" || lower == "distance"
+            || lower == "radius" || lower == "tangent" || lower == "equal") resource = "constraint";
+        else if (lower.contains("box") || lower.contains("cylinder") || lower == "extrude"
+            || lower == "pocket" || lower == "revolve" || lower == "sweep"
+            || lower == "shell") resource = "solid";
+        else if (lower.contains("fillet") || lower.contains("chamfer")
+            || lower.contains("boolean") || lower.contains("pattern")) resource = "modify";
+        else if (lower.contains("transform") || lower.contains("push")
+            || lower.contains("pull") || lower.contains("x-ray")) resource = "transform";
+        else if (lower == "object" || lower == "face" || lower == "edge"
+            || lower == "vertex") resource = "selection";
+        else if (lower.contains("fit") || lower.contains("section")
+            || lower.contains("display")) resource = "view";
+        else if (lower == "show" || lower == "hide" || lower.contains("isolate")
+            || lower.contains("ghost")) resource = "visibility";
+        else if (lower.contains("bim")) resource = "bim";
+        else resource = "file";
+        const auto bundled = QIcon(":/toolbar/" + resource + ".svg");
+        action->setIcon(bundled.isNull() ? style()->standardIcon(icon) : bundled);
+    };
+    const auto add = [&prepare](QToolBar* toolbar, QAction* action,
+                                const QStyle::StandardPixmap icon) {
+        if (!action) return;
+        prepare(action, icon);
+        toolbar->addAction(action);
+    };
+
+    auto* file = addToolbar("File and History");
+    add(file, newAction_, QStyle::SP_FileIcon);
+    add(file, openAction_, QStyle::SP_DirOpenIcon);
+    add(file, saveAction_, QStyle::SP_DialogSaveButton);
+    file->addSeparator();
+    add(file, undoAction_, QStyle::SP_ArrowBack);
+    add(file, redoAction_, QStyle::SP_ArrowForward);
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    add(file, importIfcAction_, QStyle::SP_DriveHDIcon);
+#endif
+
+    auto* sketch = addToolbar("Sketch");
+    add(sketch, createSketchAction_, QStyle::SP_FileIcon);
+    add(sketch, editSketchAction_, QStyle::SP_FileDialogDetailedView);
+    sketch->addSeparator();
+    add(sketch, sketchLineAction_, QStyle::SP_ArrowRight);
+    add(sketch, sketchRectangleAction_, QStyle::SP_FileDialogDetailedView);
+    add(sketch, sketchCircleAction_, QStyle::SP_BrowserReload);
+    add(sketch, sketchArcAction_, QStyle::SP_DialogApplyButton);
+    add(sketch, sketchCenterArcAction_, QStyle::SP_DialogApplyButton);
+    add(sketch, sketchTrimAction_, QStyle::SP_DialogCancelButton);
+    add(sketch, sketchExtendAction_, QStyle::SP_ArrowUp);
+    sketch->addSeparator();
+    add(sketch, finishSketchAction_, QStyle::SP_DialogOkButton);
+
+    auto* constraints = addToolbar("Constraints");
+    add(constraints, sketchCoincidentAction_, QStyle::SP_DialogApplyButton);
+    add(constraints, sketchHorizontalAction_, QStyle::SP_ArrowRight);
+    add(constraints, sketchVerticalAction_, QStyle::SP_ArrowUp);
+    add(constraints, sketchDistanceAction_, QStyle::SP_DialogOpenButton);
+    add(constraints, sketchRadiusAction_, QStyle::SP_BrowserReload);
+    add(constraints, sketchTangentAction_, QStyle::SP_DialogApplyButton);
+    add(constraints, sketchEqualAction_, QStyle::SP_DialogApplyButton);
+    add(constraints, modelDockAction_, QStyle::SP_FileDialogDetailedView);
+
+    auto* solid = addToolbar("Solid Modeling");
+    add(solid, boxAction_, QStyle::SP_ComputerIcon);
+    add(solid, cylinderAction_, QStyle::SP_DriveHDIcon);
+    add(solid, extrudeAction_, QStyle::SP_ArrowUp);
+    add(solid, pocketAction_, QStyle::SP_ArrowDown);
+    add(solid, revolveAction_, QStyle::SP_BrowserReload);
+    add(solid, sweepAction_, QStyle::SP_ArrowRight);
+    add(solid, shellAction_, QStyle::SP_DialogSaveButton);
+
+    auto* modify = addToolbar("Modify");
+    add(modify, filletAction_, QStyle::SP_DialogApplyButton);
+    add(modify, chamferAction_, QStyle::SP_DialogApplyButton);
+    add(modify, booleanFuseAction_, QStyle::SP_DialogApplyButton);
+    add(modify, booleanCutAction_, QStyle::SP_DialogCancelButton);
+    add(modify, booleanCommonAction_, QStyle::SP_DialogOpenButton);
+    add(modify, linearPatternAction_, QStyle::SP_FileDialogDetailedView);
+    add(modify, pathPatternAction_, QStyle::SP_FileDialogDetailedView);
+
+    auto* transform = addToolbar("Transform");
+    add(transform, viewer_->pushPullAction(), QStyle::SP_ArrowUp);
+    add(transform, viewer_->transformAction(), QStyle::SP_ArrowRight);
+    add(transform, viewer_->xRayAction(), QStyle::SP_DialogYesButton);
+
+    auto* selection = addToolbar("Selection");
+    add(selection, viewer_->objectSelectionAction(), QStyle::SP_ComputerIcon);
+    add(selection, viewer_->faceSelectionAction(), QStyle::SP_DialogApplyButton);
+    add(selection, viewer_->edgeSelectionAction(), QStyle::SP_ArrowRight);
+    add(selection, viewer_->vertexSelectionAction(), QStyle::SP_ArrowUp);
+
+    auto* view = addToolbar("View");
+    add(view, fitAllAction_, QStyle::SP_BrowserReload);
+    add(view, sectionXAction_, QStyle::SP_ArrowRight);
+    add(view, sectionYAction_, QStyle::SP_ArrowUp);
+    add(view, sectionZAction_, QStyle::SP_ArrowDown);
+    add(view, flipSectionAction_, QStyle::SP_DialogResetButton);
+    add(view, clearSectionAction_, QStyle::SP_DialogCancelButton);
+    for (auto* action : displayModeActions_) add(view, action, QStyle::SP_FileDialogDetailedView);
+
+    auto* visibility = addToolbar("Visibility");
+    auto* show = new QAction("Show", this);
+    connect(show, &QAction::triggered, this, [this]() {
+        reportResult(modeling_.setFeatureVisibility(selectedIds(), true));
+    });
+    auto* hide = new QAction("Hide", this);
+    connect(hide, &QAction::triggered, this, [this]() {
+        reportResult(modeling_.setFeatureVisibility(selectedIds(), false));
+    });
+    auto* isolate = new QAction("Isolate", this);
+    connect(isolate, &QAction::triggered, this, [this]() {
+        visibilityManager_.setIsolatedFeatures(selectedIds());
+        refreshVisibilityView();
+    });
+    auto* ghost = new QAction("Ghost Others", this);
+    connect(ghost, &QAction::triggered, this, [this]() {
+        visibilityManager_.ghostOthers(selectedIds());
+        refreshVisibilityView();
+    });
+    add(visibility, show, QStyle::SP_DialogYesButton);
+    add(visibility, hide, QStyle::SP_DialogCancelButton);
+    add(visibility, isolate, QStyle::SP_DialogApplyButton);
+    add(visibility, ghost, QStyle::SP_DialogResetButton);
+
+    auto* bim = addToolbar("BIM");
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+    add(bim, importIfcAction_, QStyle::SP_DriveHDIcon);
+#endif
+    add(bim, bimNavigatorAction_, QStyle::SP_ComputerIcon);
+    add(bim, bimInspectorAction_, QStyle::SP_FileDialogDetailedView);
+}
+
+void MainWindow::restoreWindowLayout()
+{
+    QSettings settings("ParametricCAD", "ParametricCAD");
+    restoreGeometry(settings.value("mainWindow/geometry").toByteArray());
+    restoreState(settings.value("mainWindow/state").toByteArray(), 1);
+}
+
+void MainWindow::saveWindowLayout()
+{
+    QSettings settings("ParametricCAD", "ParametricCAD");
+    settings.setValue("mainWindow/geometry", saveGeometry());
+    settings.setValue("mainWindow/state", saveState(1));
 }
 
 void MainWindow::createBox()
@@ -3312,7 +3502,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
         return;
     }
 #endif
-    if (saveDocument()) event->accept();
+    if (saveDocument()) {
+        saveWindowLayout();
+        event->accept();
+    }
     else event->ignore();
 }
 
