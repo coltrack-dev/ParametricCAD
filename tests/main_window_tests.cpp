@@ -5,6 +5,7 @@
 #include <QPushButton>
 #include <QToolBar>
 #include <QSettings>
+#include <QSet>
 #include <QtTest/QtTest>
 
 #define private public
@@ -56,6 +57,40 @@ private slots:
         QVERIFY(window.newAction_->shortcut() == QKeySequence::New);
         QVERIFY(!window.createSketchAction_->icon().isNull());
         QVERIFY(!window.sweepAction_->icon().isNull());
+        QSet<const QAction*> toolbarActions;
+        QSet<quint64> iconKeys;
+        const auto groupedToolbars = [&window]() {
+            QList<QToolBar*> result;
+            for (const auto& name : {QStringLiteral("File and HistoryToolBar"),
+                                     QStringLiteral("SketchToolBar"),
+                                     QStringLiteral("ConstraintsToolBar"),
+                                     QStringLiteral("Solid ModelingToolBar"),
+                                     QStringLiteral("ModifyToolBar"),
+                                     QStringLiteral("TransformToolBar"),
+                                     QStringLiteral("SelectionToolBar"),
+                                     QStringLiteral("ViewToolBar"),
+                                     QStringLiteral("VisibilityToolBar"),
+                                     QStringLiteral("BIMToolBar")}) {
+                if (auto* toolbar = window.findChild<QToolBar*>(name)) result.append(toolbar);
+            }
+            return result;
+        }();
+        for (auto* toolbar : groupedToolbars) {
+            for (auto* action : toolbar->actions()) {
+                if (!action || action->isSeparator() || toolbarActions.contains(action)) continue;
+                toolbarActions.insert(action);
+                QVERIFY2(!action->icon().isNull(), qPrintable(
+                    QString("Missing toolbar icon for %1").arg(action->text())));
+                QVERIFY2(!action->icon().pixmap(QSize(24, 24), QIcon::Normal).isNull(), qPrintable(
+                    QString("Icon does not render for %1").arg(action->text())));
+                QVERIFY2(!action->icon().pixmap(QSize(24, 24), QIcon::Disabled).isNull(), qPrintable(
+                    QString("Disabled icon does not render for %1").arg(action->text())));
+                QVERIFY2(!iconKeys.contains(action->icon().cacheKey()), qPrintable(
+                    QString("Duplicate toolbar icon for %1").arg(action->text())));
+                iconKeys.insert(action->icon().cacheKey());
+            }
+        }
+        QVERIFY(toolbarActions.size() >= 50);
         QVERIFY(window.viewer_->objectSelectionAction()->actionGroup());
         QVERIFY(window.viewer_->objectSelectionAction()->actionGroup()->isExclusive());
         QVERIFY(window.viewer_->faceSelectionAction()->actionGroup()

@@ -1537,28 +1537,67 @@ void MainWindow::setupToolbars()
             action->setStatusTip(action->toolTip());
         }
         const auto lower = label.toLower();
-        QString resource;
-        if (lower.contains("sketch") || lower.contains("arc") || lower.contains("line")
-            || lower.contains("circle") || lower.contains("rectangle")
-            || lower.contains("trim") || lower.contains("extend")) resource = "sketch";
-        else if (lower.contains("constraint") || lower == "coincident"
-            || lower == "horizontal" || lower == "vertical" || lower == "distance"
-            || lower == "radius" || lower == "tangent" || lower == "equal") resource = "constraint";
-        else if (lower.contains("box") || lower.contains("cylinder") || lower == "extrude"
-            || lower == "pocket" || lower == "revolve" || lower == "sweep"
-            || lower == "shell") resource = "solid";
-        else if (lower.contains("fillet") || lower.contains("chamfer")
-            || lower.contains("boolean") || lower.contains("pattern")) resource = "modify";
-        else if (lower.contains("transform") || lower.contains("push")
-            || lower.contains("pull") || lower.contains("x-ray")) resource = "transform";
-        else if (lower == "object" || lower == "face" || lower == "edge"
-            || lower == "vertex") resource = "selection";
-        else if (lower.contains("fit") || lower.contains("section")
-            || lower.contains("display")) resource = "view";
-        else if (lower == "show" || lower == "hide" || lower.contains("isolate")
-            || lower.contains("ghost")) resource = "visibility";
-        else if (lower.contains("bim")) resource = "bim";
-        else resource = "file";
+        QString resource = "file-new";
+        if (lower == "new") resource = "file-new";
+        else if (lower.startsWith("open")) resource = "file-open";
+        else if (lower.startsWith("save")) resource = "file-save";
+        else if (lower.contains("import ifc")) resource = "import-ifc";
+        else if (lower == "undo") resource = "undo";
+        else if (lower == "redo") resource = "redo";
+        else if (lower == "create sketch") resource = "create-sketch";
+        else if (lower == "edit sketch") resource = "edit-sketch";
+        else if (lower == "finish sketch") resource = "finish-sketch";
+        else if (lower == "line") resource = "line";
+        else if (lower == "rectangle") resource = "rectangle";
+        else if (lower == "circle") resource = "circle";
+        else if (lower == "arc") resource = "arc";
+        else if (lower == "center arc") resource = "center-arc";
+        else if (lower == "trim") resource = "trim";
+        else if (lower == "extend") resource = "extend";
+        else if (lower == "coincident") resource = "coincident";
+        else if (lower == "horizontal") resource = "horizontal";
+        else if (lower == "vertical") resource = "vertical";
+        else if (lower == "distance") resource = "distance";
+        else if (lower == "radius") resource = "radius";
+        else if (lower == "tangent") resource = "tangent";
+        else if (lower == "equal") resource = "equal";
+        else if (lower.contains("constraint manager")) resource = "constraint-manager";
+        else if (lower == "box") resource = "box";
+        else if (lower == "cylinder") resource = "cylinder";
+        else if (lower == "extrude") resource = "extrude";
+        else if (lower == "pocket") resource = "pocket";
+        else if (lower == "revolve") resource = "revolve";
+        else if (lower == "sweep") resource = "sweep";
+        else if (lower == "shell") resource = "shell";
+        else if (lower == "fillet") resource = "fillet";
+        else if (lower == "chamfer") resource = "chamfer";
+        else if (lower == "boolean fuse") resource = "boolean-fuse";
+        else if (lower == "boolean cut") resource = "boolean-cut";
+        else if (lower == "boolean common") resource = "boolean-common";
+        else if (lower == "linear pattern") resource = "linear-pattern";
+        else if (lower == "path pattern") resource = "path-pattern";
+        else if (lower.contains("push/pull")) resource = "push-pull";
+        else if (lower.contains("move/rotate")) resource = "move";
+        else if (lower.contains("x-ray")) resource = "xray";
+        else if (lower.startsWith("object")) resource = "select-object";
+        else if (lower.startsWith("face")) resource = "select-face";
+        else if (lower.startsWith("edge")) resource = "select-edge";
+        else if (lower.startsWith("vertex")) resource = "select-vertex";
+        else if (lower == "fit all") resource = "fit-all";
+        else if (lower == "section x") resource = "section-x";
+        else if (lower == "section y") resource = "section-y";
+        else if (lower == "section z") resource = "section-z";
+        else if (lower.contains("flip section")) resource = "flip-section";
+        else if (lower.contains("clear section")) resource = "clear-section";
+        else if (lower == "shaded") resource = "shaded";
+        else if (lower.contains("shaded with edges")) resource = "shaded-edges";
+        else if (lower == "wireframe") resource = "wireframe";
+        else if (lower == "show") resource = "show";
+        else if (lower == "hide") resource = "hide";
+        else if (lower == "isolate") resource = "isolate";
+        else if (lower.contains("ghost")) resource = "ghost-others";
+        else if (lower.contains("bim navigator")) resource = "bim-navigator";
+        else if (lower.contains("bim inspector")) resource = "bim-inspector";
         const auto bundled = QIcon(":/toolbar/" + resource + ".svg");
         action->setIcon(bundled.isNull() ? style()->standardIcon(icon) : bundled);
     };
