@@ -5,6 +5,7 @@
 #include "model/TopologicalReference.h"
 #include "operations/SketchProfileBuilder.h"
 #include "operations/SketchPathBuilder.h"
+#include "operations/SketchConstraintSolver.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
@@ -369,6 +370,63 @@ private slots:
             {openSketch.id, SelectionKind::Object, std::nullopt}}}, 8.0);
         QVERIFY(!openExtrude.success);
         QVERIFY(openController.body().features().size() == 1);
+    }
+
+    void sketchFilletLineLineKeepsIdsAndBuildsProfile()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0.0, 0.0}, {100.0, 0.0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0.0, 0.0}, {0.0, 60.0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0.0, 60.0}, {100.0, 60.0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {100.0, 60.0}, {100.0, 0.0}).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        QVERIFY(sketch);
+        const auto firstId = std::get<SketchLine>(sketch->entities()[0]).id;
+        const auto secondId = std::get<SketchLine>(sketch->entities()[1]).id;
+        const auto fillet = controller.filletSketchLines(sketchResult.id, firstId, secondId, 5.0);
+        QVERIFY2(fillet.success, qPrintable(QString::fromStdString(fillet.error)));
+        QCOMPARE(sketch->entityCount(), std::size_t{5});
+        const auto& first = std::get<SketchLine>(sketch->entities()[0]);
+        const auto& second = std::get<SketchLine>(sketch->entities()[1]);
+        const auto& arc = std::get<SketchArc>(sketch->entities().back());
+        QCOMPARE(first.id, firstId);
+        QCOMPARE(second.id, secondId);
+        QVERIFY(std::abs(arc.radius - 5.0) < 1.0e-9);
+        QVERIFY(first.start.Distance({5.0, 0.0}) < 1.0e-6);
+        QVERIFY(second.start.Distance({0.0, 5.0}) < 1.0e-6);
+        QCOMPARE(sketch->constraintCount(), std::size_t{5});
+        const auto solved = cad::operations::SketchConstraintSolver::solve(
+            sketch->entities(), sketch->constraints());
+        QVERIFY2(solved.status == cad::operations::SolveStatus::Solved,
+            qPrintable(QString::fromStdString(solved.error)));
+        const auto radiusConstraint = std::find_if(
+            sketch->constraints().begin(), sketch->constraints().end(),
+            [](const SketchConstraint& constraint) {
+                return std::holds_alternative<RadiusConstraint>(constraint);
+            });
+        QVERIFY(radiusConstraint != sketch->constraints().end());
+        const auto radiusConstraintId = std::get<RadiusConstraint>(*radiusConstraint).id;
+        const auto radiusUpdate = controller.updateSketchRadius(
+            sketchResult.id, radiusConstraintId, 8.0);
+        QVERIFY2(radiusUpdate.success, qPrintable(QString::fromStdString(radiusUpdate.error)));
+        const auto& updatedArc = std::get<SketchArc>(sketch->entities().back());
+        QVERIFY(std::abs(updatedArc.radius - 8.0) < 1.0e-6);
+        const auto extrude = controller.createExtrudeFromSketch({{
+            {sketchResult.id, SelectionKind::Object, std::nullopt}}}, 20.0);
+        QVERIFY2(extrude.success, qPrintable(QString::fromStdString(extrude.error)));
+        QVERIFY(volume(controller.body().findFeature(extrude.id)->shape()) > 0.0);
+
+        controller.undoStack().undo();
+        controller.undoStack().undo();
+        controller.undoStack().undo();
+        QCOMPARE(sketch->entityCount(), std::size_t{4});
+        controller.undoStack().redo();
+        controller.undoStack().redo();
+        controller.undoStack().redo();
+        QCOMPARE(sketch->entityCount(), std::size_t{5});
     }
 
     void sweepUsesPersistentEdgeReference()

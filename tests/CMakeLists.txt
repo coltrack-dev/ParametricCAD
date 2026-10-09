@@ -73,6 +73,7 @@ add_library(model_test_support STATIC
     ../src/operations/SketchPathBuilder.cpp
     ../src/operations/SketchTrimService.cpp
     ../src/operations/SketchExtendService.cpp
+    ../src/operations/SketchFilletService.cpp
     ../src/operations/SketchConstraintSolver.cpp
     ../src/operations/PatternFeatures.cpp
     ../src/operations/ImportedFeature.cpp

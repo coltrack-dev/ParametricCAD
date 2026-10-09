@@ -1,6 +1,7 @@
 #include "operations/SketchConstraintSolver.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_map>
 
@@ -168,7 +169,7 @@ bool arcContainsAngle(const cad::parametric::SketchArc& arc, const double angle)
     return delta <= std::abs(arc.signedSweep()) + tolerance;
 }
 
-bool applyTangent(cad::parametric::SketchLine& line, const gp_Pnt2d& center,
+bool applyTangentFromStart(cad::parametric::SketchLine& line, const gp_Pnt2d& center,
                   const double radius, const cad::parametric::SketchArc* arc,
                   bool& changed)
 {
@@ -186,6 +187,138 @@ bool applyTangent(cad::parametric::SketchLine& line, const gp_Pnt2d& center,
     if (arc && !arcContainsAngle(*arc, std::atan2(tangentPoint.Y() - arc->center.Y(), tangentPoint.X() - arc->center.X()))) return false;
     const gp_Pnt2d solved(line.start.X() + length * std::cos(target), line.start.Y() + length * std::sin(target));
     if (!samePoint(line.end, solved)) { line.end = solved; changed = true; }
+    return true;
+}
+
+bool applyTangent(cad::parametric::SketchLine& line, const gp_Pnt2d& center,
+                  const double radius, const cad::parametric::SketchArc* arc,
+                  bool& changed)
+{
+    // Tangency may be represented at either endpoint. The historical solver
+    // keeps line.start fixed, so reverse the line temporarily when its start
+    // is the endpoint already on the circle.
+    const double startError = std::abs(line.start.Distance(center) - radius);
+    const double endError = std::abs(line.end.Distance(center) - radius);
+    if (startError < endError) {
+        std::swap(line.start, line.end);
+        const bool solved = applyTangentFromStart(line, center, radius, arc, changed);
+        std::swap(line.start, line.end);
+        return solved;
+    }
+    return applyTangentFromStart(line, center, radius, arc, changed);
+}
+
+bool applyLineArcTangent(cad::parametric::SketchLine& line,
+                         cad::parametric::SketchArc& arc,
+                         bool& changed)
+{
+    const double length = line.start.Distance(line.end);
+    if (length <= tolerance || arc.radius <= tolerance) return false;
+    gp_Vec2d direction(line.start, line.end);
+    direction.Normalize();
+    const gp_Vec2d normal(-direction.Y(), direction.X());
+    const gp_Pnt2d oldCenter = arc.center;
+    const gp_Pnt2d oldStart = arc.startPoint();
+    const gp_Pnt2d oldEnd = arc.endPoint();
+    const gp_Pnt2d candidateLeft(
+        line.start.X() + normal.X() * arc.radius,
+        line.start.Y() + normal.Y() * arc.radius);
+    const gp_Pnt2d candidateRight(
+        line.start.X() - normal.X() * arc.radius,
+        line.start.Y() - normal.Y() * arc.radius);
+    const gp_Pnt2d center = candidateLeft.Distance(oldCenter) <= candidateRight.Distance(oldCenter)
+        ? candidateLeft : candidateRight;
+    const gp_Vec2d offset(line.start, center);
+    const gp_Pnt2d tangent(line.start.X() + direction.X() * offset.Dot(direction),
+                           line.start.Y() + direction.Y() * offset.Dot(direction));
+    const bool startTangent = std::abs(line.start.Distance(oldCenter) - arc.radius)
+        <= std::abs(line.end.Distance(oldCenter) - arc.radius);
+    const bool arcStart = tangent.Distance(oldStart) <= tangent.Distance(oldEnd);
+    if (startTangent) {
+        if (!samePoint(line.start, tangent)) { line.start = tangent; changed = true; }
+    } else if (!samePoint(line.end, tangent)) {
+        line.end = tangent;
+        changed = true;
+    }
+    if (!samePoint(arc.center, center)) { arc.center = center; changed = true; }
+    const double angle = std::atan2(tangent.Y() - center.Y(), tangent.X() - center.X());
+    if (arcStart) {
+        if (std::abs(arc.startAngle - angle) > tolerance) { arc.startAngle = angle; changed = true; }
+    } else if (std::abs(arc.endAngle - angle) > tolerance) {
+        arc.endAngle = angle;
+        changed = true;
+    }
+    return true;
+}
+
+bool applyFilletRadius(std::vector<cad::parametric::SketchEntity>& entities,
+                       const std::vector<cad::parametric::SketchConstraint>& constraints,
+                       cad::parametric::SketchArc& arc, const double radius,
+                       bool& changed)
+{
+    std::array<cad::parametric::SketchLine*, 2> lines{nullptr, nullptr};
+    std::size_t count = 0;
+    for (const auto& constraint : constraints) {
+        const auto* tangent = std::get_if<cad::parametric::TangentConstraint>(&constraint);
+        if (!tangent || tangent->secondEntityId != arc.id || count == lines.size()) continue;
+        auto* entity = findEntity(entities, tangent->firstEntityId);
+        auto* line = entity ? std::get_if<cad::parametric::SketchLine>(entity) : nullptr;
+        if (!line || std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
+        lines[count++] = line;
+    }
+    if (count != lines.size()) return false;
+    gp_Vec2d firstDirection(lines[0]->start, lines[0]->end);
+    gp_Vec2d secondDirection(lines[1]->start, lines[1]->end);
+    const double denominator = firstDirection.Crossed(secondDirection);
+    if (std::abs(denominator) <= tolerance) return false;
+    const gp_Vec2d between(lines[0]->start, lines[1]->start);
+    const double parameter = between.Crossed(secondDirection) / denominator;
+    const gp_Pnt2d vertex(lines[0]->start.X() + parameter * firstDirection.X(),
+                          lines[0]->start.Y() + parameter * firstDirection.Y());
+    std::array<gp_Vec2d, 2> rays;
+    std::array<gp_Pnt2d, 2> outers;
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        const auto& line = *lines[index];
+        outers[index] = vertex.Distance(line.start) >= vertex.Distance(line.end)
+            ? line.start : line.end;
+        rays[index] = gp_Vec2d(vertex, outers[index]);
+        if (rays[index].Magnitude() <= tolerance) return false;
+        rays[index].Normalize();
+    }
+    const double dot = std::clamp(rays[0].Dot(rays[1]), -1.0, 1.0);
+    const double theta = std::acos(dot);
+    const double tangentDistance = radius / std::tan(theta / 2.0);
+    if (!std::isfinite(tangentDistance) || tangentDistance <= tolerance) return false;
+    gp_Vec2d bisector = rays[0] + rays[1];
+    if (bisector.SquareMagnitude() <= tolerance * tolerance) return false;
+    bisector.Normalize();
+    if (gp_Vec2d(vertex, arc.center).Dot(bisector) < 0.0) bisector.Reverse();
+    const double centerDistance = radius / std::sin(theta / 2.0);
+    const gp_Pnt2d center(vertex.X() + bisector.X() * centerDistance,
+                          vertex.Y() + bisector.Y() * centerDistance);
+    const gp_Pnt2d firstTangent(vertex.X() + rays[0].X() * tangentDistance,
+                                vertex.Y() + rays[0].Y() * tangentDistance);
+    const gp_Pnt2d secondTangent(vertex.X() + rays[1].X() * tangentDistance,
+                                 vertex.Y() + rays[1].Y() * tangentDistance);
+    const gp_Pnt2d oldStart = arc.startPoint();
+    const auto setLineTangent = [&](cad::parametric::SketchLine& line,
+                                    const gp_Pnt2d& tangent) {
+        if (vertex.Distance(line.start) <= vertex.Distance(line.end)) line.start = tangent;
+        else line.end = tangent;
+    };
+    setLineTangent(*lines[0], firstTangent);
+    setLineTangent(*lines[1], secondTangent);
+    const double firstAngle = std::atan2(firstTangent.Y() - center.Y(), firstTangent.X() - center.X());
+    const double secondAngle = std::atan2(secondTangent.Y() - center.Y(), secondTangent.X() - center.X());
+    const bool firstIsStart = oldStart.Distance(firstTangent) <= oldStart.Distance(secondTangent);
+    if (arc.radius != radius || !samePoint(arc.center, center)) { arc.radius = radius; arc.center = center; changed = true; }
+    if (firstIsStart) {
+        if (std::abs(arc.startAngle - firstAngle) > tolerance) { arc.startAngle = firstAngle; changed = true; }
+        if (std::abs(arc.endAngle - secondAngle) > tolerance) { arc.endAngle = secondAngle; changed = true; }
+    } else {
+        if (std::abs(arc.startAngle - secondAngle) > tolerance) { arc.startAngle = secondAngle; changed = true; }
+        if (std::abs(arc.endAngle - firstAngle) > tolerance) { arc.endAngle = firstAngle; changed = true; }
+    }
     return true;
 }
 
@@ -214,10 +347,10 @@ SketchSolveResult SketchConstraintSolver::solve(
             const auto* a = findEntity(result.entities, coincident->a.entityId);
             const auto* b = findEntity(result.entities, coincident->b.entityId);
             if (!a || !b) { result.status = SolveStatus::Failed; result.error = "Constraint references missing entity"; return result; }
-            if (!std::holds_alternative<cad::parametric::SketchLine>(*a)
-                || !std::holds_alternative<cad::parametric::SketchLine>(*b)) {
+            if (!pointValue(*a, coincident->a.role)
+                || !pointValue(*b, coincident->b.role)) {
                 result.status = SolveStatus::Failed;
-                result.error = "Coincident currently supports Line endpoints only";
+                result.error = "Coincident references an invalid Sketch point";
                 return result;
             }
         }
@@ -530,10 +663,12 @@ SketchSolveResult SketchConstraintSolver::solve(
                 auto* second = findEntity(result.entities, tangent->secondEntityId);
                 auto* line = first ? std::get_if<cad::parametric::SketchLine>(first) : nullptr;
                 const auto* circle = second ? std::get_if<cad::parametric::SketchCircle>(second) : nullptr;
-                const auto* arc = second ? std::get_if<cad::parametric::SketchArc>(second) : nullptr;
+                auto* arc = second ? std::get_if<cad::parametric::SketchArc>(second) : nullptr;
                 if (!line || (!circle && !arc)) { result.status = SolveStatus::Failed; result.error = "Tangent currently supports Line to Circle or Arc"; return result; }
-                if (!applyTangent(*line, circle ? circle->center : arc->center,
-                    circle ? circle->radius : arc->radius, arc, changed)) {
+                const bool solved = arc
+                    ? applyLineArcTangent(*line, *arc, changed)
+                    : applyTangent(*line, circle->center, circle->radius, nullptr, changed);
+                if (!solved) {
                     result.status = SolveStatus::Failed;
                     result.error = arc ? "Tangent cannot be satisfied on current Arc" : "Tangent cannot be satisfied";
                     return result;
@@ -576,8 +711,10 @@ SketchSolveResult SketchConstraintSolver::solve(
                         circle->radius = radius.value; changed = true;
                     }
                 } else if (auto* arc = std::get_if<cad::parametric::SketchArc>(entity)) {
-                    if (std::abs(arc->radius - radius.value) > tolerance) {
-                        arc->radius = radius.value; changed = true;
+                    if (!applyFilletRadius(result.entities, constraints, *arc, radius.value, changed)
+                        && std::abs(arc->radius - radius.value) > tolerance) {
+                        arc->radius = radius.value;
+                        changed = true;
                     }
                 } else {
                     result.status = SolveStatus::Failed;

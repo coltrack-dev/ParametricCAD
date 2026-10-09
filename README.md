@@ -46,6 +46,11 @@ profile and solver coverage is still limited. See
 `Center Arc` retains the center, start, end workflow. Both create the same
 persistent Arc entity.
 
+`Sketch Fillet` rounds a connected Line–Line corner. Select the two Lines,
+enter a radius (2 mm by default), and confirm with Enter; Esc cancels. The
+operation keeps the original Line IDs, adds a persistent Arc, Coincident,
+Tangent, and Radius constraints, and is undoable as one Sketch command.
+
 The main window groups existing commands into movable, dockable File & History,
 Sketch, Constraints, Solid Modeling, Modify, Transform, Selection, View,
 Visibility, and BIM toolbars. Toolbar visibility, ordering, docking, and window

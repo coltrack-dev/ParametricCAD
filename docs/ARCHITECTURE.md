@@ -17,6 +17,14 @@ The `Arc` tool picks start, end, then a point on the arc. `Center Arc` keeps
 the center, start, end sequence; both are converted to the same persistent
 `SketchArc` representation.
 
+`Sketch Fillet` is a Line–Line Sketch editing operation. `SketchFilletService`
+calculates tangent points and the bisector in Sketch-local coordinates, while
+`ModelingController` applies one atomic entity/constraint replacement command.
+The original Line IDs are preserved; the new Arc receives a stable ID and the
+result includes Coincident, Tangent, and Radius constraints. The existing
+Sketch frame is used by normal Sketch presentation/build paths, so global and
+face-attached Sketches share the same operation model.
+
 ## Toolbar architecture
 
 `MainWindow::setupToolbars()` groups existing `QAction` instances into movable

@@ -120,6 +120,30 @@ private:
     std::vector<parametric::SketchEntity> afterEntities_;
 };
 
+class ReplaceSketchCommand final : public QUndoCommand
+{
+public:
+    ReplaceSketchCommand(parametric::Body& body,
+                         std::shared_ptr<parametric::SketchFeature> sketch,
+                         std::vector<parametric::SketchEntity> beforeEntities,
+                         std::vector<parametric::SketchEntity> afterEntities,
+                         std::vector<parametric::SketchConstraint> beforeConstraints,
+                         std::vector<parametric::SketchConstraint> afterConstraints,
+                         const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const std::vector<parametric::SketchEntity>& entities,
+               const std::vector<parametric::SketchConstraint>& constraints);
+    parametric::Body& body_;
+    std::shared_ptr<parametric::SketchFeature> sketch_;
+    std::vector<parametric::SketchEntity> beforeEntities_;
+    std::vector<parametric::SketchEntity> afterEntities_;
+    std::vector<parametric::SketchConstraint> beforeConstraints_;
+    std::vector<parametric::SketchConstraint> afterConstraints_;
+};
+
 class AddSketchConstraintCommand final : public QUndoCommand
 {
 public:

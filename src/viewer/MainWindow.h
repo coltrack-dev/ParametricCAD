@@ -100,6 +100,7 @@ private:
     void selectSketchArcTool();
     void selectSketchCenterArcTool();
     void selectSketchRectangleTool();
+    void selectSketchFilletTool();
     void selectSketchTrimTool();
     void selectSketchExtendTool();
     void selectSketchCoincidentTool();
@@ -239,6 +240,7 @@ private:
     QAction* sketchArcAction_{nullptr};
     QAction* sketchCenterArcAction_{nullptr};
     QAction* sketchRectangleAction_{nullptr};
+    QAction* sketchFilletAction_{nullptr};
     QAction* sketchTrimAction_{nullptr};
     QAction* sketchExtendAction_{nullptr};
     QAction* sketchCoincidentAction_{nullptr};
@@ -255,7 +257,7 @@ private:
     QAction* sketchTangentAction_{nullptr};
     QAction* sketchEqualAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
-    enum class SketchTool { None, Line, Circle, Arc, CenterArc, Rectangle, Trim, Extend,
+    enum class SketchTool { None, Line, Circle, Arc, CenterArc, Rectangle, Fillet, Trim, Extend,
                             Coincident, Horizontal, Vertical, Distance, Radius,
                             HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular,
                             AngleBetweenLines, Tangent, Equal };
@@ -281,6 +283,7 @@ private:
     QLabel* rectangleCursorLabel_{nullptr};
     QTimer rectangleOverlayTimer_;
     std::optional<cad::parametric::SketchPointRef> constraintFirstPoint_;
+    std::string filletFirstLineId_;
     QString selectedConstraintId_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this

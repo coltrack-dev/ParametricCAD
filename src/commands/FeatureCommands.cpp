@@ -107,6 +107,35 @@ void ExtendSketchEntityCommand::undo()
     body_.markDirtyFrom(sketch_->id());
 }
 
+ReplaceSketchCommand::ReplaceSketchCommand(
+    parametric::Body& body, std::shared_ptr<parametric::SketchFeature> sketch,
+    std::vector<parametric::SketchEntity> beforeEntities,
+    std::vector<parametric::SketchEntity> afterEntities,
+    std::vector<parametric::SketchConstraint> beforeConstraints,
+    std::vector<parametric::SketchConstraint> afterConstraints,
+    const QString& text)
+    : QUndoCommand(text), body_(body), sketch_(std::move(sketch)),
+      beforeEntities_(std::move(beforeEntities)), afterEntities_(std::move(afterEntities)),
+      beforeConstraints_(std::move(beforeConstraints)), afterConstraints_(std::move(afterConstraints))
+{
+    if (!sketch_ || body_.findFeature(sketch_->id()) != sketch_)
+        throw std::invalid_argument("Sketch replacement requires an active sketch");
+}
+
+void ReplaceSketchCommand::apply(
+    const std::vector<parametric::SketchEntity>& entities,
+    const std::vector<parametric::SketchConstraint>& constraints)
+{
+    sketch_->replaceEntities(0, sketch_->entityCount(), entities);
+    sketch_->replaceConstraints(constraints);
+    body_.markDirtyFrom(sketch_->id());
+    if (!body_.recompute()) throw std::runtime_error(body_.lastError());
+}
+
+void ReplaceSketchCommand::redo() { apply(afterEntities_, afterConstraints_); }
+
+void ReplaceSketchCommand::undo() { apply(beforeEntities_, beforeConstraints_); }
+
 AddSketchConstraintCommand::AddSketchConstraintCommand(
     parametric::Body& body, std::shared_ptr<parametric::SketchFeature> sketch,
     parametric::SketchConstraint constraint,

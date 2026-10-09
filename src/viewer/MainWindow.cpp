@@ -8,6 +8,7 @@
 #include "model/FeatureVisibility.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
+#include "operations/SketchFilletService.h"
 #include "operations/SketchConstraintSolver.h"
 #include "operations/ImportedFeature.h"
 #include "operations/SketchProfileBuilder.h"
@@ -264,6 +265,66 @@ MainWindow::MainWindow(QWidget* parent)
         [this](const gp_Pnt2d& point, const double tolerance) {
             if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend)
                 viewer_->clearSketchTrimPreview();
+            if (sketchTool_ == SketchTool::Fillet) {
+                const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+                    modeling_.body().findFeature(activeSketchId_));
+                if (!sketch) return;
+                const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
+                    sketch->entities(), point, tolerance);
+                if (!lineId) {
+                    statusBar()->showMessage("Sketch Fillet: select a Line", 2000);
+                    return;
+                }
+                if (filletFirstLineId_.empty()) {
+                    filletFirstLineId_ = *lineId;
+                    statusBar()->showMessage("Sketch Fillet: select connected second Line");
+                    return;
+                }
+                if (filletFirstLineId_ == *lineId) {
+                    statusBar()->showMessage("Sketch Fillet requires two different Lines", 2000);
+                    return;
+                }
+                QInputDialog dialog(this);
+                dialog.setInputMode(QInputDialog::DoubleInput);
+                dialog.setWindowTitle("Sketch Fillet");
+                dialog.setLabelText("Radius:");
+                dialog.setDoubleRange(1.0e-6, 1.0e9);
+                dialog.setDoubleDecimals(3);
+                dialog.setDoubleValue(2.0);
+                const auto updatePreview = [this, sketch, firstId = filletFirstLineId_,
+                                             secondId = *lineId](const double radius) {
+                    const auto plan = cad::operations::SketchFilletService::analyze(
+                        *sketch, firstId, secondId, radius);
+                    if (plan.changed) {
+                        viewer_->setSketchTrimPreview(plan.entities);
+                        statusBar()->showMessage(
+                            QString("Sketch Fillet: radius %1 mm; press Enter to apply")
+                                .arg(radius, 0, 'f', 3), 0);
+                    } else {
+                        viewer_->clearSketchTrimPreview();
+                        statusBar()->showMessage(QString::fromStdString(plan.error), 2000);
+                    }
+                };
+                connect(&dialog, &QInputDialog::doubleValueChanged,
+                    this, updatePreview);
+                updatePreview(dialog.doubleValue());
+                const bool accepted = dialog.exec() == QDialog::Accepted;
+                viewer_->clearSketchTrimPreview();
+                if (accepted) {
+                    const auto result = modeling_.filletSketchLines(
+                        activeSketchId_, filletFirstLineId_, *lineId, dialog.doubleValue());
+                    if (!result.success)
+                        statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+                    else {
+                        refreshModelView(false);
+                        statusBar()->showMessage("Sketch Fillet applied", 2000);
+                    }
+                }
+                filletFirstLineId_.clear();
+                statusBar()->showMessage(accepted ? "Sketch Fillet: select first Line"
+                                                   : "Sketch Fillet cancelled", 2000);
+                return;
+            }
             if (activeSketchId_.empty()
                 || (sketchTool_ != SketchTool::Trim && sketchTool_ != SketchTool::Extend)) {
                 handleSketchPoint(point, tolerance);
@@ -305,6 +366,7 @@ MainWindow::MainWindow(QWidget* parent)
                 || rectangleState_ == RectangleState::NumericInput;
             clearRectangleInput();
             sketchFirstPoint_.reset(); sketchSecondPoint_.reset();
+            filletFirstLineId_.clear();
             if (rectangleActive) {
                 if (rectangleWasDrawing) {
                     statusBar()->showMessage("Rectangle: pick first corner", 2000);
@@ -316,6 +378,7 @@ MainWindow::MainWindow(QWidget* parent)
                 return;
             }
             if (sketchTool_ == SketchTool::Trim || sketchTool_ == SketchTool::Extend
+                || sketchTool_ == SketchTool::Fillet
                 || sketchTool_ == SketchTool::Coincident
                 || sketchTool_ == SketchTool::Horizontal
                 || sketchTool_ == SketchTool::Vertical
@@ -1490,9 +1553,15 @@ void MainWindow::createActions()
     sketchCenterArcAction_->setEnabled(false);
     connect(sketchCenterArcAction_, &QAction::triggered, this,
         &MainWindow::selectSketchCenterArcTool);
-    sketchRectangleAction_ = modelingMenu->addAction("Sketch Rectangle");
-    sketchRectangleAction_->setEnabled(false);
-    connect(sketchRectangleAction_, &QAction::triggered, this, &MainWindow::selectSketchRectangleTool);
+        sketchRectangleAction_ = modelingMenu->addAction("Sketch Rectangle");
+        sketchRectangleAction_->setEnabled(false);
+        connect(sketchRectangleAction_, &QAction::triggered, this, &MainWindow::selectSketchRectangleTool);
+    sketchFilletAction_ = modelingMenu->addAction("Sketch Fillet");
+    sketchFilletAction_->setShortcut(Qt::Key_F);
+    sketchFilletAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    sketchFilletAction_->setEnabled(false);
+    sketchFilletAction_->setToolTip("Fillet two connected Sketch Lines");
+    connect(sketchFilletAction_, &QAction::triggered, this, &MainWindow::selectSketchFilletTool);
     sketchTrimAction_ = modelingMenu->addAction("Trim");
     sketchTrimAction_->setEnabled(false);
     connect(sketchTrimAction_, &QAction::triggered, this, &MainWindow::selectSketchTrimTool);
@@ -1721,6 +1790,7 @@ void MainWindow::setupToolbars()
     add(sketch, sketchCenterArcAction_, QStyle::SP_DialogApplyButton);
     add(sketch, sketchTrimAction_, QStyle::SP_DialogCancelButton);
     add(sketch, sketchExtendAction_, QStyle::SP_ArrowUp);
+    add(sketch, sketchFilletAction_, QStyle::SP_DialogApplyButton);
     sketch->addSeparator();
     add(sketch, finishSketchAction_, QStyle::SP_DialogOkButton);
 
@@ -1967,6 +2037,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         rectangleState_ = RectangleState::Ready;
         sketchFirstPoint_.reset();
         sketchSecondPoint_.reset();
+        filletFirstLineId_.clear();
         clearRectangleInput();
         constraintFirstPoint_.reset();
         selectedConstraintId_.clear();
@@ -1980,6 +2051,7 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchArcAction_->setEnabled(true);
         sketchCenterArcAction_->setEnabled(true);
         sketchRectangleAction_->setEnabled(true);
+        sketchFilletAction_->setEnabled(true);
         sketchTrimAction_->setEnabled(true);
         sketchExtendAction_->setEnabled(true);
         sketchCoincidentAction_->setEnabled(true);
@@ -2020,6 +2092,7 @@ void MainWindow::finishSketch()
     rectangleState_ = RectangleState::Ready;
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
+    filletFirstLineId_.clear();
     clearRectangleInput();
     constraintFirstPoint_.reset();
     selectedConstraintId_.clear();
@@ -2030,6 +2103,7 @@ void MainWindow::finishSketch()
     sketchArcAction_->setEnabled(false);
     sketchCenterArcAction_->setEnabled(false);
     sketchRectangleAction_->setEnabled(false);
+    sketchFilletAction_->setEnabled(false);
     sketchTrimAction_->setEnabled(false);
     sketchExtendAction_->setEnabled(false);
     sketchCoincidentAction_->setEnabled(false);
@@ -2117,6 +2191,19 @@ void MainWindow::selectSketchRectangleTool()
     clearRectangleInput();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Rectangle);
     statusBar()->showMessage("Rectangle: pick first corner");
+}
+
+void MainWindow::selectSketchFilletTool()
+{
+    clearRectangleInput();
+    if (sketchModeState_ != SketchModeState::Editing) return;
+    sketchTool_ = SketchTool::Fillet;
+    sketchFirstPoint_.reset();
+    sketchSecondPoint_.reset();
+    filletFirstLineId_.clear();
+    viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    viewer_->clearSketchTrimPreview();
+    statusBar()->showMessage("Sketch Fillet: select first Line");
 }
 
 void MainWindow::selectSketchTrimTool()
@@ -2468,6 +2555,7 @@ void MainWindow::commitRectangleFromInput()
 
 void MainWindow::clearRectangleInput()
 {
+    filletFirstLineId_.clear();
     rectangleOverlayTimer_.stop();
     rectangleState_ = RectangleState::Ready;
     rectangleCursorPoint_.reset();

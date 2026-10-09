@@ -8,6 +8,7 @@
 #include "operations/SketchPathBuilder.h"
 #include "operations/SketchTrimService.h"
 #include "operations/SketchExtendService.h"
+#include "operations/SketchFilletService.h"
 #include "operations/SketchConstraintSolver.h"
 
 #include <TopoDS.hxx>
@@ -265,6 +266,82 @@ ModelingResult ModelingController::addSketchThreePointArc(
     if (!arc) return {false, {}, "Sketch 3-point arc requires non-collinear points"};
     try {
         undoStack_.push(new cad::commands::AddSketchEntityCommand(body_, sketch, *arc));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::filletSketchLines(
+    const std::string& sketchId, const std::string& firstLineId,
+    const std::string& secondLineId, const double radius)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    auto plan = cad::operations::SketchFilletService::analyze(
+        *sketch, firstLineId, secondLineId, radius);
+    if (!plan.changed) return {false, {}, plan.error};
+
+    const auto arcId = "entity-" + QUuid::createUuid().toString(
+        QUuid::WithoutBraces).toStdString();
+    auto& arc = std::get<cad::parametric::SketchArc>(plan.entities.back());
+    arc.id = arcId;
+    plan.arcId = arcId;
+    const auto firstLine = std::find_if(plan.entities.begin(), plan.entities.end(),
+        [&firstLineId](const auto& entity) {
+            return std::visit([&firstLineId](const auto& value) {
+                return value.id == firstLineId
+                    && std::is_same_v<std::decay_t<decltype(value)>, cad::parametric::SketchLine>;
+            }, entity);
+        });
+    const auto secondLine = std::find_if(plan.entities.begin(), plan.entities.end(),
+        [&secondLineId](const auto& entity) {
+            return std::visit([&secondLineId](const auto& value) {
+                return value.id == secondLineId
+                    && std::is_same_v<std::decay_t<decltype(value)>, cad::parametric::SketchLine>;
+            }, entity);
+        });
+    if (firstLine == plan.entities.end() || secondLine == plan.entities.end())
+        return {false, {}, "Sketch Fillet changed the selected Lines unexpectedly"};
+
+    const auto pointRoleForTangent = [](const cad::parametric::SketchLine& line,
+                                        const cad::parametric::SketchLine& original) {
+        return line.start.Distance(original.start) > 1.0e-7
+            ? cad::parametric::SketchPointRole::LineStart
+            : cad::parametric::SketchPointRole::LineEnd;
+    };
+    const auto originalFirst = std::get<cad::parametric::SketchLine>(
+        *std::find_if(sketch->entities().begin(), sketch->entities().end(),
+            [&firstLineId](const auto& entity) { return std::visit(
+                [&firstLineId](const auto& value) { return value.id == firstLineId
+                    && std::is_same_v<std::decay_t<decltype(value)>, cad::parametric::SketchLine>; }, entity); }));
+    const auto originalSecond = std::get<cad::parametric::SketchLine>(
+        *std::find_if(sketch->entities().begin(), sketch->entities().end(),
+            [&secondLineId](const auto& entity) { return std::visit(
+                [&secondLineId](const auto& value) { return value.id == secondLineId
+                    && std::is_same_v<std::decay_t<decltype(value)>, cad::parametric::SketchLine>; }, entity); }));
+    const auto firstRole = pointRoleForTangent(
+        std::get<cad::parametric::SketchLine>(*firstLine), originalFirst);
+    const auto secondRole = pointRoleForTangent(
+        std::get<cad::parametric::SketchLine>(*secondLine), originalSecond);
+    plan.constraints.push_back(cad::parametric::TangentConstraint{firstLineId, arcId, {}});
+    plan.constraints.push_back(cad::parametric::TangentConstraint{secondLineId, arcId, {}});
+    plan.constraints.push_back(cad::parametric::CoincidentConstraint{
+        {firstLineId, firstRole}, {arcId, cad::parametric::SketchPointRole::ArcStart}, {}});
+    plan.constraints.push_back(cad::parametric::CoincidentConstraint{
+        {secondLineId, secondRole}, {arcId, cad::parametric::SketchPointRole::ArcEnd}, {}});
+    plan.constraints.push_back(cad::parametric::RadiusConstraint{arcId, radius, {}});
+    for (auto& constraint : plan.constraints) {
+        std::visit([](auto& value) {
+            if (value.id.empty()) value.id = "constraint-" + QUuid::createUuid().toString(
+                QUuid::WithoutBraces).toStdString();
+        }, constraint);
+    }
+    try {
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(plan.entities),
+            sketch->constraints(), std::move(plan.constraints), "Sketch Fillet"));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);
