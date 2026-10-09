@@ -27,9 +27,12 @@ class BimNavigationPanel;
 class BimInspectorPanel;
 class QDialog;
 class QEvent;
+class QComboBox;
+class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QDockWidget;
 namespace cad::viewer { class ModelPresenter; }
 
 class MainWindow final : public QMainWindow
@@ -105,6 +108,12 @@ private:
     void selectSketchChamferTool();
     void commitSketchFilletSelection();
     void commitSketchChamferSelection();
+    void createSketchFilletPanel();
+    void ensureSketchFilletPanelVisible();
+    void updateSketchFilletPanel();
+    void createSketchChamferPanel();
+    void ensureSketchChamferPanelVisible();
+    void updateSketchChamferPanel();
     bool updateSketchFilletPreview(double radius);
     bool updateSketchChamferPreview(
         cad::parametric::SketchChamferMode mode = cad::parametric::SketchChamferMode::EqualDistance,
@@ -303,6 +312,7 @@ private:
     std::optional<cad::application::ModelingController::SketchChamferCorner> hoveredChamferCorner_;
     QString lastChamferPreviewTrace_;
     QString lastChamferPreviewError_;
+    QString lastFilletPreviewError_;
     FilletState filletState_{FilletState::Selecting};
     double filletPreviewRadius_{2.0};
     std::optional<gp_Pnt2d> filletRadiusAnchor_;
@@ -316,6 +326,21 @@ private:
     cad::application::SelectionSnapshot currentSelection_;
     CadViewer* viewer_{nullptr};
     FeatureEditorPanel* featureEditorPanel_{nullptr};
+    QDockWidget* sketchChamferDock_{nullptr};
+    bool sketchChamferFloatingFallback_{false};
+    QDockWidget* sketchFilletDock_{nullptr};
+    QDoubleSpinBox* sketchFilletRadius_{nullptr};
+    QLabel* sketchFilletSelectedCount_{nullptr};
+    QLabel* sketchFilletValidation_{nullptr};
+    QPushButton* sketchFilletApply_{nullptr};
+    QPushButton* sketchFilletCancel_{nullptr};
+    QComboBox* sketchChamferModeBox_{nullptr};
+    QDoubleSpinBox* sketchChamferFirstDistance_{nullptr};
+    QDoubleSpinBox* sketchChamferSecondDistance_{nullptr};
+    QLabel* sketchChamferSelectedCount_{nullptr};
+    QLabel* sketchChamferValidation_{nullptr};
+    QPushButton* sketchChamferApply_{nullptr};
+    QPushButton* sketchChamferCancel_{nullptr};
     BimNavigationPanel* bimNavigationPanel_{nullptr};
     BimInspectorPanel* bimInspectorPanel_{nullptr};
     cad::application::BimNavigationModel bimNavigationModel_;

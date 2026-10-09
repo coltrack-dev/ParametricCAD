@@ -27,7 +27,6 @@
 #include <QInputDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
-#include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -45,6 +44,8 @@
 #include <TopoDS.hxx>
 #include <QStandardPaths>
 #include <QDockWidget>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QElapsedTimer>
 #include <QProgressDialog>
 #include <QTimer>
@@ -57,11 +58,11 @@
 #include <QSettings>
 #include <QStyle>
 #include <QIcon>
+#include <QSignalBlocker>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cstdio>
 #include <type_traits>
-#include <tuple>
 
 namespace
 {
@@ -75,6 +76,31 @@ void traceActionState(const char* event, const QString& details)
     const auto text = details.toUtf8();
     std::fprintf(stderr, "[ACTION %llu] %s %s\n", ++sequence, event, text.constData());
     std::fflush(stderr);
+}
+
+void traceChamferPanel(const char* event, const QDockWidget* dock,
+                       const char* activeTool = nullptr)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) return;
+    if (!dock) {
+        traceActionState(event, QString("panel=<null> activeTool=%1")
+            .arg(activeTool ? activeTool : "<unknown>"));
+        return;
+    }
+    const auto address = [](const QWidget* widget) {
+        return widget ? QString("0x%1").arg(
+            reinterpret_cast<quintptr>(widget), 0, 16) : QString("<null>");
+    };
+    traceActionState(event, QString(
+        "panel=%1 parent=%2 window=%3 visible=%4 hidden=%5 geometry=%6,%7 %8x%9 "
+        "size=%10x%11 isWindow=%12 raised=%13 focus=%14 activeTool=%15")
+        .arg(address(dock)).arg(address(dock->parentWidget())).arg(address(dock->window()))
+        .arg(dock->isVisible()).arg(dock->isHidden())
+        .arg(dock->geometry().x()).arg(dock->geometry().y())
+        .arg(dock->geometry().width()).arg(dock->geometry().height())
+        .arg(dock->size().width()).arg(dock->size().height())
+        .arg(dock->isWindow()).arg(dock->isActiveWindow()).arg(dock->hasFocus())
+        .arg(activeTool ? activeTool : "<unknown>"));
 }
 
 void traceSketchEntities(const char* event, const cad::parametric::SketchFeature& sketch)
@@ -301,93 +327,22 @@ MainWindow::MainWindow(QWidget* parent)
                     sketch->entities(), point, tolerance);
                 traceActionState("sketch.fillet.cornerClick", QString("point=(%1,%2) candidate=%3 tolerance=%4")
                     .arg(point.X()).arg(point.Y()).arg(corner.has_value()).arg(tolerance));
-                if (corner && filletFirstLineId_.empty()) {
+                if (corner) {
                     const auto selected = std::find(
                         filletCorners_.begin(), filletCorners_.end(), *corner);
                     if (selected == filletCorners_.end()) {
-                        if (filletCorners_.empty()) filletRadiusAnchor_ = point;
                         filletCorners_.push_back(*corner);
-                        filletState_ = FilletState::RadiusAdjustment;
                     } else if (modifiers.testFlag(Qt::ControlModifier)) {
                         filletCorners_.erase(selected);
-                        if (filletCorners_.empty()) {
-                            filletState_ = FilletState::Selecting;
-                            filletRadiusAnchor_.reset();
-                        }
                     }
                     const bool valid = updateSketchFilletPreview(filletPreviewRadius_);
+                    updateSketchFilletPanel();
                     if (valid) statusBar()->showMessage(
                         QString("Sketch Fillet: %1 corner(s); click more or press Enter")
                             .arg(filletCorners_.size()), 0);
                     return;
                 }
-                auto firstId = filletFirstLineId_;
-                auto secondId = std::string{};
-                if (corner && firstId.empty()) {
-                    firstId = corner->first;
-                    secondId = corner->second;
-                } else {
-                    const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
-                        sketch->entities(), point, tolerance);
-                    if (!lineId) {
-                        statusBar()->showMessage("Sketch Fillet: select a Line or corner", 2000);
-                        return;
-                    }
-                    if (firstId.empty()) {
-                        filletFirstLineId_ = *lineId;
-                        statusBar()->showMessage("Sketch Fillet: select connected second Line");
-                        return;
-                    }
-                    secondId = *lineId;
-                }
-                if (firstId.empty() || secondId.empty()) {
-                    statusBar()->showMessage("Sketch Fillet: select a Line", 2000);
-                    return;
-                }
-                if (firstId == secondId) {
-                    statusBar()->showMessage("Sketch Fillet requires two different Lines", 2000);
-                    return;
-                }
-                QInputDialog dialog(this);
-                dialog.setInputMode(QInputDialog::DoubleInput);
-                dialog.setWindowTitle("Sketch Fillet");
-                dialog.setLabelText("Radius:");
-                dialog.setDoubleRange(1.0e-6, 1.0e9);
-                dialog.setDoubleDecimals(3);
-                dialog.setDoubleValue(2.0);
-                const auto updatePreview = [this, sketch, firstId, secondId](const double radius) {
-                    const auto plan = cad::operations::SketchFilletService::analyze(
-                        *sketch, firstId, secondId, radius);
-                    if (plan.changed) {
-                        viewer_->setSketchTrimPreview(plan.entities);
-                        statusBar()->showMessage(
-                            QString("Sketch Fillet: radius %1 mm; press Enter to apply")
-                                .arg(radius, 0, 'f', 3), 0);
-                    } else {
-                        viewer_->clearSketchTrimPreview();
-                        statusBar()->showMessage(QString::fromStdString(plan.error), 2000);
-                    }
-                };
-                connect(&dialog, &QInputDialog::doubleValueChanged,
-                    this, updatePreview);
-                updatePreview(dialog.doubleValue());
-                const bool accepted = dialog.exec() == QDialog::Accepted;
-                viewer_->clearSketchTrimPreview();
-                if (accepted) {
-                    const auto result = modeling_.filletSketchLines(
-                        activeSketchId_, firstId, secondId, dialog.doubleValue());
-                    if (!result.success) {
-                        statusBar()->showMessage(QString::fromStdString(result.error), 3000);
-                        QMessageBox::warning(this, "Sketch Fillet",
-                            QString::fromStdString(result.error));
-                    } else {
-                        refreshModelView(false);
-                        statusBar()->showMessage("Sketch Fillet applied", 2000);
-                    }
-                }
-                filletFirstLineId_.clear();
-                statusBar()->showMessage(accepted ? "Sketch Fillet: select first Line"
-                                                   : "Sketch Fillet cancelled", 2000);
+                statusBar()->showMessage("Sketch Fillet: select a connected Line corner", 2000);
                 return;
             }
             if (sketchTool_ == SketchTool::Chamfer) {
@@ -422,6 +377,7 @@ MainWindow::MainWindow(QWidget* parent)
                     .arg(change).arg(before).arg(chamferCorners_.size())
                     .arg(modifiers.testFlag(Qt::ControlModifier)));
                 updateSketchChamferPreview();
+                updateSketchChamferPanel();
                 if (chamferCorners_.empty()) {
                     statusBar()->showMessage("Sketch Chamfer: select a corner", 2000);
                 } else {
@@ -446,13 +402,6 @@ MainWindow::MainWindow(QWidget* parent)
     viewer_->setSketchMouseMovedHandler(
         [this](const gp_Pnt2d& point, const double tolerance) {
             if (sketchTool_ == SketchTool::Fillet) {
-                if (filletState_ == FilletState::RadiusAdjustment
-                    && !filletCorners_.empty() && filletRadiusAnchor_) {
-                    const double radius = std::max(1.0e-6,
-                        filletRadiusAnchor_->Distance(point));
-                    updateSketchFilletPreview(radius);
-                    return;
-                }
                 const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
                     modeling_.body().findFeature(activeSketchId_));
                 const auto corner = sketch
@@ -2287,6 +2236,45 @@ void MainWindow::finishSketch()
     traceActionState("finishSketch.begin", QString("activeSketch=%1 mode=%2")
         .arg(QString::fromStdString(activeSketchId_))
         .arg(static_cast<int>(viewer_->selectionMode())));
+    if (sketchTool_ == SketchTool::Chamfer && !chamferCorners_.empty()) {
+        const auto choice = QMessageBox::question(
+            this, "Sketch Chamfer",
+            "There is an unapplied Sketch Chamfer preview. Apply it before finishing the sketch?",
+            QMessageBox::Apply | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Cancel);
+        if (choice == QMessageBox::Cancel) {
+            ensureSketchChamferPanelVisible();
+            return;
+        }
+        if (choice == QMessageBox::Apply) {
+            commitSketchChamferSelection();
+            if (!chamferCorners_.empty()) return;
+        } else {
+            chamferCorners_.clear();
+            hoveredChamferCorner_.reset();
+            viewer_->clearSketchTrimPreview();
+            viewer_->clearSketchCornerMarkers();
+        }
+    }
+    if (sketchTool_ == SketchTool::Fillet && !filletCorners_.empty()) {
+        const auto choice = QMessageBox::question(
+            this, "Sketch Fillet",
+            "There is an unapplied Sketch Fillet preview. Apply it before finishing the sketch?",
+            QMessageBox::Apply | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Cancel);
+        if (choice == QMessageBox::Cancel) {
+            ensureSketchFilletPanelVisible();
+            return;
+        }
+        if (choice == QMessageBox::Apply) {
+            commitSketchFilletSelection();
+            if (!filletCorners_.empty()) return;
+        } else {
+            filletCorners_.clear();
+            hoveredFilletCorner_.reset();
+            viewer_->clearSketchTrimPreview();
+        }
+    }
     const QString finishedSketchId = QString::fromStdString(activeSketchId_);
     if (rectangleWidthEdit_) rectangleWidthEdit_->clearFocus();
     if (rectangleHeightEdit_) rectangleHeightEdit_->clearFocus();
@@ -2306,6 +2294,7 @@ void MainWindow::finishSketch()
     hoveredChamferCorner_.reset();
     lastChamferPreviewTrace_.clear();
     lastChamferPreviewError_.clear();
+    lastFilletPreviewError_.clear();
     chamferState_ = ChamferState::CornerSelection;
     filletState_ = FilletState::Selecting;
     filletRadiusAnchor_.reset();
@@ -2338,6 +2327,8 @@ void MainWindow::finishSketch()
     sketchEqualAction_->setEnabled(false);
     finishSketchAction_->setEnabled(false);
     updateActionState();
+    updateSketchChamferPanel();
+    updateSketchFilletPanel();
     statusBar()->showMessage("Ready");
     refreshModelView(false);
     if (!finishedSketchId.isEmpty()) {
@@ -2423,16 +2414,22 @@ void MainWindow::selectSketchFilletTool()
     filletState_ = FilletState::Selecting;
     filletPreviewRadius_ = 2.0;
     filletRadiusAnchor_.reset();
+    lastFilletPreviewError_.clear();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Fillet);
     viewer_->installEventFilter(this);
     viewer_->clearSketchTrimPreview();
-    statusBar()->showMessage("Sketch Fillet: select first Line");
+    if (sketchChamferDock_) sketchChamferDock_->hide();
+    createSketchFilletPanel();
+    sketchFilletRadius_->setValue(2.0);
+    updateSketchFilletPanel();
+    statusBar()->showMessage("Sketch Fillet: select corners; Apply confirms");
 }
 
 void MainWindow::selectSketchChamferTool()
 {
     if (sketchModeState_ != SketchModeState::Editing || activeSketchId_.empty()) return;
     sketchTool_ = SketchTool::Chamfer;
+    if (sketchFilletDock_) sketchFilletDock_->hide();
     chamferCorners_.clear();
     hoveredChamferCorner_.reset();
     lastChamferPreviewTrace_.clear();
@@ -2441,110 +2438,397 @@ void MainWindow::selectSketchChamferTool()
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::Chamfer);
     viewer_->installEventFilter(this);
     viewer_->setFocus(Qt::OtherFocusReason);
+    createSketchChamferPanel();
+    sketchChamferModeBox_->setCurrentIndex(0);
+    sketchChamferFirstDistance_->setValue(5.0);
+    sketchChamferSecondDistance_->setValue(5.0);
+    sketchChamferFirstDistance_->installEventFilter(this);
+    sketchChamferSecondDistance_->installEventFilter(this);
+    updateSketchChamferPanel();
     statusBar()->showMessage("Sketch Chamfer: select corners; Enter applies");
+}
+
+void MainWindow::createSketchFilletPanel()
+{
+    if (sketchFilletDock_) {
+        ensureSketchFilletPanelVisible();
+        return;
+    }
+    sketchFilletDock_ = new QDockWidget("Sketch Fillet", this);
+    sketchFilletDock_->setObjectName("SketchFilletDock");
+    sketchFilletDock_->setMinimumWidth(280);
+    sketchFilletDock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    auto* content = new QWidget(sketchFilletDock_);
+    auto* form = new QFormLayout(content);
+    sketchFilletRadius_ = new QDoubleSpinBox(content);
+    sketchFilletRadius_->setRange(1.0e-6, 1.0e9);
+    sketchFilletRadius_->setDecimals(3);
+    sketchFilletRadius_->setSuffix(" mm");
+    sketchFilletRadius_->setValue(2.0);
+    sketchFilletRadius_->installEventFilter(this);
+    sketchFilletSelectedCount_ = new QLabel(content);
+    sketchFilletValidation_ = new QLabel(content);
+    sketchFilletValidation_->setWordWrap(true);
+    sketchFilletApply_ = new QPushButton("Apply", content);
+    sketchFilletCancel_ = new QPushButton("Cancel", content);
+    auto* buttons = new QHBoxLayout;
+    buttons->addWidget(sketchFilletApply_);
+    buttons->addWidget(sketchFilletCancel_);
+    form->addRow("Radius:", sketchFilletRadius_);
+    form->addRow("Selected corners:", sketchFilletSelectedCount_);
+    form->addRow("Validation:", sketchFilletValidation_);
+    form->addRow(buttons);
+    sketchFilletDock_->setWidget(content);
+    addDockWidget(Qt::RightDockWidgetArea, sketchFilletDock_);
+    sketchFilletDock_->installEventFilter(this);
+
+    connect(sketchFilletRadius_, &QDoubleSpinBox::valueChanged, this, [this](double radius) {
+        traceActionState("filletPanel.valuesChanged", QString("radius=%1 enabled=%2")
+            .arg(radius).arg(sketchFilletRadius_->isEnabled()));
+        const bool valid = updateSketchFilletPreview(radius);
+        sketchFilletValidation_->setText(valid ? "Valid" : lastFilletPreviewError_);
+        updateSketchFilletPanel();
+    });
+    connect(sketchFilletApply_, &QPushButton::clicked, this, [this]() {
+        traceActionState("filletPanel.applyClicked", QString("enabled=%1 selected=%2")
+            .arg(sketchFilletApply_->isEnabled()).arg(filletCorners_.size()));
+        commitSketchFilletSelection();
+    });
+    connect(sketchFilletCancel_, &QPushButton::clicked, this, [this]() {
+        filletCorners_.clear();
+        hoveredFilletCorner_.reset();
+        filletState_ = FilletState::Selecting;
+        filletRadiusAnchor_.reset();
+        viewer_->clearSketchTrimPreview();
+        updateSketchFilletPanel();
+        statusBar()->showMessage("Sketch Fillet cancelled", 2000);
+    });
+    ensureSketchFilletPanelVisible();
+}
+
+void MainWindow::ensureSketchFilletPanelVisible()
+{
+    if (!sketchFilletDock_) return;
+    if (sketchFilletDock_->isFloating()) sketchFilletDock_->setFloating(false);
+    if (dockWidgetArea(sketchFilletDock_) != Qt::RightDockWidgetArea)
+        addDockWidget(Qt::RightDockWidgetArea, sketchFilletDock_);
+    sketchFilletDock_->show();
+    sketchFilletDock_->raise();
+    resizeDocks({sketchFilletDock_}, {std::clamp(width() / 4, 280, 420)}, Qt::Horizontal);
+    traceActionState("filletPanel.showRequested", QString(
+        "visible=%1 hidden=%2 geometry=%3,%4 %5x%6")
+        .arg(sketchFilletDock_->isVisible()).arg(sketchFilletDock_->isHidden())
+        .arg(sketchFilletDock_->geometry().x()).arg(sketchFilletDock_->geometry().y())
+        .arg(sketchFilletDock_->width()).arg(sketchFilletDock_->height()));
+    QTimer::singleShot(0, this, [this]() {
+        if (!sketchFilletDock_ || sketchTool_ != SketchTool::Fillet) return;
+        if (sketchFilletDock_->isFloating()) sketchFilletDock_->setFloating(false);
+        addDockWidget(Qt::RightDockWidgetArea, sketchFilletDock_);
+        sketchFilletDock_->show();
+        sketchFilletDock_->raise();
+        resizeDocks({sketchFilletDock_}, {std::clamp(width() / 4, 280, 420)}, Qt::Horizontal);
+        traceActionState("filletPanel.afterEventLoop", QString(
+            "visible=%1 hidden=%2 geometry=%3,%4 %5x%6")
+            .arg(sketchFilletDock_->isVisible()).arg(sketchFilletDock_->isHidden())
+            .arg(sketchFilletDock_->geometry().x()).arg(sketchFilletDock_->geometry().y())
+            .arg(sketchFilletDock_->width()).arg(sketchFilletDock_->height()));
+    });
+}
+
+void MainWindow::updateSketchFilletPanel()
+{
+    if (!sketchFilletDock_) return;
+    sketchFilletSelectedCount_->setText(QString::number(filletCorners_.size()));
+    sketchFilletValidation_->setText(lastFilletPreviewError_.isEmpty()
+        ? "Select one or more corners" : lastFilletPreviewError_);
+    sketchFilletApply_->setEnabled(sketchTool_ == SketchTool::Fillet
+        && !filletCorners_.empty() && lastFilletPreviewError_.isEmpty());
+    const bool shouldShow = sketchTool_ == SketchTool::Fillet
+        && sketchModeState_ == SketchModeState::Editing;
+    if (shouldShow) ensureSketchFilletPanelVisible();
+    else sketchFilletDock_->hide();
+}
+
+void MainWindow::createSketchChamferPanel()
+{
+    if (sketchChamferDock_) {
+        traceChamferPanel("chamferPanel.showRequested", sketchChamferDock_, "Chamfer");
+        ensureSketchChamferPanelVisible();
+        traceChamferPanel("chamferPanel.afterShow", sketchChamferDock_, "Chamfer");
+        QTimer::singleShot(0, this, [this]() {
+            traceChamferPanel("chamferPanel.afterEventLoop", sketchChamferDock_, "Chamfer");
+        });
+        return;
+    }
+    sketchChamferDock_ = new QDockWidget("Sketch Chamfer", this);
+    sketchChamferDock_->setObjectName("SketchChamferDock");
+    sketchChamferDock_->setMinimumWidth(280);
+    sketchChamferDock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    sketchChamferDock_->installEventFilter(this);
+    traceChamferPanel("chamferPanel.created", sketchChamferDock_, "Chamfer");
+    auto* content = new QWidget(sketchChamferDock_);
+    auto* form = new QFormLayout(content);
+    sketchChamferModeBox_ = new QComboBox(content);
+    sketchChamferModeBox_->addItems({"Equal Distance", "Two Distances", "Distance + Angle"});
+    sketchChamferFirstDistance_ = new QDoubleSpinBox(content);
+    sketchChamferFirstDistance_->setRange(1.0e-6, 1.0e9);
+    sketchChamferFirstDistance_->setDecimals(3);
+    sketchChamferFirstDistance_->setValue(5.0);
+    sketchChamferSecondDistance_ = new QDoubleSpinBox(content);
+    sketchChamferSecondDistance_->setRange(1.0e-6, 1.0e9);
+    sketchChamferSecondDistance_->setDecimals(3);
+    sketchChamferSecondDistance_->setValue(5.0);
+    sketchChamferSelectedCount_ = new QLabel(content);
+    sketchChamferValidation_ = new QLabel(content);
+    sketchChamferValidation_->setWordWrap(true);
+    sketchChamferApply_ = new QPushButton("Apply", content);
+    sketchChamferCancel_ = new QPushButton("Cancel", content);
+    auto* buttons = new QHBoxLayout;
+    buttons->addWidget(sketchChamferApply_);
+    buttons->addWidget(sketchChamferCancel_);
+    form->addRow("Chamfer Type:", sketchChamferModeBox_);
+    form->addRow("Distance 1:", sketchChamferFirstDistance_);
+    form->addRow("Distance 2 / Angle:", sketchChamferSecondDistance_);
+    form->addRow("Selected corners:", sketchChamferSelectedCount_);
+    form->addRow("Validation:", sketchChamferValidation_);
+    form->addRow(buttons);
+    sketchChamferDock_->setWidget(content);
+    addDockWidget(Qt::RightDockWidgetArea, sketchChamferDock_);
+    traceChamferPanel("chamferPanel.addedToMainWindow", sketchChamferDock_, "Chamfer");
+    ensureSketchChamferPanelVisible();
+
+    const auto changed = [this]() {
+        if (sketchTool_ != SketchTool::Chamfer) return;
+        const auto mode = sketchChamferModeBox_->currentIndex() == 1
+            ? cad::parametric::SketchChamferMode::TwoDistances
+            : sketchChamferModeBox_->currentIndex() == 2
+            ? cad::parametric::SketchChamferMode::DistanceAngle
+            : cad::parametric::SketchChamferMode::EqualDistance;
+        const double second = mode == cad::parametric::SketchChamferMode::DistanceAngle
+            ? sketchChamferSecondDistance_->value() * 3.14159265358979323846 / 180.0
+            : sketchChamferSecondDistance_->value();
+        const bool valid = updateSketchChamferPreview(
+            mode, sketchChamferFirstDistance_->value(), second,
+            mode == cad::parametric::SketchChamferMode::DistanceAngle
+                ? sketchChamferSecondDistance_->value() : 0.0);
+        sketchChamferValidation_->setText(valid ? "Valid" : lastChamferPreviewError_);
+        sketchChamferApply_->setEnabled(valid && !chamferCorners_.empty());
+        const bool equalDistance = mode == cad::parametric::SketchChamferMode::EqualDistance;
+        if (equalDistance && sketchChamferSecondDistance_->value()
+                != sketchChamferFirstDistance_->value()) {
+            const QSignalBlocker blocker(sketchChamferSecondDistance_);
+            sketchChamferSecondDistance_->setValue(sketchChamferFirstDistance_->value());
+        }
+        sketchChamferSecondDistance_->setEnabled(!equalDistance);
+        sketchChamferSecondDistance_->setSuffix(
+            mode == cad::parametric::SketchChamferMode::DistanceAngle ? " deg" : " mm");
+        traceActionState("chamferPanel.valuesChanged", QString(
+            "mode=%1 distance1=%2 distance2=%3 angleMode=%4 fieldsEnabled=%5")
+            .arg(static_cast<int>(mode)).arg(sketchChamferFirstDistance_->value())
+            .arg(sketchChamferSecondDistance_->value())
+            .arg(mode == cad::parametric::SketchChamferMode::DistanceAngle)
+            .arg(sketchChamferSecondDistance_->isEnabled()));
+        updateSketchChamferPanel();
+    };
+    connect(sketchChamferModeBox_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [changed](int) { changed(); });
+    connect(sketchChamferFirstDistance_, &QDoubleSpinBox::valueChanged, this,
+        [changed](double) { changed(); });
+    connect(sketchChamferSecondDistance_, &QDoubleSpinBox::valueChanged, this,
+        [changed](double) { changed(); });
+    connect(sketchChamferApply_, &QPushButton::clicked, this, [this]() {
+        traceActionState("chamferPanel.applyClicked", QString("enabled=%1 selected=%2")
+            .arg(sketchChamferApply_->isEnabled()).arg(chamferCorners_.size()));
+        commitSketchChamferSelection();
+    });
+    connect(sketchChamferCancel_, &QPushButton::clicked, this, [this]() {
+        chamferCorners_.clear();
+        hoveredChamferCorner_.reset();
+        viewer_->clearSketchTrimPreview();
+        viewer_->clearSketchCornerMarkers();
+        updateSketchChamferPanel();
+        statusBar()->showMessage("Sketch Chamfer cancelled", 2000);
+    });
+    changed();
+}
+
+void MainWindow::ensureSketchChamferPanelVisible()
+{
+    if (!sketchChamferDock_) return;
+    if (sketchChamferFloatingFallback_) {
+        sketchChamferDock_->show();
+        sketchChamferDock_->raise();
+        sketchChamferDock_->activateWindow();
+        traceChamferPanel("chamferPanel.floatingFallback", sketchChamferDock_, "Chamfer");
+        return;
+    }
+    if (sketchChamferDock_->isFloating()) sketchChamferDock_->setFloating(false);
+    if (dockWidgetArea(sketchChamferDock_) != Qt::RightDockWidgetArea) {
+        addDockWidget(Qt::RightDockWidgetArea, sketchChamferDock_);
+    }
+    sketchChamferDock_->show();
+    sketchChamferDock_->raise();
+    if (width() > 0) {
+        const int dockWidth = std::clamp(width() / 4, 280, 420);
+        resizeDocks({sketchChamferDock_}, {dockWidth}, Qt::Horizontal);
+    }
+    traceChamferPanel("chamferPanel.ensureVisible", sketchChamferDock_, "Chamfer");
+    QTimer::singleShot(0, this, [this]() {
+        if (!sketchChamferDock_) return;
+        if (sketchChamferDock_->isFloating()) sketchChamferDock_->setFloating(false);
+        if (dockWidgetArea(sketchChamferDock_) != Qt::RightDockWidgetArea) {
+            addDockWidget(Qt::RightDockWidgetArea, sketchChamferDock_);
+        }
+        sketchChamferDock_->show();
+        sketchChamferDock_->raise();
+        const int dockWidth = std::clamp(width() / 4, 280, 420);
+        resizeDocks({sketchChamferDock_}, {dockWidth}, Qt::Horizontal);
+        traceChamferPanel("chamferPanel.afterLayoutEventLoop", sketchChamferDock_, "Chamfer");
+        const QRect host = rect().adjusted(0, menuBar()->height(), 0, -statusBar()->height());
+        const QRect dockRect = sketchChamferDock_->geometry();
+        if (isVisible() && (!host.contains(dockRect.center()) || dockRect.width() < 200)) {
+            traceActionState("chamferPanel.layoutFallback", QString(
+                "host=%1,%2 %3x%4 dock=%5,%6 %7x%8")
+                .arg(host.x()).arg(host.y()).arg(host.width()).arg(host.height())
+                .arg(dockRect.x()).arg(dockRect.y()).arg(dockRect.width()).arg(dockRect.height()));
+            removeDockWidget(sketchChamferDock_);
+            sketchChamferDock_->setFloating(true);
+            sketchChamferDock_->resize(340, std::max(220, sketchChamferDock_->height()));
+            const auto* screen = QGuiApplication::screenAt(frameGeometry().center());
+            const QRect available = screen ? screen->availableGeometry()
+                : QGuiApplication::primaryScreen()->availableGeometry();
+            const int x = std::clamp(available.right() - sketchChamferDock_->width() + 1,
+                                     available.left(), available.right());
+            const int y = std::clamp(available.top() + 80,
+                                     available.top(), available.bottom());
+            sketchChamferDock_->move(x, y);
+            sketchChamferFloatingFallback_ = true;
+            sketchChamferDock_->show();
+            sketchChamferDock_->raise();
+            sketchChamferDock_->activateWindow();
+            traceChamferPanel("chamferPanel.floatingFallbackShown", sketchChamferDock_, "Chamfer");
+        }
+    });
+}
+
+void MainWindow::updateSketchChamferPanel()
+{
+    if (!sketchChamferDock_) return;
+    sketchChamferSelectedCount_->setText(QString::number(chamferCorners_.size()));
+    sketchChamferApply_->setEnabled(
+        sketchTool_ == SketchTool::Chamfer && !chamferCorners_.empty()
+        && lastChamferPreviewError_.isEmpty());
+    const bool shouldShow = sketchTool_ == SketchTool::Chamfer
+        && sketchModeState_ == SketchModeState::Editing;
+    traceChamferPanel(shouldShow ? "chamferPanel.showRequested" : "chamferPanel.hideRequested",
+        sketchChamferDock_, sketchTool_ == SketchTool::Chamfer ? "Chamfer" : "Other");
+    if (shouldShow) {
+        ensureSketchChamferPanelVisible();
+    } else {
+        sketchChamferDock_->hide();
+    }
+    traceChamferPanel("chamferPanel.visibilityUpdated", sketchChamferDock_,
+        sketchTool_ == SketchTool::Chamfer ? "Chamfer" : "Other");
+    if (shouldShow) {
+        QTimer::singleShot(0, this, [this]() {
+            traceChamferPanel("chamferPanel.afterEventLoop", sketchChamferDock_, "Chamfer");
+        });
+    }
 }
 
 void MainWindow::commitSketchChamferSelection()
 {
-    traceActionState("sketch.chamfer.commit.enter", QString("state=%1 selected=%2")
-        .arg(static_cast<int>(chamferState_)).arg(chamferCorners_.size()));
+    traceActionState("sketch.chamfer.commit.enter", QString("state=%1 selected=%2 panel=%3")
+        .arg(static_cast<int>(chamferState_)).arg(chamferCorners_.size())
+        .arg(sketchChamferDock_ && sketchChamferDock_->isVisible()));
     if (sketchTool_ != SketchTool::Chamfer || chamferCorners_.empty()) {
         traceActionState("sketch.chamfer.commit.return", "reason=no selected corners");
         return;
     }
     chamferState_ = ChamferState::ParameterAdjustment;
     hoveredChamferCorner_.reset();
-    QDialog dialog(this);
-    dialog.setWindowTitle("Sketch Chamfer");
-    auto* form = new QFormLayout(&dialog);
-    auto* modeBox = new QComboBox(&dialog);
-    modeBox->addItems({"Equal Distance", "Two Distances", "Distance + Angle"});
-    auto* firstSpin = new QDoubleSpinBox(&dialog);
-    firstSpin->setRange(1.0e-6, 1.0e9);
-    firstSpin->setDecimals(3);
-    firstSpin->setValue(5.0);
-    auto* secondSpin = new QDoubleSpinBox(&dialog);
-    secondSpin->setRange(1.0e-6, 1.0e9);
-    secondSpin->setDecimals(3);
-    secondSpin->setValue(5.0);
-    auto* validation = new QLabel(&dialog);
-    validation->setWordWrap(true);
-    auto* buttons = new QDialogButtonBox(
-        QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
-    auto* apply = buttons->button(QDialogButtonBox::Apply);
-    form->addRow("Chamfer Type:", modeBox);
-    form->addRow("Distance 1:", firstSpin);
-    form->addRow("Distance 2 / Angle:", secondSpin);
-    form->addRow("Selected Corners:", new QLabel(QString::number(chamferCorners_.size()), &dialog));
-    form->addRow("Validation:", validation);
-    form->addRow(buttons);
-
-    const auto parameters = [&]() {
-        const auto mode = modeBox->currentIndex() == 1
+    if (!sketchChamferModeBox_ || !sketchChamferFirstDistance_
+        || !sketchChamferSecondDistance_) {
+        traceActionState("sketch.chamfer.commit.failed", "reason=panel unavailable");
+        return;
+    }
+    const auto mode = sketchChamferModeBox_->currentIndex() == 1
             ? cad::parametric::SketchChamferMode::TwoDistances
-            : modeBox->currentIndex() == 2
+            : sketchChamferModeBox_->currentIndex() == 2
             ? cad::parametric::SketchChamferMode::DistanceAngle
             : cad::parametric::SketchChamferMode::EqualDistance;
-        const double second = mode == cad::parametric::SketchChamferMode::DistanceAngle
-            ? secondSpin->value() * 3.14159265358979323846 / 180.0
-            : secondSpin->value();
-        return std::tuple{mode, firstSpin->value(), second,
-            mode == cad::parametric::SketchChamferMode::DistanceAngle
-                ? secondSpin->value() : 0.0};
-    };
-    const auto update = [&]() {
-        const auto [mode, first, second, angle] = parameters();
-        const bool valid = updateSketchChamferPreview(mode, first, second, angle);
-        validation->setText(valid ? "Valid" : lastChamferPreviewError_);
-        apply->setEnabled(valid);
-        secondSpin->setSuffix(mode == cad::parametric::SketchChamferMode::DistanceAngle
-            ? " deg" : " mm");
-    };
-    connect(modeBox, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, update);
-    connect(firstSpin, &QDoubleSpinBox::valueChanged, &dialog, update);
-    connect(secondSpin, &QDoubleSpinBox::valueChanged, &dialog, update);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
-        if (apply->isEnabled()) dialog.accept();
-    });
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    update();
-    const bool accepted = dialog.exec() == QDialog::Accepted;
-    if (accepted) {
-        const auto [mode, firstDistance, secondDistance, angleRadians] = parameters();
-        const auto result = modeling_.chamferSketchCorners(
-            activeSketchId_, chamferCorners_, mode, firstDistance, secondDistance, angleRadians);
-        if (!result.success) {
-            chamferState_ = ChamferState::ValidationError;
-            traceActionState("sketch.chamfer.commit.failed", QString::fromStdString(result.error));
-            statusBar()->showMessage(QString::fromStdString(result.error), 3000);
-            QMessageBox::warning(this, "Sketch Chamfer", QString::fromStdString(result.error));
-            updateSketchChamferPreview(mode, firstDistance, secondDistance, angleRadians);
-            return;
-        }
-        viewer_->clearSketchTrimPreview();
-        refreshModelView(false);
-        statusBar()->showMessage("Sketch Chamfer applied", 2000);
+    const double firstDistance = sketchChamferFirstDistance_->value();
+    const bool angleMode = mode == cad::parametric::SketchChamferMode::DistanceAngle;
+    const double secondDistance = angleMode
+        ? sketchChamferSecondDistance_->value() * 3.14159265358979323846 / 180.0
+        : sketchChamferSecondDistance_->value();
+    const double angle = angleMode ? sketchChamferSecondDistance_->value() : 0.0;
+    const bool valid = updateSketchChamferPreview(
+        mode, firstDistance, secondDistance, angle);
+    updateSketchChamferPanel();
+    if (!valid) {
+        chamferState_ = ChamferState::ValidationError;
+        traceActionState("sketch.chamfer.commit.failed",
+            QString("reason=preview validation error %1").arg(lastChamferPreviewError_));
+        statusBar()->showMessage(lastChamferPreviewError_, 4000);
+        return;
     }
-    if (!accepted) viewer_->clearSketchTrimPreview();
+
+    size_t entityCountBefore = 0;
+    if (const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(activeSketchId_))) {
+        entityCountBefore = sketch->entityCount();
+    }
+    traceActionState("sketch.chamfer.commit.beforeModeling", QString(
+        "corners=%1 entitiesBefore=%2").arg(chamferCorners_.size()).arg(entityCountBefore));
+    const auto result = modeling_.chamferSketchCorners(
+        activeSketchId_, chamferCorners_, mode, firstDistance, secondDistance, angle);
+    traceActionState("sketch.chamfer.commit.afterModeling", QString(
+        "success=%1 error=%2").arg(result.success).arg(QString::fromStdString(result.error)));
+    if (!result.success) {
+        chamferState_ = ChamferState::ValidationError;
+        statusBar()->showMessage(QString::fromStdString(result.error), 4000);
+        updateSketchChamferPreview(mode, firstDistance, secondDistance, angle);
+        updateSketchChamferPanel();
+        return;
+    }
+
+    size_t entityCountAfter = 0;
+    if (const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(activeSketchId_))) {
+        entityCountAfter = sketch->entityCount();
+    }
+    traceActionState("sketch.chamfer.commit.success", QString(
+        "entitiesBefore=%1 entitiesAfter=%2 undo=1").arg(entityCountBefore).arg(entityCountAfter));
+    viewer_->clearSketchTrimPreview();
+    viewer_->clearSketchCornerMarkers();
+    refreshModelView(false);
     chamferCorners_.clear();
     hoveredChamferCorner_.reset();
     chamferState_ = ChamferState::CornerSelection;
-    statusBar()->showMessage(accepted ? "Sketch Chamfer: select corner"
-                                      : "Sketch Chamfer cancelled", 2000);
+    updateSketchChamferPanel();
+    statusBar()->showMessage("Sketch Chamfer applied; select another corner", 2000);
 }
 
 bool MainWindow::updateSketchFilletPreview(const double radius)
 {
     if (filletCorners_.empty() || activeSketchId_.empty()) {
+        lastFilletPreviewError_.clear();
         viewer_->clearSketchTrimPreview();
         return false;
     }
     const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
         modeling_.body().findFeature(activeSketchId_));
-    if (!sketch) return false;
+    if (!sketch) {
+        lastFilletPreviewError_ = "Sketch Fillet: active Sketch is unavailable";
+        return false;
+    }
     auto working = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
         sketch->clone("fillet-preview"));
-    if (!working) return false;
+    if (!working) {
+        lastFilletPreviewError_ = "Sketch Fillet: preview copy could not be created";
+        return false;
+    }
     working->replaceEntities(0, working->entityCount(), sketch->entities());
     working->replaceConstraints(sketch->constraints());
     auto entities = sketch->entities();
@@ -2553,6 +2837,7 @@ bool MainWindow::updateSketchFilletPreview(const double radius)
         const auto plan = cad::operations::SketchFilletService::analyze(
             *working, first, second, radius);
         if (!plan.changed) {
+            lastFilletPreviewError_ = QString::fromStdString(plan.error);
             viewer_->setSketchTrimPreview(sketch->entities(), true);
             statusBar()->showMessage(QString::fromStdString(plan.error), 2000);
             return false;
@@ -2561,6 +2846,7 @@ bool MainWindow::updateSketchFilletPreview(const double radius)
         working->replaceEntities(0, working->entityCount(), entities);
     }
     filletPreviewRadius_ = radius;
+    lastFilletPreviewError_.clear();
     viewer_->setSketchTrimPreview(entities);
     statusBar()->showMessage(
         QString("Sketch Fillet: %1 corner(s), R=%2 mm; Enter applies, Esc cancels")
@@ -2662,39 +2948,43 @@ bool MainWindow::updateSketchChamferPreview(
 
 void MainWindow::commitSketchFilletSelection()
 {
-    if (filletCorners_.empty() || activeSketchId_.empty()) return;
-    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
-        modeling_.body().findFeature(activeSketchId_));
-    if (!sketch) return;
-    QInputDialog dialog(this);
-    dialog.setInputMode(QInputDialog::DoubleInput);
-    dialog.setWindowTitle("Sketch Fillet");
-    dialog.setLabelText(QString("Radius for %1 corner(s):").arg(filletCorners_.size()));
-    dialog.setDoubleRange(1.0e-6, 1.0e9);
-    dialog.setDoubleDecimals(3);
-    dialog.setDoubleValue(2.0);
-    connect(&dialog, &QInputDialog::doubleValueChanged, this,
-        [this](const double radius) { updateSketchFilletPreview(radius); });
-    updateSketchFilletPreview(dialog.doubleValue());
-    const bool accepted = dialog.exec() == QDialog::Accepted;
-    viewer_->clearSketchTrimPreview();
-    if (accepted) {
-        const auto result = modeling_.filletSketchCorners(
-            activeSketchId_, filletCorners_, dialog.doubleValue());
-        if (!result.success) {
-            statusBar()->showMessage(QString::fromStdString(result.error), 3000);
-            QMessageBox::warning(this, "Sketch Fillet",
-                QString::fromStdString(result.error));
-        } else {
-            refreshModelView(false);
-            statusBar()->showMessage("Sketch Fillet applied", 2000);
-        }
+    traceActionState("sketch.fillet.commit.enter", QString("selected=%1 panel=%2")
+        .arg(filletCorners_.size()).arg(sketchFilletDock_ && sketchFilletDock_->isVisible()));
+    if (sketchTool_ != SketchTool::Fillet || filletCorners_.empty()
+        || activeSketchId_.empty() || !sketchFilletRadius_) {
+        traceActionState("sketch.fillet.commit.return", "reason=missing panel, sketch, or corners");
+        return;
     }
+    const double radius = sketchFilletRadius_->value();
+    if (!updateSketchFilletPreview(radius)) {
+        traceActionState("sketch.fillet.commit.failed", lastFilletPreviewError_);
+        statusBar()->showMessage(lastFilletPreviewError_, 4000);
+        updateSketchFilletPanel();
+        return;
+    }
+    traceActionState("sketch.fillet.commit.beforeModeling", QString(
+        "corners=%1 radius=%2").arg(filletCorners_.size()).arg(radius));
+    const auto result = modeling_.filletSketchCorners(
+        activeSketchId_, filletCorners_, radius);
+    traceActionState("sketch.fillet.commit.afterModeling", QString(
+        "success=%1 error=%2").arg(result.success).arg(QString::fromStdString(result.error)));
+    if (!result.success) {
+        lastFilletPreviewError_ = QString::fromStdString(result.error);
+        statusBar()->showMessage(lastFilletPreviewError_, 4000);
+        updateSketchFilletPanel();
+        return;
+    }
+    viewer_->clearSketchTrimPreview();
+    viewer_->clearSketchCornerMarkers();
+    refreshModelView(false);
     filletCorners_.clear();
+    hoveredFilletCorner_.reset();
     filletState_ = FilletState::Selecting;
     filletRadiusAnchor_.reset();
-    statusBar()->showMessage(accepted ? "Sketch Fillet: select corner"
-                                      : "Sketch Fillet cancelled", 2000);
+    lastFilletPreviewError_.clear();
+    updateSketchFilletPanel();
+    traceActionState("sketch.fillet.commit.success", "preview cleared; undo command created");
+    statusBar()->showMessage("Sketch Fillet applied; select another corner", 2000);
 }
 
 void MainWindow::selectSketchTrimTool()
@@ -3062,23 +3352,69 @@ void MainWindow::clearRectangleInput()
                          static_cast<QWidget*>(rectangleHeightEdit_)}) {
         if (widget) widget->hide();
     }
+    if (sketchFilletDock_) sketchFilletDock_->hide();
+    updateSketchChamferPanel();
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == viewer_ && event->type() == QEvent::KeyPress
+    if (watched == sketchChamferDock_
+        && (event->type() == QEvent::Show || event->type() == QEvent::Hide
+            || event->type() == QEvent::Resize || event->type() == QEvent::WindowActivate)) {
+        traceChamferPanel(event->type() == QEvent::Show ? "chamferPanel.showEvent"
+                : event->type() == QEvent::Hide ? "chamferPanel.hideEvent"
+                : event->type() == QEvent::Resize ? "chamferPanel.resizeEvent"
+                : "chamferPanel.windowActivate", sketchChamferDock_, "Chamfer");
+    }
+    const bool chamferInput = watched == sketchChamferFirstDistance_
+        || watched == sketchChamferSecondDistance_;
+    const bool filletInput = watched == sketchFilletRadius_;
+    if ((watched == viewer_ || chamferInput || filletInput) && event->type() == QEvent::KeyPress
         && sketchModeState_ == SketchModeState::Editing
-        && (sketchTool_ == SketchTool::Fillet || sketchTool_ == SketchTool::Chamfer)) {
+        && (sketchTool_ == SketchTool::Chamfer || sketchTool_ == SketchTool::Fillet)) {
         const auto* keyEvent = static_cast<QKeyEvent*>(event);
         if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
-            if (sketchTool_ == SketchTool::Fillet) commitSketchFilletSelection();
-            else commitSketchChamferSelection();
+            if (sketchTool_ == SketchTool::Chamfer) commitSketchChamferSelection();
+            else commitSketchFilletSelection();
             return true;
         }
         if (keyEvent->key() == Qt::Key_Escape) {
-            if ((sketchTool_ == SketchTool::Fillet
-                    && filletCorners_.empty() && filletFirstLineId_.empty())
-                || (sketchTool_ == SketchTool::Chamfer && chamferCorners_.empty())) {
+            if ((sketchTool_ == SketchTool::Chamfer && chamferCorners_.empty())
+                || (sketchTool_ == SketchTool::Fillet && filletCorners_.empty())) {
+                sketchTool_ = SketchTool::None;
+                viewer_->removeEventFilter(this);
+                viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+                viewer_->clearSketchTrimPreview();
+                viewer_->clearSketchCornerMarkers();
+                updateSketchChamferPanel();
+                updateSketchFilletPanel();
+                statusBar()->showMessage("Sketch mode: select a drawing tool", 2000);
+                return true;
+            }
+            if (sketchTool_ == SketchTool::Chamfer) chamferCorners_.clear();
+            else filletCorners_.clear();
+            viewer_->clearSketchTrimPreview();
+            viewer_->clearSketchCornerMarkers();
+            lastChamferPreviewTrace_.clear();
+            lastChamferPreviewError_.clear();
+            lastFilletPreviewError_.clear();
+            updateSketchChamferPanel();
+            updateSketchFilletPanel();
+            statusBar()->showMessage(sketchTool_ == SketchTool::Fillet
+                ? "Sketch Fillet selection cancelled" : "Sketch Chamfer selection cancelled", 2000);
+            return true;
+        }
+    }
+    if (watched == viewer_ && event->type() == QEvent::KeyPress
+        && sketchModeState_ == SketchModeState::Editing
+        && sketchTool_ == SketchTool::Fillet) {
+        const auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            commitSketchFilletSelection();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Escape) {
+            if (filletCorners_.empty() && filletFirstLineId_.empty()) {
                 sketchTool_ = SketchTool::None;
                 viewer_->removeEventFilter(this);
                 viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
@@ -3086,18 +3422,10 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
                 statusBar()->showMessage("Sketch mode: select a drawing tool", 2000);
                 return true;
             }
-            if (sketchTool_ == SketchTool::Fillet) {
-                filletCorners_.clear();
-                filletFirstLineId_.clear();
-            } else {
-                chamferCorners_.clear();
-            }
+            filletCorners_.clear();
+            filletFirstLineId_.clear();
             viewer_->clearSketchTrimPreview();
-            viewer_->clearSketchCornerMarkers();
-            lastChamferPreviewTrace_.clear();
-            lastChamferPreviewError_.clear();
-            statusBar()->showMessage(sketchTool_ == SketchTool::Fillet
-                ? "Sketch Fillet selection cancelled" : "Sketch Chamfer selection cancelled", 2000);
+            statusBar()->showMessage("Sketch Fillet selection cancelled", 2000);
             return true;
         }
     }

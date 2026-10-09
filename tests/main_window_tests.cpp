@@ -6,6 +6,9 @@
 #include <QKeyEvent>
 #include <QEvent>
 #include <QPushButton>
+#include <QDockWidget>
+#include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QToolBar>
 #include <QSettings>
 #include <QSet>
@@ -291,6 +294,104 @@ private slots:
             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         window.viewer_->mousePressEvent(&addBack);
         QCOMPARE(window.chamferCorners_.size(), std::size_t(4));
+    }
+
+    void chamferPanelApplyCommitsRealSketchGeometry()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("Native MainWindow is required for Chamfer panel tests");
+        }
+        MainWindow window;
+        const auto sketchResult = window.modeling_.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {-50.0, -30.0},
+                                               {50.0, -30.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {50.0, -30.0},
+                                               {50.0, 30.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {50.0, 30.0},
+                                               {-50.0, 30.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {-50.0, 30.0},
+                                               {-50.0, -30.0}).success);
+        window.show();
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        window.enterSketchEditing(sketchResult.id);
+        window.selectSketchChamferTool();
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        QVERIFY(window.sketchChamferDock_);
+        QVERIFY(window.sketchChamferDock_->isVisible());
+        QVERIFY(!window.sketchChamferDock_->isHidden());
+        QCOMPARE(window.sketchChamferModeBox_->count(), 3);
+        QVERIFY(window.sketchChamferFirstDistance_->isVisible());
+        QVERIFY(window.sketchChamferSecondDistance_->isVisible());
+        QVERIFY(window.sketchChamferApply_);
+        const auto original = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketchResult.id));
+        QVERIFY(original);
+        QCOMPARE(original->entityCount(), std::size_t(4));
+
+        const auto screen = window.viewer_->sketchPointToScreen({50.0, -30.0});
+        QVERIFY(screen.has_value());
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(*screen),
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        window.viewer_->mousePressEvent(&press);
+        QCOMPARE(window.chamferCorners_.size(), std::size_t(1));
+        QVERIFY(window.sketchChamferApply_->isEnabled());
+        window.sketchChamferFirstDistance_->setValue(8.0);
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        QCOMPARE(window.sketchChamferFirstDistance_->value(), 8.0);
+        QCOMPARE(window.sketchChamferSecondDistance_->value(), 8.0);
+
+        QTest::mouseClick(window.sketchChamferApply_, Qt::LeftButton);
+        const auto updated = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketchResult.id));
+        QVERIFY(updated);
+        QCOMPARE(updated->entityCount(), std::size_t(5));
+        QVERIFY(window.chamferCorners_.empty());
+        QVERIFY(window.viewer_->sketchTrimPreviewObject_.IsNull());
+    }
+
+    void filletPanelApplyCommitsWithoutSecondCornerClick()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("Native MainWindow is required for Fillet panel tests");
+        }
+        MainWindow window;
+        const auto sketchResult = window.modeling_.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {-50.0, -30.0},
+                                               {50.0, -30.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {50.0, -30.0},
+                                               {50.0, 30.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {50.0, 30.0},
+                                               {-50.0, 30.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {-50.0, 30.0},
+                                               {-50.0, -30.0}).success);
+        window.show();
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        window.enterSketchEditing(sketchResult.id);
+        window.selectSketchFilletTool();
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        QVERIFY(window.sketchFilletDock_);
+        QVERIFY(window.sketchFilletDock_->isVisible());
+        QVERIFY(window.sketchFilletRadius_->isVisible());
+
+        const auto screen = window.viewer_->sketchPointToScreen({50.0, -30.0});
+        QVERIFY(screen.has_value());
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(*screen),
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        window.viewer_->mousePressEvent(&press);
+        QCOMPARE(window.filletCorners_.size(), std::size_t(1));
+        QVERIFY(window.sketchFilletApply_->isEnabled());
+        window.sketchFilletRadius_->setValue(5.0);
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        QTest::mouseClick(window.sketchFilletApply_, Qt::LeftButton);
+
+        const auto updated = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            window.modeling_.body().findFeature(sketchResult.id));
+        QVERIFY(updated);
+        QCOMPARE(updated->entityCount(), std::size_t(5));
+        QVERIFY(window.filletCorners_.empty());
+        QVERIFY(window.viewer_->sketchTrimPreviewObject_.IsNull());
     }
 
     void sketchLinePickerChoosesNearestAndPrefersConstructionOnOverlap()
