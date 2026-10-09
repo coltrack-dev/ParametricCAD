@@ -912,7 +912,7 @@ double CadViewer::sketchLocalToleranceFromPixels(const QPoint& position, const d
 }
 
 void CadViewer::setSketchTrimPreview(
-    const std::vector<cad::parametric::SketchEntity>& entities)
+    const std::vector<cad::parametric::SketchEntity>& entities, const bool invalid)
 {
     if (entities.empty() || !sketchMode_ || context_.IsNull()) {
         clearSketchTrimPreview();
@@ -927,10 +927,11 @@ void CadViewer::setSketchTrimPreview(
     if (sketchTrimPreviewObject_.IsNull()) {
         sketchTrimPreviewObject_ = new AIS_Shape(shape);
         sketchTrimPreviewObject_->SetDisplayMode(AIS_WireFrame);
-        sketchTrimPreviewObject_->SetColor(Quantity_NOC_YELLOW);
+        sketchTrimPreviewObject_->SetColor(invalid ? Quantity_NOC_RED : Quantity_NOC_YELLOW);
         sketchTrimPreviewObject_->SetWidth(4.0);
         context_->Display(sketchTrimPreviewObject_, Standard_True);
     } else {
+        sketchTrimPreviewObject_->SetColor(invalid ? Quantity_NOC_RED : Quantity_NOC_YELLOW);
         sketchTrimPreviewObject_->SetShape(shape);
         context_->Redisplay(sketchTrimPreviewObject_, Standard_True);
     }

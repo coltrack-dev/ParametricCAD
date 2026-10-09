@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace cad::operations {
 namespace {
@@ -63,6 +64,19 @@ bool referencesVertex(const cad::parametric::SketchPointRef& ref,
     return (ref.entityId == firstId && ref.role == firstRole)
         || (ref.entityId == secondId && ref.role == secondRole);
 }
+
+void reject(SketchFilletPlan& plan, const SketchFilletError error,
+            std::string message,
+            std::vector<cad::parametric::SketchEntityId> affected = {},
+            const std::optional<double> maximum = std::nullopt)
+{
+    plan.validation.valid = false;
+    plan.validation.error = error;
+    plan.validation.message = std::move(message);
+    plan.validation.affectedEntities = std::move(affected);
+    plan.validation.maxAllowedRadius = maximum;
+    plan.error = plan.validation.message;
+}
 }
 
 SketchFilletPlan SketchFilletService::analyze(
@@ -76,22 +90,28 @@ SketchFilletPlan SketchFilletService::analyze(
     result.secondLineId = secondLineId;
     result.radius = radius;
     if (firstLineId == secondLineId) {
-        result.error = "Sketch Fillet requires two different Lines";
+        reject(result, SketchFilletError::NoCornerSelected,
+            "Sketch Fillet requires two different Lines", {firstLineId});
         return result;
     }
     if (!std::isfinite(radius) || radius <= tolerance) {
-        result.error = "Sketch Fillet radius must be finite and positive";
+        reject(result, SketchFilletError::InvalidRadius,
+            "Sketch Fillet radius must be finite and positive",
+            {firstLineId, secondLineId});
         return result;
     }
     const auto first = findLine(sketch, firstLineId);
     const auto second = findLine(sketch, secondLineId);
     if (!first || !second) {
-        result.error = "Sketch Fillet requires two existing Lines";
+        reject(result, SketchFilletError::NoCornerSelected,
+            "Sketch Fillet requires two existing Lines", {firstLineId, secondLineId});
         return result;
     }
     const auto vertexPair = sharedVertex(first->line, second->line);
     if (!vertexPair) {
-        result.error = "Sketch Fillet requires connected Line endpoints";
+        reject(result, SketchFilletError::NoCornerSelected,
+            "Sketch Fillet requires connected Line endpoints",
+            {firstLineId, secondLineId});
         return result;
     }
     const gp_Pnt2d vertex = vertexPair->first;
@@ -102,7 +122,9 @@ SketchFilletPlan SketchFilletService::analyze(
     const double firstLength = vertex.Distance(firstOuter);
     const double secondLength = vertex.Distance(secondOuter);
     if (firstLength <= minimumLength || secondLength <= minimumLength) {
-        result.error = "Sketch Fillet cannot use a zero-length Line";
+        reject(result, SketchFilletError::DegenerateLine,
+            "Sketch Fillet cannot use a zero-length Line",
+            {firstLineId, secondLineId});
         return result;
     }
     gp_Vec2d firstRay(vertex, firstOuter);
@@ -112,19 +134,28 @@ SketchFilletPlan SketchFilletService::analyze(
     const double dot = std::clamp(firstRay.Dot(secondRay), -1.0, 1.0);
     const double theta = std::acos(dot);
     if (!std::isfinite(theta) || theta <= 1.0e-5 || std::abs(pi - theta) <= 1.0e-5) {
-        result.error = "Sketch Fillet cannot be constructed for parallel or collinear Lines";
+        reject(result, SketchFilletError::ParallelLines,
+            "Sketch Fillet cannot be constructed for parallel or collinear Lines",
+            {firstLineId, secondLineId});
         return result;
     }
+    result.maximumRadius = std::min(firstLength, secondLength) * std::tan(theta / 2.0);
     const double tangentDistance = radius / std::tan(theta / 2.0);
     if (!std::isfinite(tangentDistance) || tangentDistance <= minimumLength
         || tangentDistance >= firstLength - minimumLength
         || tangentDistance >= secondLength - minimumLength) {
-        result.error = "Sketch Fillet radius is too large for the selected Lines";
+        const double maximum = std::max(0.0, result.maximumRadius);
+        reject(result, SketchFilletError::RadiusTooLarge,
+            "Fillet R" + std::to_string(radius) + " cannot be applied: maximum radius is R"
+                + std::to_string(maximum) + ".",
+            {firstLineId, secondLineId}, maximum);
         return result;
     }
     gp_Vec2d bisector = firstRay + secondRay;
     if (bisector.SquareMagnitude() <= tolerance * tolerance) {
-        result.error = "Sketch Fillet has no stable angle bisector";
+        reject(result, SketchFilletError::ParallelLines,
+            "Sketch Fillet has no stable angle bisector",
+            {firstLineId, secondLineId});
         return result;
     }
     bisector.Normalize();
@@ -136,7 +167,9 @@ SketchFilletPlan SketchFilletService::analyze(
     const gp_Pnt2d secondTangent(vertex.X() + secondRay.X() * tangentDistance,
                                  vertex.Y() + secondRay.Y() * tangentDistance);
     if (firstTangent.Distance(secondTangent) <= minimumLength) {
-        result.error = "Sketch Fillet produced coincident tangent points";
+        reject(result, SketchFilletError::OverlappingFillets,
+            "Sketch Fillet produced coincident tangent points",
+            {firstLineId, secondLineId});
         return result;
     }
 
@@ -171,6 +204,37 @@ SketchFilletPlan SketchFilletService::analyze(
         result.constraints.push_back(constraint);
     }
     result.changed = true;
+    result.validation.valid = true;
+    result.validation.error = SketchFilletError::None;
+    result.validation.message = "Sketch Fillet geometry is valid";
+    result.validation.affectedEntities = {firstLineId, secondLineId};
+    result.validation.maxAllowedRadius = result.maximumRadius;
+    return result;
+}
+
+std::optional<std::pair<cad::parametric::SketchEntityId,
+                        cad::parametric::SketchEntityId>> SketchFilletService::cornerAt(
+    const std::vector<cad::parametric::SketchEntity>& entities,
+    const gp_Pnt2d& point, const double hitTolerance)
+{
+    double bestDistance = hitTolerance;
+    std::optional<std::pair<cad::parametric::SketchEntityId,
+                            cad::parametric::SketchEntityId>> result;
+    for (std::size_t first = 0; first < entities.size(); ++first) {
+        const auto* firstLine = std::get_if<cad::parametric::SketchLine>(&entities[first]);
+        if (!firstLine || firstLine->construction) continue;
+        for (std::size_t second = first + 1; second < entities.size(); ++second) {
+            const auto* secondLine = std::get_if<cad::parametric::SketchLine>(&entities[second]);
+            if (!secondLine || secondLine->construction) continue;
+            const auto vertex = sharedVertex(*firstLine, *secondLine);
+            if (!vertex) continue;
+            const double distance = point.Distance(vertex->first);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                result = std::make_pair(firstLine->id, secondLine->id);
+            }
+        }
+    }
     return result;
 }
 

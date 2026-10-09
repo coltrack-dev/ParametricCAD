@@ -188,7 +188,8 @@ public:
     void clearSketchPreviewPointOverride();
     void clearSketchPreview();
     void refreshSketchPreview();
-    void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities);
+    void setSketchTrimPreview(const std::vector<cad::parametric::SketchEntity>& entities,
+                              bool invalid = false);
     void setSketchExtendPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void clearSketchTrimPreview();
     void setSketchConstraintMarkers(const cad::parametric::SketchFeature& sketch,

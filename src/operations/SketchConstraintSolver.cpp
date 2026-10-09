@@ -208,9 +208,9 @@ bool applyTangent(cad::parametric::SketchLine& line, const gp_Pnt2d& center,
     return applyTangentFromStart(line, center, radius, arc, changed);
 }
 
-bool applyLineArcTangent(cad::parametric::SketchLine& line,
-                         cad::parametric::SketchArc& arc,
-                         bool& changed)
+bool applyLineArcTangentFromStart(cad::parametric::SketchLine& line,
+                                   cad::parametric::SketchArc& arc,
+                                   bool& changed)
 {
     const double length = line.start.Distance(line.end);
     if (length <= tolerance || arc.radius <= tolerance) return false;
@@ -249,6 +249,21 @@ bool applyLineArcTangent(cad::parametric::SketchLine& line,
         changed = true;
     }
     return true;
+}
+
+bool applyLineArcTangent(cad::parametric::SketchLine& line,
+                         cad::parametric::SketchArc& arc,
+                         bool& changed)
+{
+    const double startError = std::abs(line.start.Distance(arc.center) - arc.radius);
+    const double endError = std::abs(line.end.Distance(arc.center) - arc.radius);
+    if (endError < startError) {
+        std::swap(line.start, line.end);
+        const bool solved = applyLineArcTangentFromStart(line, arc, changed);
+        std::swap(line.start, line.end);
+        return solved;
+    }
+    return applyLineArcTangentFromStart(line, arc, changed);
 }
 
 bool applyFilletRadius(std::vector<cad::parametric::SketchEntity>& entities,
@@ -303,8 +318,11 @@ bool applyFilletRadius(std::vector<cad::parametric::SketchEntity>& entities,
     const gp_Pnt2d oldStart = arc.startPoint();
     const auto setLineTangent = [&](cad::parametric::SketchLine& line,
                                     const gp_Pnt2d& tangent) {
-        if (vertex.Distance(line.start) <= vertex.Distance(line.end)) line.start = tangent;
-        else line.end = tangent;
+        if (vertex.Distance(line.start) <= vertex.Distance(line.end)) {
+            if (!samePoint(line.start, tangent)) line.start = tangent;
+        } else if (!samePoint(line.end, tangent)) {
+            line.end = tangent;
+        }
     };
     setLineTangent(*lines[0], firstTangent);
     setLineTangent(*lines[1], secondTangent);
@@ -536,8 +554,41 @@ SketchSolveResult SketchConstraintSolver::solve(
             }
         }
     }
+
+    // A fillet Arc is governed by two tangent constraints and one radius
+    // constraint.  Solve that coupled geometry as a unit before the regular
+    // constraint pass.  This is important when several fillets share a line:
+    // solving each Tangent constraint independently would move the same line
+    // endpoint back and forth and prevent the solver from converging.
+    const auto isFilletArc = [&](const std::string& entityId) {
+        bool hasRadius = false;
+        int tangentCount = 0;
+        for (const auto& constraint : constraints) {
+            if (const auto* radius = std::get_if<cad::parametric::RadiusConstraint>(&constraint)) {
+                hasRadius = hasRadius || radius->entityId == entityId;
+            } else if (const auto* tangent = std::get_if<cad::parametric::TangentConstraint>(&constraint)) {
+                tangentCount += tangent->secondEntityId == entityId ? 1 : 0;
+            }
+        }
+        return hasRadius && tangentCount >= 2;
+    };
+
+    bool preSolvedFillets = false;
+    for (const auto& constraint : constraints) {
+        const auto* radius = std::get_if<cad::parametric::RadiusConstraint>(&constraint);
+        if (!radius || !isFilletArc(radius->entityId)) continue;
+        auto* entity = findEntity(result.entities, radius->entityId);
+        auto* arc = entity ? std::get_if<cad::parametric::SketchArc>(entity) : nullptr;
+        if (!arc || !applyFilletRadius(result.entities, constraints, *arc, radius->value, preSolvedFillets)) {
+            result.status = SolveStatus::Failed;
+            result.error = "Cannot solve fillet radius constraint";
+            return result;
+        }
+    }
+
     for (int iteration = 0; iteration < 40; ++iteration) {
-        bool changed = false;
+        bool changed = preSolvedFillets;
+        preSolvedFillets = false;
         for (const auto& constraint : constraints) {
             if (const auto* horizontal = std::get_if<cad::parametric::HorizontalConstraint>(&constraint)) {
                 auto* entity = findEntity(result.entities, horizontal->entityId);
@@ -665,12 +716,22 @@ SketchSolveResult SketchConstraintSolver::solve(
                 const auto* circle = second ? std::get_if<cad::parametric::SketchCircle>(second) : nullptr;
                 auto* arc = second ? std::get_if<cad::parametric::SketchArc>(second) : nullptr;
                 if (!line || (!circle && !arc)) { result.status = SolveStatus::Failed; result.error = "Tangent currently supports Line to Circle or Arc"; return result; }
-                const bool solved = arc
-                    ? applyLineArcTangent(*line, *arc, changed)
-                    : applyTangent(*line, circle->center, circle->radius, nullptr, changed);
+                // applyFilletRadius already solves both tangent points for a
+                // fillet Arc.  Running the generic one-sided tangent solver
+                // afterwards would undo the shared-line geometry.
+                const bool solved = arc && isFilletArc(arc->id)
+                    ? true
+                    : arc
+                        ? applyLineArcTangent(*line, *arc, changed)
+                        : applyTangent(*line, circle->center, circle->radius, nullptr, changed);
                 if (!solved) {
                     result.status = SolveStatus::Failed;
-                    result.error = arc ? "Tangent cannot be satisfied on current Arc" : "Tangent cannot be satisfied";
+                    result.error = arc
+                        ? "Tangent cannot be satisfied on current Arc (line="
+                            + tangent->firstEntityId + ", arc=" + tangent->secondEntityId
+                            + ", lineLength=" + std::to_string(line ? line->start.Distance(line->end) : 0.0)
+                            + ", radius=" + std::to_string(arc ? arc->radius : 0.0) + ")"
+                        : "Tangent cannot be satisfied";
                     return result;
                 }
             } else if (const auto* equal = std::get_if<cad::parametric::EqualConstraint>(&constraint)) {

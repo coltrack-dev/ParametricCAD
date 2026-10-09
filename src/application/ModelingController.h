@@ -14,6 +14,7 @@
 
 #include <string>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace cad::application {
@@ -21,6 +22,7 @@ class ModelingController final : public FeatureEditingService
 {
 public:
     ModelingController() = default;
+    using SketchFilletCorner = std::pair<std::string, std::string>;
 
     cad::parametric::Body& body() noexcept;
     const cad::parametric::Body& body() const noexcept;
@@ -50,6 +52,10 @@ public:
         const std::string& sketchId,
         const std::string& firstLineId,
         const std::string& secondLineId,
+        double radius);
+    ModelingResult filletSketchCorners(
+        const std::string& sketchId,
+        const std::vector<SketchFilletCorner>& corners,
         double radius);
     ModelingResult trimSketchEntity(const std::string& sketchId, const gp_Pnt2d& click,
                                     double hitTolerance);

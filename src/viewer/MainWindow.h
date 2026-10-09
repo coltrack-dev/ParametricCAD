@@ -18,6 +18,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <vector>
 #include <gp_Pnt2d.hxx>
 
 class CadViewer;
@@ -101,6 +102,8 @@ private:
     void selectSketchCenterArcTool();
     void selectSketchRectangleTool();
     void selectSketchFilletTool();
+    void commitSketchFilletSelection();
+    bool updateSketchFilletPreview(double radius);
     void selectSketchTrimTool();
     void selectSketchExtendTool();
     void selectSketchCoincidentTool();
@@ -263,6 +266,7 @@ private:
                             AngleBetweenLines, Tangent, Equal };
     enum class SketchModeState { Inactive, Editing };
     enum class RectangleState { Ready, Drawing, NumericInput };
+    enum class FilletState { Selecting, RadiusAdjustment };
     SketchModeState sketchModeState_{SketchModeState::Inactive};
     RectangleState rectangleState_{RectangleState::Ready};
     SketchTool sketchTool_{SketchTool::None};
@@ -284,6 +288,10 @@ private:
     QTimer rectangleOverlayTimer_;
     std::optional<cad::parametric::SketchPointRef> constraintFirstPoint_;
     std::string filletFirstLineId_;
+    std::vector<cad::application::ModelingController::SketchFilletCorner> filletCorners_;
+    FilletState filletState_{FilletState::Selecting};
+    double filletPreviewRadius_{2.0};
+    std::optional<gp_Pnt2d> filletRadiusAnchor_;
     QString selectedConstraintId_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this

@@ -269,18 +269,52 @@ MainWindow::MainWindow(QWidget* parent)
                 const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
                     modeling_.body().findFeature(activeSketchId_));
                 if (!sketch) return;
-                const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
+                const auto corner = cad::operations::SketchFilletService::cornerAt(
                     sketch->entities(), point, tolerance);
-                if (!lineId) {
+                if (corner && filletFirstLineId_.empty()) {
+                    const auto selected = std::find(
+                        filletCorners_.begin(), filletCorners_.end(), *corner);
+                    if (selected == filletCorners_.end()) {
+                        if (filletCorners_.empty()) filletRadiusAnchor_ = point;
+                        filletCorners_.push_back(*corner);
+                        filletState_ = FilletState::RadiusAdjustment;
+                    } else {
+                        filletCorners_.erase(selected);
+                        if (filletCorners_.empty()) {
+                            filletState_ = FilletState::Selecting;
+                            filletRadiusAnchor_.reset();
+                        }
+                    }
+                    const bool valid = updateSketchFilletPreview(filletPreviewRadius_);
+                    if (valid) statusBar()->showMessage(
+                        QString("Sketch Fillet: %1 corner(s); click more or press Enter")
+                            .arg(filletCorners_.size()), 0);
+                    return;
+                }
+                auto firstId = filletFirstLineId_;
+                auto secondId = std::string{};
+                if (corner && firstId.empty()) {
+                    firstId = corner->first;
+                    secondId = corner->second;
+                } else {
+                    const auto lineId = cad::operations::SketchConstraintSolver::lineAt(
+                        sketch->entities(), point, tolerance);
+                    if (!lineId) {
+                        statusBar()->showMessage("Sketch Fillet: select a Line or corner", 2000);
+                        return;
+                    }
+                    if (firstId.empty()) {
+                        filletFirstLineId_ = *lineId;
+                        statusBar()->showMessage("Sketch Fillet: select connected second Line");
+                        return;
+                    }
+                    secondId = *lineId;
+                }
+                if (firstId.empty() || secondId.empty()) {
                     statusBar()->showMessage("Sketch Fillet: select a Line", 2000);
                     return;
                 }
-                if (filletFirstLineId_.empty()) {
-                    filletFirstLineId_ = *lineId;
-                    statusBar()->showMessage("Sketch Fillet: select connected second Line");
-                    return;
-                }
-                if (filletFirstLineId_ == *lineId) {
+                if (firstId == secondId) {
                     statusBar()->showMessage("Sketch Fillet requires two different Lines", 2000);
                     return;
                 }
@@ -291,8 +325,7 @@ MainWindow::MainWindow(QWidget* parent)
                 dialog.setDoubleRange(1.0e-6, 1.0e9);
                 dialog.setDoubleDecimals(3);
                 dialog.setDoubleValue(2.0);
-                const auto updatePreview = [this, sketch, firstId = filletFirstLineId_,
-                                             secondId = *lineId](const double radius) {
+                const auto updatePreview = [this, sketch, firstId, secondId](const double radius) {
                     const auto plan = cad::operations::SketchFilletService::analyze(
                         *sketch, firstId, secondId, radius);
                     if (plan.changed) {
@@ -312,10 +345,12 @@ MainWindow::MainWindow(QWidget* parent)
                 viewer_->clearSketchTrimPreview();
                 if (accepted) {
                     const auto result = modeling_.filletSketchLines(
-                        activeSketchId_, filletFirstLineId_, *lineId, dialog.doubleValue());
-                    if (!result.success)
+                        activeSketchId_, firstId, secondId, dialog.doubleValue());
+                    if (!result.success) {
                         statusBar()->showMessage(QString::fromStdString(result.error), 3000);
-                    else {
+                        QMessageBox::warning(this, "Sketch Fillet",
+                            QString::fromStdString(result.error));
+                    } else {
                         refreshModelView(false);
                         statusBar()->showMessage("Sketch Fillet applied", 2000);
                     }
@@ -338,6 +373,33 @@ MainWindow::MainWindow(QWidget* parent)
         });
     viewer_->setSketchMouseMovedHandler(
         [this](const gp_Pnt2d& point, const double tolerance) {
+            if (sketchTool_ == SketchTool::Fillet) {
+                if (filletState_ == FilletState::RadiusAdjustment
+                    && !filletCorners_.empty() && filletRadiusAnchor_) {
+                    const double radius = std::max(1.0e-6,
+                        filletRadiusAnchor_->Distance(point));
+                    updateSketchFilletPreview(radius);
+                    return;
+                }
+                const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+                    modeling_.body().findFeature(activeSketchId_));
+                const auto corner = sketch
+                    ? cad::operations::SketchFilletService::cornerAt(
+                        sketch->entities(), point, tolerance)
+                    : std::nullopt;
+                if (corner && filletCorners_.empty()) {
+                    const auto plan = cad::operations::SketchFilletService::analyze(
+                        *sketch, corner->first, corner->second, filletPreviewRadius_);
+                    if (plan.changed) viewer_->setSketchTrimPreview(plan.entities);
+                    else {
+                        viewer_->setSketchTrimPreview(sketch->entities(), true);
+                        statusBar()->showMessage(QString::fromStdString(plan.error), 2000);
+                    }
+                } else if (filletCorners_.empty()) {
+                    viewer_->clearSketchTrimPreview();
+                }
+                return;
+            }
             if (sketchTool_ == SketchTool::Rectangle && !activeSketchId_.empty()) {
                 updateRectangleInput(point);
                 return;
@@ -367,6 +429,9 @@ MainWindow::MainWindow(QWidget* parent)
             clearRectangleInput();
             sketchFirstPoint_.reset(); sketchSecondPoint_.reset();
             filletFirstLineId_.clear();
+            filletCorners_.clear();
+            filletState_ = FilletState::Selecting;
+            filletRadiusAnchor_.reset();
             if (rectangleActive) {
                 if (rectangleWasDrawing) {
                     statusBar()->showMessage("Rectangle: pick first corner", 2000);
@@ -2038,6 +2103,9 @@ void MainWindow::enterSketchEditing(const std::string& sketchId)
         sketchFirstPoint_.reset();
         sketchSecondPoint_.reset();
         filletFirstLineId_.clear();
+        filletCorners_.clear();
+        filletState_ = FilletState::Selecting;
+        filletRadiusAnchor_.reset();
         clearRectangleInput();
         constraintFirstPoint_.reset();
         selectedConstraintId_.clear();
@@ -2085,6 +2153,7 @@ void MainWindow::finishSketch()
     if (rectangleWidthEdit_) rectangleWidthEdit_->clearFocus();
     if (rectangleHeightEdit_) rectangleHeightEdit_->clearFocus();
     viewer_->setFocus(Qt::OtherFocusReason);
+    viewer_->removeEventFilter(this);
     viewer_->exitSketchMode();
     activeSketchId_.clear();
     sketchModeState_ = SketchModeState::Inactive;
@@ -2093,6 +2162,9 @@ void MainWindow::finishSketch()
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
     filletFirstLineId_.clear();
+    filletCorners_.clear();
+    filletState_ = FilletState::Selecting;
+    filletRadiusAnchor_.reset();
     clearRectangleInput();
     constraintFirstPoint_.reset();
     selectedConstraintId_.clear();
@@ -2201,9 +2273,84 @@ void MainWindow::selectSketchFilletTool()
     sketchFirstPoint_.reset();
     sketchSecondPoint_.reset();
     filletFirstLineId_.clear();
+    filletCorners_.clear();
+    filletState_ = FilletState::Selecting;
+    filletPreviewRadius_ = 2.0;
+    filletRadiusAnchor_.reset();
     viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+    viewer_->installEventFilter(this);
     viewer_->clearSketchTrimPreview();
     statusBar()->showMessage("Sketch Fillet: select first Line");
+}
+
+bool MainWindow::updateSketchFilletPreview(const double radius)
+{
+    if (filletCorners_.empty() || activeSketchId_.empty()) {
+        viewer_->clearSketchTrimPreview();
+        return false;
+    }
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    if (!sketch) return false;
+    auto working = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        sketch->clone("fillet-preview"));
+    if (!working) return false;
+    auto entities = sketch->entities();
+    std::string error;
+    for (const auto& [first, second] : filletCorners_) {
+        const auto plan = cad::operations::SketchFilletService::analyze(
+            *working, first, second, radius);
+        if (!plan.changed) {
+            viewer_->setSketchTrimPreview(sketch->entities(), true);
+            statusBar()->showMessage(QString::fromStdString(plan.error), 2000);
+            return false;
+        }
+        entities = plan.entities;
+        working->replaceEntities(0, working->entityCount(), entities);
+    }
+    filletPreviewRadius_ = radius;
+    viewer_->setSketchTrimPreview(entities);
+    statusBar()->showMessage(
+        QString("Sketch Fillet: %1 corner(s), R=%2 mm; Enter applies, Esc cancels")
+            .arg(filletCorners_.size()).arg(radius, 0, 'f', 3), 0);
+    return true;
+}
+
+void MainWindow::commitSketchFilletSelection()
+{
+    if (filletCorners_.empty() || activeSketchId_.empty()) return;
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        modeling_.body().findFeature(activeSketchId_));
+    if (!sketch) return;
+    QInputDialog dialog(this);
+    dialog.setInputMode(QInputDialog::DoubleInput);
+    dialog.setWindowTitle("Sketch Fillet");
+    dialog.setLabelText(QString("Radius for %1 corner(s):").arg(filletCorners_.size()));
+    dialog.setDoubleRange(1.0e-6, 1.0e9);
+    dialog.setDoubleDecimals(3);
+    dialog.setDoubleValue(2.0);
+    connect(&dialog, &QInputDialog::doubleValueChanged, this,
+        [this](const double radius) { updateSketchFilletPreview(radius); });
+    updateSketchFilletPreview(dialog.doubleValue());
+    const bool accepted = dialog.exec() == QDialog::Accepted;
+    viewer_->clearSketchTrimPreview();
+    if (accepted) {
+        const auto result = modeling_.filletSketchCorners(
+            activeSketchId_, filletCorners_, dialog.doubleValue());
+        if (!result.success) {
+            statusBar()->showMessage(QString::fromStdString(result.error), 3000);
+            QMessageBox::warning(this, "Sketch Fillet",
+                QString::fromStdString(result.error));
+        } else {
+            refreshModelView(false);
+            statusBar()->showMessage("Sketch Fillet applied", 2000);
+        }
+    }
+    filletCorners_.clear();
+    filletState_ = FilletState::Selecting;
+    filletRadiusAnchor_.reset();
+    statusBar()->showMessage(accepted ? "Sketch Fillet: select corner"
+                                      : "Sketch Fillet cancelled", 2000);
 }
 
 void MainWindow::selectSketchTrimTool()
@@ -2575,6 +2722,30 @@ void MainWindow::clearRectangleInput()
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == viewer_ && event->type() == QEvent::KeyPress
+        && sketchModeState_ == SketchModeState::Editing
+        && sketchTool_ == SketchTool::Fillet) {
+        const auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            commitSketchFilletSelection();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Escape) {
+            if (filletCorners_.empty() && filletFirstLineId_.empty()) {
+                sketchTool_ = SketchTool::None;
+                viewer_->removeEventFilter(this);
+                viewer_->setSketchPreviewTool(CadViewer::SketchPreviewTool::None);
+                viewer_->clearSketchTrimPreview();
+                statusBar()->showMessage("Sketch mode: select a drawing tool", 2000);
+                return true;
+            }
+            filletCorners_.clear();
+            filletFirstLineId_.clear();
+            viewer_->clearSketchTrimPreview();
+            statusBar()->showMessage("Sketch Fillet selection cancelled", 2000);
+            return true;
+        }
+    }
     if ((watched == rectangleWidthEdit_ || watched == rectangleHeightEdit_)
         && event->type() == QEvent::KeyPress) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);

@@ -6,6 +6,7 @@
 #include "operations/SketchProfileBuilder.h"
 #include "operations/SketchPathBuilder.h"
 #include "operations/SketchConstraintSolver.h"
+#include "operations/SketchFilletService.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
@@ -414,6 +415,13 @@ private slots:
         QVERIFY2(radiusUpdate.success, qPrintable(QString::fromStdString(radiusUpdate.error)));
         const auto& updatedArc = std::get<SketchArc>(sketch->entities().back());
         QVERIFY(std::abs(updatedArc.radius - 8.0) < 1.0e-6);
+        auto movedEntities = sketch->entities();
+        auto& movedLine = std::get<SketchLine>(movedEntities.front());
+        movedLine.start.SetX(-10.0);
+        const auto movedSolved = cad::operations::SketchConstraintSolver::solve(
+            movedEntities, sketch->constraints());
+        QVERIFY2(movedSolved.status == cad::operations::SolveStatus::Solved,
+            qPrintable(QString::fromStdString(movedSolved.error)));
         const auto extrude = controller.createExtrudeFromSketch({{
             {sketchResult.id, SelectionKind::Object, std::nullopt}}}, 20.0);
         QVERIFY2(extrude.success, qPrintable(QString::fromStdString(extrude.error)));
@@ -427,6 +435,127 @@ private slots:
         controller.undoStack().redo();
         controller.undoStack().redo();
         QCOMPARE(sketch->entityCount(), std::size_t{5});
+    }
+
+    void sketchFilletFourCornersRoundTripAndExtrude()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        for (const auto& [start, end] : std::array<std::pair<gp_Pnt2d, gp_Pnt2d>, 4>{
+                 std::make_pair(gp_Pnt2d(0, 0), gp_Pnt2d(100, 0)),
+                 std::make_pair(gp_Pnt2d(100, 0), gp_Pnt2d(100, 60)),
+                 std::make_pair(gp_Pnt2d(100, 60), gp_Pnt2d(0, 60)),
+                 std::make_pair(gp_Pnt2d(0, 60), gp_Pnt2d(0, 0))}) {
+            QVERIFY(controller.addSketchLine(sketchResult.id, start, end).success);
+        }
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        QVERIFY(sketch);
+        const auto lineIds = [&sketch] {
+            std::vector<std::string> result;
+            for (const auto& entity : sketch->entities())
+                if (const auto* line = std::get_if<SketchLine>(&entity)) result.push_back(line->id);
+            return result;
+        }();
+        QCOMPARE(lineIds.size(), std::size_t{4});
+        const auto selectedCorner = cad::operations::SketchFilletService::cornerAt(
+            sketch->entities(), {0.2, 0.1}, 1.0);
+        QVERIFY(selectedCorner.has_value());
+        const std::vector<ModelingController::SketchFilletCorner> corners{
+            {lineIds[0], lineIds[1]}, {lineIds[1], lineIds[2]},
+            {lineIds[2], lineIds[3]}, {lineIds[3], lineIds[0]}};
+        const auto allCorners = controller.filletSketchCorners(sketchResult.id, corners, 5.0);
+        QVERIFY2(allCorners.success, qPrintable(QString::fromStdString(allCorners.error)));
+        QCOMPARE(sketch->entityCount(), std::size_t{8});
+        QCOMPARE(sketch->constraintCount(), std::size_t{20});
+        QVERIFY(std::count_if(sketch->entities().begin(), sketch->entities().end(),
+            [](const auto& entity) { return std::holds_alternative<SketchArc>(entity); }) == 4);
+        controller.undoStack().undo();
+        QCOMPARE(sketch->entityCount(), std::size_t{4});
+        controller.undoStack().redo();
+        QCOMPARE(sketch->entityCount(), std::size_t{8});
+        const auto solved = cad::operations::SketchConstraintSolver::solve(
+            sketch->entities(), sketch->constraints());
+        QVERIFY2(solved.status == cad::operations::SolveStatus::Solved,
+            qPrintable(QString::fromStdString(solved.error)));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("sketch-fillet.pcad");
+        QString error;
+        QVERIFY2(ProjectFile::save(path, controller.document(), controller.body(), error),
+            qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loadedSketch = std::dynamic_pointer_cast<SketchFeature>(
+            loadedBody.findFeature(sketchResult.id));
+        QVERIFY(loadedSketch);
+        QCOMPARE(loadedSketch->entityCount(), std::size_t{8});
+        QCOMPARE(loadedSketch->constraintCount(), std::size_t{20});
+        QCOMPARE(std::count_if(loadedSketch->entities().begin(), loadedSketch->entities().end(),
+            [](const auto& entity) { return std::holds_alternative<SketchArc>(entity); }), 4);
+        QCOMPARE(std::count_if(loadedSketch->constraints().begin(), loadedSketch->constraints().end(),
+            [](const auto& constraint) { return std::holds_alternative<CoincidentConstraint>(constraint); }), 8);
+        QCOMPARE(std::count_if(loadedSketch->constraints().begin(), loadedSketch->constraints().end(),
+            [](const auto& constraint) { return std::holds_alternative<TangentConstraint>(constraint); }), 8);
+        QCOMPARE(std::count_if(loadedSketch->constraints().begin(), loadedSketch->constraints().end(),
+            [](const auto& constraint) { return std::holds_alternative<RadiusConstraint>(constraint); }), 4);
+        QVERIFY(loadedBody.recompute());
+        ModelingController loadedController;
+        loadedController.replaceProject(std::move(loadedDocument), std::move(loadedBody));
+        const auto extrude = loadedController.createExtrudeFromSketch({{
+            {sketchResult.id, SelectionKind::Object, std::nullopt}}}, 20.0);
+        QVERIFY2(extrude.success, qPrintable(QString::fromStdString(extrude.error)));
+        QVERIFY(volume(loadedController.body().findFeature(extrude.id)->shape()) > 0.0);
+    }
+
+    void sketchFilletRejectsTooLargeRadiusWithDiagnostic()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0, 0}, {10, 0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0, 0}, {0, 10}).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        const auto first = std::get<SketchLine>(sketch->entities()[0]).id;
+        const auto second = std::get<SketchLine>(sketch->entities()[1]).id;
+        const auto validation = cad::operations::SketchFilletService::analyze(
+            *sketch, first, second, 20.0);
+        QVERIFY(!validation.validation.valid);
+        QCOMPARE(validation.validation.error,
+            cad::operations::SketchFilletError::RadiusTooLarge);
+        QCOMPARE(validation.validation.affectedEntities.size(), std::size_t{2});
+        QVERIFY(validation.validation.maxAllowedRadius.has_value());
+        const auto result = controller.filletSketchLines(sketchResult.id, first, second, 20.0);
+        QVERIFY(!result.success);
+        QVERIFY(QString::fromStdString(result.error).contains("maximum"));
+        QCOMPARE(sketch->entityCount(), std::size_t{2});
+    }
+
+    void sketchFilletTwentyByTenFourCornersR4IsValid()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        for (const auto& [start, end] : std::array<std::pair<gp_Pnt2d, gp_Pnt2d>, 4>{
+                 std::make_pair(gp_Pnt2d(0, 0), gp_Pnt2d(20, 0)),
+                 std::make_pair(gp_Pnt2d(20, 0), gp_Pnt2d(20, 10)),
+                 std::make_pair(gp_Pnt2d(20, 10), gp_Pnt2d(0, 10)),
+                 std::make_pair(gp_Pnt2d(0, 10), gp_Pnt2d(0, 0))})
+            QVERIFY(controller.addSketchLine(sketchResult.id, start, end).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        std::vector<std::string> ids;
+        for (const auto& entity : sketch->entities())
+            if (const auto* line = std::get_if<SketchLine>(&entity)) ids.push_back(line->id);
+        const std::vector<ModelingController::SketchFilletCorner> corners{
+            {ids[0], ids[1]}, {ids[1], ids[2]}, {ids[2], ids[3]}, {ids[3], ids[0]}};
+        const auto result = controller.filletSketchCorners(sketchResult.id, corners, 4.0);
+        QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
+        QCOMPARE(sketch->entityCount(), std::size_t{8});
     }
 
     void sweepUsesPersistentEdgeReference()
