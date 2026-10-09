@@ -8,6 +8,7 @@
 #include "operations/ParametricFeatures.h"
 #include "operations/PatternFeatures.h"
 #include "operations/SketchConstraintSolver.h"
+#include "operations/SketchChamferService.h"
 
 #include <QUndoStack>
 #include <QStringList>
@@ -23,6 +24,7 @@ class ModelingController final : public FeatureEditingService
 public:
     ModelingController() = default;
     using SketchFilletCorner = std::pair<std::string, std::string>;
+    using SketchChamferCorner = std::pair<std::string, std::string>;
 
     cad::parametric::Body& body() noexcept;
     const cad::parametric::Body& body() const noexcept;
@@ -57,6 +59,12 @@ public:
         const std::string& sketchId,
         const std::vector<SketchFilletCorner>& corners,
         double radius);
+    ModelingResult chamferSketchCorners(
+        const std::string& sketchId,
+        const std::vector<SketchChamferCorner>& corners,
+        cad::parametric::SketchChamferMode mode,
+        double firstDistance, double secondDistance = 0.0,
+        double angleRadians = 0.0);
     ModelingResult trimSketchEntity(const std::string& sketchId, const gp_Pnt2d& click,
                                     double hitTolerance);
     ModelingResult extendSketchEntity(const std::string& sketchId, const gp_Pnt2d& click,
@@ -98,6 +106,10 @@ public:
                                         const std::string& constraintId, double value);
     ModelingResult updateSketchRadius(const std::string& sketchId,
                                       const std::string& constraintId, double value);
+    ModelingResult updateSketchChamfer(const std::string& sketchId,
+                                        const std::string& constraintId,
+                                        double firstDistance, double secondDistance,
+                                        double angleRadians);
     ModelingResult updateSketchHorizontalDistance(const std::string& sketchId,
                                                   const std::string& constraintId, double value);
     ModelingResult updateSketchVerticalDistance(const std::string& sketchId,

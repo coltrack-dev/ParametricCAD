@@ -362,6 +362,84 @@ ModelingResult ModelingController::filletSketchCorners(
     }
 }
 
+ModelingResult ModelingController::chamferSketchCorners(
+    const std::string& sketchId,
+    const std::vector<SketchChamferCorner>& corners,
+    const cad::parametric::SketchChamferMode mode,
+    const double firstDistance, const double secondDistance,
+    const double angleRadians)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    if (corners.empty()) return {false, {}, "Sketch Chamfer requires at least one corner"};
+    const auto working = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        sketch->clone("chamfer-preview"));
+    if (!working) return {false, {}, "Sketch Chamfer could not prepare a working Sketch"};
+    auto entities = sketch->entities();
+    auto constraints = sketch->constraints();
+    working->replaceEntities(0, working->entityCount(), entities);
+    working->replaceConstraints(constraints);
+    const auto lineById = [](const std::vector<cad::parametric::SketchEntity>& values,
+                             const std::string& lineId) -> const cad::parametric::SketchLine* {
+        for (const auto& entity : values)
+            if (const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+                line && line->id == lineId) return line;
+        return nullptr;
+    };
+    for (std::size_t cornerIndex = 0; cornerIndex < corners.size(); ++cornerIndex) {
+        const auto& [firstLineId, secondLineId] = corners[cornerIndex];
+        auto plan = cad::operations::SketchChamferService::analyze(
+            *working, firstLineId, secondLineId, mode, firstDistance, secondDistance, angleRadians);
+        if (!plan.changed)
+            return {false, {}, "Sketch Chamfer corner " + std::to_string(cornerIndex + 1)
+                + " failed: " + plan.error};
+        const auto* originalFirst = lineById(working->entities(), firstLineId);
+        const auto* originalSecond = lineById(working->entities(), secondLineId);
+        if (!originalFirst || !originalSecond)
+            return {false, {}, "Sketch Chamfer changed the selected Lines unexpectedly"};
+        auto planEntities = plan.entities;
+        const auto chamferId = id("entity");
+        auto& chamfer = std::get<cad::parametric::SketchLine>(planEntities.back());
+        chamfer.id = chamferId;
+        const auto* firstLine = lineById(planEntities, firstLineId);
+        const auto* secondLine = lineById(planEntities, secondLineId);
+        if (!firstLine || !secondLine)
+            return {false, {}, "Sketch Chamfer changed the selected Lines unexpectedly"};
+        const auto pointRole = [](const cad::parametric::SketchLine& line,
+                                  const cad::parametric::SketchLine& original) {
+            return line.start.Distance(original.start) > 1.0e-7
+                ? cad::parametric::SketchPointRole::LineStart
+                : cad::parametric::SketchPointRole::LineEnd;
+        };
+        const auto firstRole = pointRole(*firstLine, *originalFirst);
+        const auto secondRole = pointRole(*secondLine, *originalSecond);
+        const auto constraintId = [] { return id("constraint"); };
+        plan.constraints.push_back(cad::parametric::ChamferConstraint{
+            firstLineId, secondLineId, chamferId, mode,
+            firstDistance, secondDistance, angleRadians, constraintId()});
+        plan.constraints.push_back(cad::parametric::CoincidentConstraint{
+            {firstLineId, firstRole}, {chamferId, cad::parametric::SketchPointRole::LineStart}, constraintId()});
+        plan.constraints.push_back(cad::parametric::CoincidentConstraint{
+            {secondLineId, secondRole}, {chamferId, cad::parametric::SketchPointRole::LineEnd}, constraintId()});
+        entities = std::move(planEntities);
+        constraints = plan.constraints;
+        working->replaceEntities(0, working->entityCount(), entities);
+        working->replaceConstraints(constraints);
+    }
+    const auto solved = cad::operations::SketchConstraintSolver::solve(entities, constraints);
+    if (solved.status != cad::operations::SolveStatus::Solved)
+        return {false, {}, "Sketch Chamfer validation failed: " + solved.error};
+    try {
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(entities),
+            sketch->constraints(), std::move(constraints), "Sketch Chamfer"));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::trimSketchEntity(const std::string& sketchId,
                                                     const gp_Pnt2d& click,
                                                     const double hitTolerance)
@@ -729,6 +807,42 @@ ModelingResult ModelingController::updateSketchDistance(
 ModelingResult ModelingController::updateSketchRadius(
     const std::string& sketchId, const std::string& constraintId, const double value)
 { return updateDimensionalConstraint(body_, undoStack_, sketchId, constraintId, value, true); }
+
+ModelingResult ModelingController::updateSketchChamfer(
+    const std::string& sketchId, const std::string& constraintId,
+    const double firstDistance, const double secondDistance, const double angleRadians)
+{
+    const auto sketch = sketchFor(body_, sketchId);
+    if (!sketch || !std::isfinite(firstDistance) || firstDistance <= 1.0e-7)
+        return {false, {}, "Chamfer distance must be finite and positive"};
+    auto before = sketch->constraints();
+    auto after = before;
+    bool found = false;
+    for (auto& constraint : after) {
+        auto* item = std::get_if<cad::parametric::ChamferConstraint>(&constraint);
+        if (!item || item->id != constraintId) continue;
+        if (item->mode == cad::parametric::SketchChamferMode::TwoDistances
+            && (!std::isfinite(secondDistance) || secondDistance <= 1.0e-7))
+            return {false, {}, "Chamfer second distance must be finite and positive"};
+        if (item->mode == cad::parametric::SketchChamferMode::DistanceAngle
+            && (!std::isfinite(angleRadians) || angleRadians <= 1.0e-7
+                || angleRadians >= 3.14159265358979323846 - 1.0e-7))
+            return {false, {}, "Chamfer angle is outside the valid range"};
+        item->firstDistance = firstDistance;
+        item->secondDistance = secondDistance;
+        item->angleRadians = angleRadians;
+        found = true;
+    }
+    if (!found) return {false, {}, "Chamfer constraint does not exist"};
+    const auto solved = cad::operations::SketchConstraintSolver::solve(sketch->entities(), after);
+    if (solved.status != cad::operations::SolveStatus::Solved)
+        return {false, {}, solved.error};
+    try {
+        undoStack_.push(new cad::commands::UpdateSketchConstraintCommand(
+            body_, sketch, sketch->entities(), solved.entities, before, after));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) { return failure(error); }
+}
 
 ModelingResult updatePointDistanceConstraint(
     cad::parametric::Body& body, QUndoStack& stack, const std::string& sketchId,

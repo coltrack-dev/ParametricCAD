@@ -71,7 +71,7 @@ using SketchEntity = std::variant<SketchLine, SketchCircle, SketchArc>;
 enum class SketchConstraintType {
     Coincident, Horizontal, Vertical, Distance, Radius,
     HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular,
-    AngleBetweenLines, Tangent, Equal
+    AngleBetweenLines, Tangent, Equal, Chamfer
 };
 enum class SketchPointRole { LineStart, LineEnd, ArcStart, ArcEnd, CircleCenter, ArcCenter };
 
@@ -180,11 +180,25 @@ struct EqualConstraint
     SketchConstraintId id;
 };
 
+enum class SketchChamferMode { EqualDistance, TwoDistances, DistanceAngle };
+
+struct ChamferConstraint
+{
+    SketchEntityId firstLineId;
+    SketchEntityId secondLineId;
+    SketchEntityId chamferLineId;
+    SketchChamferMode mode{SketchChamferMode::EqualDistance};
+    double firstDistance{0.0};
+    double secondDistance{0.0};
+    double angleRadians{0.0};
+    SketchConstraintId id;
+};
+
 using SketchConstraint = std::variant<CoincidentConstraint,
     HorizontalConstraint, VerticalConstraint, DistanceConstraint, RadiusConstraint,
     HorizontalDistanceConstraint, VerticalDistanceConstraint, AngleConstraint,
     ParallelConstraint, PerpendicularConstraint, AngleBetweenLinesConstraint,
-    TangentConstraint, EqualConstraint>;
+    TangentConstraint, EqualConstraint, ChamferConstraint>;
 
 class SketchFeature final : public ParametricFeature
 {

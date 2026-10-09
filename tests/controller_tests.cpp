@@ -7,6 +7,7 @@
 #include "operations/SketchPathBuilder.h"
 #include "operations/SketchConstraintSolver.h"
 #include "operations/SketchFilletService.h"
+#include "operations/SketchChamferService.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
@@ -556,6 +557,121 @@ private slots:
         const auto result = controller.filletSketchCorners(sketchResult.id, corners, 4.0);
         QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
         QCOMPARE(sketch->entityCount(), std::size_t{8});
+    }
+
+    void sketchChamferSupportsAllModesAndStableIds()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        for (const auto& [start, end] : std::array<std::pair<gp_Pnt2d, gp_Pnt2d>, 4>{
+                 std::make_pair(gp_Pnt2d(0, 0), gp_Pnt2d(100, 0)),
+                 std::make_pair(gp_Pnt2d(100, 0), gp_Pnt2d(100, 60)),
+                 std::make_pair(gp_Pnt2d(100, 60), gp_Pnt2d(0, 60)),
+                 std::make_pair(gp_Pnt2d(0, 60), gp_Pnt2d(0, 0))})
+            QVERIFY(controller.addSketchLine(sketchResult.id, start, end).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        std::vector<std::string> ids;
+        for (const auto& entity : sketch->entities())
+            if (const auto* line = std::get_if<SketchLine>(&entity)) ids.push_back(line->id);
+        const auto result = controller.chamferSketchCorners(
+            sketchResult.id, {{ids[0], ids[1]}}, SketchChamferMode::TwoDistances, 5.0, 8.0);
+        QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
+        QCOMPARE(sketch->entityCount(), std::size_t{5});
+        QVERIFY(std::any_of(sketch->constraints().begin(), sketch->constraints().end(),
+            [](const auto& constraint) { return std::holds_alternative<ChamferConstraint>(constraint); }));
+        const auto chamferConstraint = std::find_if(sketch->constraints().begin(), sketch->constraints().end(),
+            [](const auto& constraint) { return std::holds_alternative<ChamferConstraint>(constraint); });
+        QVERIFY(chamferConstraint != sketch->constraints().end());
+        const auto chamferConstraintId = std::get<ChamferConstraint>(*chamferConstraint).id;
+        QVERIFY2(controller.updateSketchChamfer(sketchResult.id, chamferConstraintId, 6.0, 9.0, 0.0).success,
+            "Chamfer parameter edit failed");
+        controller.undoStack().undo();
+        controller.undoStack().undo();
+        QCOMPARE(sketch->entityCount(), std::size_t{4});
+        controller.undoStack().redo();
+        controller.undoStack().redo();
+        QCOMPARE(sketch->entityCount(), std::size_t{5});
+    }
+
+    void sketchChamferFourCornersAndPersistence()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        for (const auto& [start, end] : std::array<std::pair<gp_Pnt2d, gp_Pnt2d>, 4>{
+                 std::make_pair(gp_Pnt2d(0, 0), gp_Pnt2d(100, 0)),
+                 std::make_pair(gp_Pnt2d(100, 0), gp_Pnt2d(100, 60)),
+                 std::make_pair(gp_Pnt2d(100, 60), gp_Pnt2d(0, 60)),
+                 std::make_pair(gp_Pnt2d(0, 60), gp_Pnt2d(0, 0))})
+            QVERIFY(controller.addSketchLine(sketchResult.id, start, end).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        std::vector<std::string> ids;
+        for (const auto& entity : sketch->entities())
+            if (const auto* line = std::get_if<SketchLine>(&entity)) ids.push_back(line->id);
+        const auto result = controller.chamferSketchCorners(
+            sketchResult.id, {{ids[0], ids[1]}, {ids[1], ids[2]}, {ids[2], ids[3]}, {ids[3], ids[0]}},
+            SketchChamferMode::EqualDistance, 5.0);
+        QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
+        QCOMPARE(sketch->entityCount(), std::size_t{8});
+        QCOMPARE(std::count_if(sketch->constraints().begin(), sketch->constraints().end(),
+            [](const auto& constraint) { return std::holds_alternative<ChamferConstraint>(constraint); }), 4);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("sketch-chamfer.pcad");
+        QVERIFY2(ProjectFile::save(path, controller.document(), controller.body(), error), qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error), qPrintable(error));
+        const auto loaded = std::dynamic_pointer_cast<SketchFeature>(loadedBody.findFeature(sketchResult.id));
+        QVERIFY(loaded);
+        QCOMPARE(loaded->entityCount(), std::size_t{8});
+        QCOMPARE(std::count_if(loaded->constraints().begin(), loaded->constraints().end(),
+            [](const auto& constraint) { return std::holds_alternative<ChamferConstraint>(constraint); }), 4);
+    }
+
+    void sketchChamferDistanceAngleUsesRayIntersection()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0, 0}, {100, 0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {100, 0}, {100, 60}).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        const auto first = std::get<SketchLine>(sketch->entities()[0]).id;
+        const auto second = std::get<SketchLine>(sketch->entities()[1]).id;
+        const auto result = controller.chamferSketchCorners(
+            sketchResult.id, {{first, second}}, SketchChamferMode::DistanceAngle,
+            5.0, 0.0, 3.14159265358979323846 / 4.0);
+        QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
+        QCOMPARE(sketch->entityCount(), std::size_t{3});
+        const auto& chamfer = std::get<SketchLine>(sketch->entities().back());
+        QVERIFY(chamfer.start.Distance(chamfer.end) > 0.0);
+    }
+
+    void sketchChamferRejectsInvalidDistanceWithoutMutation()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0, 0}, {10, 0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {10, 0}, {10, 5}).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        const auto first = std::get<SketchLine>(sketch->entities()[0]).id;
+        const auto second = std::get<SketchLine>(sketch->entities()[1]).id;
+        const auto validation = cad::operations::SketchChamferService::analyze(
+            *sketch, first, second, SketchChamferMode::EqualDistance, 6.0);
+        QVERIFY(!validation.validation.valid);
+        QCOMPARE(validation.validation.error, cad::operations::SketchChamferError::DistanceTooLarge);
+        const auto result = controller.chamferSketchCorners(
+            sketchResult.id, {{first, second}}, SketchChamferMode::EqualDistance, 6.0);
+        QVERIFY(!result.success);
+        QCOMPARE(sketch->entityCount(), std::size_t{2});
     }
 
     void sweepUsesPersistentEdgeReference()

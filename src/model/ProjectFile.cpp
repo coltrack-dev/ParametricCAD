@@ -592,6 +592,17 @@ std::vector<SketchConstraint> sketchConstraints(const QJsonObject& object)
         } else if (type == "Equal") {
             result.push_back(EqualConstraint{string(constraint, "referenceEntityId"),
                 string(constraint, "dependentEntityId"), constraint.value("id").toString().toStdString()});
+        } else if (type == "Chamfer") {
+            const auto mode = constraint.value("mode").toString();
+            const auto chamferMode = mode == "TwoDistances"
+                ? SketchChamferMode::TwoDistances
+                : mode == "DistanceAngle" ? SketchChamferMode::DistanceAngle
+                : SketchChamferMode::EqualDistance;
+            result.push_back(ChamferConstraint{
+                string(constraint, "firstLineId"), string(constraint, "secondLineId"),
+                string(constraint, "chamferLineId"), chamferMode,
+                number(constraint, "firstDistance"), number(constraint, "secondDistance"),
+                number(constraint, "angleRadians"), constraint.value("id").toString().toStdString()});
         } else {
             throw std::invalid_argument("Unsupported Sketch constraint type");
         }

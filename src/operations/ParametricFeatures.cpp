@@ -664,6 +664,19 @@ void SketchFeature::writeParameters(QJsonObject& object) const
             value.insert("id", QString::fromStdString(equal->id));
             value.insert("referenceEntityId", QString::fromStdString(equal->referenceEntityId));
             value.insert("dependentEntityId", QString::fromStdString(equal->dependentEntityId));
+        } else if (const auto* chamfer = std::get_if<ChamferConstraint>(&constraint)) {
+            value.insert("type", "Chamfer");
+            value.insert("id", QString::fromStdString(chamfer->id));
+            value.insert("firstLineId", QString::fromStdString(chamfer->firstLineId));
+            value.insert("secondLineId", QString::fromStdString(chamfer->secondLineId));
+            value.insert("chamferLineId", QString::fromStdString(chamfer->chamferLineId));
+            const char* mode = chamfer->mode == SketchChamferMode::TwoDistances
+                ? "TwoDistances" : chamfer->mode == SketchChamferMode::DistanceAngle
+                ? "DistanceAngle" : "EqualDistance";
+            value.insert("mode", mode);
+            value.insert("firstDistance", chamfer->firstDistance);
+            value.insert("secondDistance", chamfer->secondDistance);
+            value.insert("angleRadians", chamfer->angleRadians);
         } else {
             throw std::logic_error("Unsupported Sketch constraint variant");
         }
@@ -749,6 +762,9 @@ bool SketchFeature::hasConstraintsForEntity(const SketchEntityId& entityId) cons
             if (tangent->firstEntityId == entityId || tangent->secondEntityId == entityId) return true;
         } else if (const auto* equal = std::get_if<EqualConstraint>(&constraint)) {
             if (equal->referenceEntityId == entityId || equal->dependentEntityId == entityId) return true;
+        } else if (const auto* chamfer = std::get_if<ChamferConstraint>(&constraint)) {
+            if (chamfer->firstLineId == entityId || chamfer->secondLineId == entityId
+                || chamfer->chamferLineId == entityId) return true;
         }
     }
     return false;

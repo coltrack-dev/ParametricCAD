@@ -102,7 +102,9 @@ private:
     void selectSketchCenterArcTool();
     void selectSketchRectangleTool();
     void selectSketchFilletTool();
+    void selectSketchChamferTool();
     void commitSketchFilletSelection();
+    void commitSketchChamferSelection();
     bool updateSketchFilletPreview(double radius);
     void selectSketchTrimTool();
     void selectSketchExtendTool();
@@ -244,6 +246,7 @@ private:
     QAction* sketchCenterArcAction_{nullptr};
     QAction* sketchRectangleAction_{nullptr};
     QAction* sketchFilletAction_{nullptr};
+    QAction* sketchChamferAction_{nullptr};
     QAction* sketchTrimAction_{nullptr};
     QAction* sketchExtendAction_{nullptr};
     QAction* sketchCoincidentAction_{nullptr};
@@ -260,7 +263,7 @@ private:
     QAction* sketchTangentAction_{nullptr};
     QAction* sketchEqualAction_{nullptr};
     QAction* finishSketchAction_{nullptr};
-    enum class SketchTool { None, Line, Circle, Arc, CenterArc, Rectangle, Fillet, Trim, Extend,
+    enum class SketchTool { None, Line, Circle, Arc, CenterArc, Rectangle, Fillet, Chamfer, Trim, Extend,
                             Coincident, Horizontal, Vertical, Distance, Radius,
                             HorizontalDistance, VerticalDistance, Angle, Parallel, Perpendicular,
                             AngleBetweenLines, Tangent, Equal };
@@ -289,6 +292,7 @@ private:
     std::optional<cad::parametric::SketchPointRef> constraintFirstPoint_;
     std::string filletFirstLineId_;
     std::vector<cad::application::ModelingController::SketchFilletCorner> filletCorners_;
+    std::vector<cad::application::ModelingController::SketchChamferCorner> chamferCorners_;
     FilletState filletState_{FilletState::Selecting};
     double filletPreviewRadius_{2.0};
     std::optional<gp_Pnt2d> filletRadiusAnchor_;

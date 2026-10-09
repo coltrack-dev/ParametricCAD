@@ -340,6 +340,95 @@ bool applyFilletRadius(std::vector<cad::parametric::SketchEntity>& entities,
     return true;
 }
 
+bool applyChamfer(std::vector<cad::parametric::SketchEntity>& entities,
+                  const cad::parametric::ChamferConstraint& chamfer,
+                  bool& changed)
+{
+    auto* first = lineById(entities, chamfer.firstLineId);
+    auto* second = lineById(entities, chamfer.secondLineId);
+    auto* cut = lineById(entities, chamfer.chamferLineId);
+    if (!first || !second || !cut) return false;
+    std::optional<gp_Pnt2d> vertex;
+    for (const auto& candidate : {std::pair{first->start, second->start},
+                                  std::pair{first->start, second->end},
+                                  std::pair{first->end, second->start},
+                                  std::pair{first->end, second->end}}) {
+        if (candidate.first.Distance(candidate.second) <= tolerance) {
+            vertex = candidate.first;
+            break;
+        }
+    }
+    if (!vertex) {
+        gp_Vec2d firstDirection(first->start, first->end);
+        gp_Vec2d secondDirection(second->start, second->end);
+        const double denominator = firstDirection.Crossed(secondDirection);
+        if (std::abs(denominator) <= tolerance) return false;
+        const gp_Vec2d between(first->start, second->start);
+        const double parameter = between.Crossed(secondDirection) / denominator;
+        vertex = gp_Pnt2d(first->start.X() + parameter * firstDirection.X(),
+                          first->start.Y() + parameter * firstDirection.Y());
+    }
+    const gp_Pnt2d firstOuter = vertex->Distance(first->start) >= vertex->Distance(first->end)
+        ? first->start : first->end;
+    const gp_Pnt2d secondOuter = vertex->Distance(second->start) >= vertex->Distance(second->end)
+        ? second->start : second->end;
+    gp_Vec2d firstRay(*vertex, firstOuter);
+    gp_Vec2d secondRay(*vertex, secondOuter);
+    const double firstLength = firstRay.Magnitude();
+    const double secondLength = secondRay.Magnitude();
+    if (firstLength <= tolerance || secondLength <= tolerance) return false;
+    firstRay.Normalize();
+    secondRay.Normalize();
+    const double d1 = chamfer.firstDistance;
+    double d2 = chamfer.mode == cad::parametric::SketchChamferMode::EqualDistance
+        ? d1 : chamfer.secondDistance;
+    if (!std::isfinite(d1) || d1 <= tolerance || d1 >= firstLength - tolerance) return false;
+    if (chamfer.mode != cad::parametric::SketchChamferMode::DistanceAngle
+        && (!std::isfinite(d2) || d2 <= tolerance || d2 >= secondLength - tolerance)) return false;
+    const gp_Pnt2d firstCut(vertex->X() + firstRay.X() * d1,
+                            vertex->Y() + firstRay.Y() * d1);
+    gp_Pnt2d secondCut;
+    if (chamfer.mode == cad::parametric::SketchChamferMode::DistanceAngle) {
+        if (!std::isfinite(chamfer.angleRadians) || chamfer.angleRadians <= tolerance
+            || chamfer.angleRadians >= 3.14159265358979323846 - tolerance) return false;
+        const std::array<double, 2> signs{1.0, -1.0};
+        bool found = false;
+        for (const double sign : signs) {
+            const double chamferTurn = 3.14159265358979323846 - chamfer.angleRadians;
+            const double c = std::cos(sign * chamferTurn);
+            const double s = std::sin(sign * chamferTurn);
+            const gp_Vec2d direction(firstRay.X() * c - firstRay.Y() * s,
+                                      firstRay.X() * s + firstRay.Y() * c);
+            const double denominator = direction.Crossed(secondRay);
+            if (std::abs(denominator) <= tolerance) continue;
+            const double along = gp_Vec2d(firstCut, *vertex).Crossed(secondRay) / denominator;
+            const double secondAlong = gp_Vec2d(firstCut, *vertex).Crossed(direction) / denominator;
+            if (along > tolerance && secondAlong > tolerance && secondAlong < secondLength - tolerance) {
+                secondCut = {firstCut.X() + direction.X() * along,
+                             firstCut.Y() + direction.Y() * along};
+                d2 = secondAlong;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    } else {
+        secondCut = {vertex->X() + secondRay.X() * d2,
+                     vertex->Y() + secondRay.Y() * d2};
+    }
+    if (!std::isfinite(d2) || d2 <= tolerance || d2 >= secondLength - tolerance) return false;
+    const auto setLineCut = [&](cad::parametric::SketchLine& line, const gp_Pnt2d& point) {
+        if (vertex->Distance(line.start) <= vertex->Distance(line.end)) {
+            if (!samePoint(line.start, point)) { line.start = point; changed = true; }
+        } else if (!samePoint(line.end, point)) { line.end = point; changed = true; }
+    };
+    setLineCut(*first, firstCut);
+    setLineCut(*second, secondCut);
+    if (!samePoint(cut->start, firstCut)) { cut->start = firstCut; changed = true; }
+    if (!samePoint(cut->end, secondCut)) { cut->end = secondCut; changed = true; }
+    return firstCut.Distance(secondCut) > tolerance;
+}
+
 } // namespace
 
 SketchSolveResult SketchConstraintSolver::solve(
@@ -732,6 +821,12 @@ SketchSolveResult SketchConstraintSolver::solve(
                             + ", lineLength=" + std::to_string(line ? line->start.Distance(line->end) : 0.0)
                             + ", radius=" + std::to_string(arc ? arc->radius : 0.0) + ")"
                         : "Tangent cannot be satisfied";
+                    return result;
+                }
+            } else if (const auto* chamfer = std::get_if<cad::parametric::ChamferConstraint>(&constraint)) {
+                if (!applyChamfer(result.entities, *chamfer, changed)) {
+                    result.status = SolveStatus::Failed;
+                    result.error = "Chamfer constraint cannot be satisfied";
                     return result;
                 }
             } else if (const auto* equal = std::get_if<cad::parametric::EqualConstraint>(&constraint)) {

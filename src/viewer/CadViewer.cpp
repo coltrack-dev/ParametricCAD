@@ -1180,6 +1180,11 @@ void CadViewer::setSketchConstraintHighlight(
                     for (const auto& entity : sketch.entities())
                         if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
                 }
+            } else if constexpr (std::is_same_v<T, cad::parametric::ChamferConstraint>) {
+                for (const auto& id : {item.firstLineId, item.secondLineId, item.chamferLineId}) {
+                    for (const auto& entity : sketch.entities())
+                        if (std::visit([&](const auto& value) { return value.id == id; }, entity)) targets.push_back(entity);
+                }
             } else {
                 for (const auto& entity : sketch.entities())
                     if (std::visit([&](const auto& value) { return value.id == entityId(item); }, entity)) targets.push_back(entity);

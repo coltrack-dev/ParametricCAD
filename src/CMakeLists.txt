@@ -85,6 +85,8 @@ set(PARAMETRIC_CAD_SOURCES
     operations/SketchExtendService.h
     operations/SketchFilletService.cpp
     operations/SketchFilletService.h
+    operations/SketchChamferService.cpp
+    operations/SketchChamferService.h
     operations/SketchConstraintSolver.cpp
     operations/SketchConstraintSolver.h
     operations/PatternFeatures.cpp
