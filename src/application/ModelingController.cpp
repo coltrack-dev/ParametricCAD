@@ -430,9 +430,32 @@ ModelingResult ModelingController::chamferSketchCorners(
     const auto solved = cad::operations::SketchConstraintSolver::solve(entities, constraints);
     if (solved.status != cad::operations::SolveStatus::Solved)
         return {false, {}, "Sketch Chamfer validation failed: " + solved.error};
+    for (const auto& entity : solved.entities) {
+        if (const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+            line && line->start.Distance(line->end) <= 1.0e-7) {
+            return {false, {}, "Sketch Chamfer validation failed: zero-length Line"};
+        }
+    }
+    for (const auto& constraint : constraints) {
+        const auto* chamfer = std::get_if<cad::parametric::ChamferConstraint>(&constraint);
+        if (!chamfer) continue;
+        const auto findLine = [&solved](const std::string& lineId) {
+            return std::find_if(solved.entities.begin(), solved.entities.end(),
+                [&lineId](const auto& entity) {
+                    const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+                    return line && line->id == lineId;
+                });
+        };
+        const auto chamferLine = findLine(chamfer->chamferLineId);
+        if (chamferLine == solved.entities.end())
+            return {false, {}, "Sketch Chamfer validation failed: chamfer Line is missing"};
+        const auto* line = std::get_if<cad::parametric::SketchLine>(&*chamferLine);
+        if (!line || line->start.Distance(line->end) <= 1.0e-7)
+            return {false, {}, "Sketch Chamfer validation failed: invalid chamfer Line"};
+    }
     try {
         undoStack_.push(new cad::commands::ReplaceSketchCommand(
-            body_, sketch, sketch->entities(), std::move(entities),
+            body_, sketch, sketch->entities(), solved.entities,
             sketch->constraints(), std::move(constraints), "Sketch Chamfer"));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {

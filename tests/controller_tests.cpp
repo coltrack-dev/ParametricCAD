@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <variant>
 
 namespace {
@@ -593,6 +594,72 @@ private slots:
         controller.undoStack().redo();
         controller.undoStack().redo();
         QCOMPARE(sketch->entityCount(), std::size_t{5});
+    }
+
+    void sketchChamferPreviewAcceptsReportedRectangleSize()
+    {
+        ModelingController controller;
+        const auto sketchResult = controller.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {0.0, 0.0}, {24.97, 0.0}).success);
+        QVERIFY(controller.addSketchLine(sketchResult.id, {24.97, 0.0}, {24.97, 17.17}).success);
+        const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketchResult.id));
+        QVERIFY(sketch);
+        const auto clone = std::dynamic_pointer_cast<SketchFeature>(sketch->clone("preview"));
+        QVERIFY(clone);
+        QCOMPARE(clone->entityCount(), std::size_t{2});
+        const auto first = std::get<SketchLine>(sketch->entities()[0]).id;
+        const auto second = std::get<SketchLine>(sketch->entities()[1]).id;
+        const auto plan = cad::operations::SketchChamferService::analyze(
+            *sketch, first, second, SketchChamferMode::EqualDistance, 5.0, 5.0);
+        QVERIFY2(plan.changed, qPrintable(QString::fromStdString(plan.error)));
+        QCOMPARE(plan.entities.size(), std::size_t{3});
+    }
+
+    void sketchChamferRectanglePreservesAllEndpoints()
+    {
+        const std::array<std::pair<gp_Pnt2d, gp_Pnt2d>, 4> rectangle{{
+            {{0.0, 0.0}, {100.0, 0.0}},
+            {{100.0, 0.0}, {100.0, 60.0}},
+            {{100.0, 60.0}, {0.0, 60.0}},
+            {{0.0, 60.0}, {0.0, 0.0}}}};
+        const std::array<std::pair<gp_Pnt2d, gp_Pnt2d>, 4> expectedChamfers{{
+            {{95.0, 0.0}, {100.0, 5.0}},
+            {{100.0, 55.0}, {95.0, 60.0}},
+            {{5.0, 60.0}, {0.0, 55.0}},
+            {{0.0, 5.0}, {5.0, 0.0}}}};
+        for (std::size_t cornerIndex = 0; cornerIndex < rectangle.size(); ++cornerIndex) {
+            ModelingController controller;
+            const auto sketchResult = controller.createSketch();
+            QVERIFY(sketchResult.success);
+            for (const auto& [start, end] : rectangle)
+                QVERIFY(controller.addSketchLine(sketchResult.id, start, end).success);
+            const auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+                controller.body().findFeature(sketchResult.id));
+            QVERIFY(sketch);
+            std::vector<std::string> ids;
+            for (const auto& entity : sketch->entities())
+                if (const auto* line = std::get_if<SketchLine>(&entity)) ids.push_back(line->id);
+            const auto result = controller.chamferSketchCorners(
+                sketchResult.id, {{ids[cornerIndex], ids[(cornerIndex + 1) % ids.size()]}},
+                SketchChamferMode::EqualDistance, 5.0);
+            QVERIFY2(result.success, qPrintable(QString::fromStdString(result.error)));
+            QCOMPARE(sketch->entityCount(), std::size_t{5});
+
+            const auto& chamfer = std::get<SketchLine>(sketch->entities().back());
+            const auto& expected = expectedChamfers[cornerIndex];
+            QVERIFY((chamfer.start.Distance(expected.first) <= 1.0e-7
+                    && chamfer.end.Distance(expected.second) <= 1.0e-7)
+                || (chamfer.start.Distance(expected.second) <= 1.0e-7
+                    && chamfer.end.Distance(expected.first) <= 1.0e-7));
+            QCOMPARE(chamfer.start.Distance(chamfer.end), std::sqrt(50.0));
+            for (const auto& entity : sketch->entities()) {
+                const auto* line = std::get_if<SketchLine>(&entity);
+                QVERIFY(line);
+                QVERIFY(line->start.Distance(line->end) > 1.0e-7);
+            }
+        }
     }
 
     void sketchChamferFourCornersAndPersistence()

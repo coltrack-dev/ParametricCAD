@@ -106,6 +106,11 @@ private:
     void commitSketchFilletSelection();
     void commitSketchChamferSelection();
     bool updateSketchFilletPreview(double radius);
+    bool updateSketchChamferPreview(
+        cad::parametric::SketchChamferMode mode = cad::parametric::SketchChamferMode::EqualDistance,
+        double firstDistance = 5.0,
+        double secondDistance = 5.0,
+        double angleRadians = 0.0);
     void selectSketchTrimTool();
     void selectSketchExtendTool();
     void selectSketchCoincidentTool();
@@ -270,6 +275,7 @@ private:
     enum class SketchModeState { Inactive, Editing };
     enum class RectangleState { Ready, Drawing, NumericInput };
     enum class FilletState { Selecting, RadiusAdjustment };
+    enum class ChamferState { CornerSelection, ParameterAdjustment, ValidationError };
     SketchModeState sketchModeState_{SketchModeState::Inactive};
     RectangleState rectangleState_{RectangleState::Ready};
     SketchTool sketchTool_{SketchTool::None};
@@ -293,9 +299,14 @@ private:
     std::string filletFirstLineId_;
     std::vector<cad::application::ModelingController::SketchFilletCorner> filletCorners_;
     std::vector<cad::application::ModelingController::SketchChamferCorner> chamferCorners_;
+    std::optional<cad::application::ModelingController::SketchFilletCorner> hoveredFilletCorner_;
+    std::optional<cad::application::ModelingController::SketchChamferCorner> hoveredChamferCorner_;
+    QString lastChamferPreviewTrace_;
+    QString lastChamferPreviewError_;
     FilletState filletState_{FilletState::Selecting};
     double filletPreviewRadius_{2.0};
     std::optional<gp_Pnt2d> filletRadiusAnchor_;
+    ChamferState chamferState_{ChamferState::CornerSelection};
     QString selectedConstraintId_;
     // Compatibility projection of viewer/tree feature-ID selection. OCCT and
     // CadViewer::SelectionState remain the selection source of truth; this

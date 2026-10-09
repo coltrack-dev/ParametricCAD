@@ -24,6 +24,8 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <OpenGl_GraphicDriver.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopAbs.hxx>
 
 class MainWindowTests final : public QObject
 {
@@ -211,6 +213,84 @@ private slots:
         QCOMPARE(window.rectangleState_, MainWindow::RectangleState::Ready);
         QVERIFY(!window.sketchFirstPoint_.has_value());
 
+    }
+
+    void cornerToolsRouteHoverAndKeepPreviewVisible()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("Native MainWindow is required for Sketch hover tests");
+        }
+        MainWindow window;
+        const auto sketchResult = window.modeling_.createSketch();
+        QVERIFY(sketchResult.success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {-40.0, -20.0}, {40.0, -20.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {40.0, -20.0}, {40.0, 20.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {40.0, 20.0}, {-40.0, 20.0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketchResult.id, {-40.0, 20.0}, {-40.0, -20.0}).success);
+        window.enterSketchEditing(sketchResult.id);
+        const auto screenPoint = window.viewer_->sketchPointToScreen({40.0, -20.0});
+        QVERIFY(screenPoint.has_value());
+        QMouseEvent move(QEvent::MouseMove, QPointF(*screenPoint), Qt::NoButton,
+            Qt::NoButton, Qt::NoModifier);
+
+        window.selectSketchFilletTool();
+        QCOMPARE(window.viewer_->sketchPreviewTool_, CadViewer::SketchPreviewTool::Fillet);
+        window.viewer_->mouseMoveEvent(&move);
+        QVERIFY(!window.viewer_->sketchTrimPreviewObject_.IsNull());
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        window.viewer_->keyPressEvent(&escape);
+
+        window.selectSketchChamferTool();
+        QCOMPARE(window.viewer_->sketchPreviewTool_, CadViewer::SketchPreviewTool::Chamfer);
+        window.viewer_->mouseMoveEvent(&move);
+        QVERIFY(!window.viewer_->sketchTrimPreviewObject_.IsNull());
+
+        const auto firstCorner = window.viewer_->sketchPointToScreen({40.0, -20.0});
+        const auto secondCorner = window.viewer_->sketchPointToScreen({40.0, 20.0});
+        QVERIFY(firstCorner.has_value());
+        QVERIFY(secondCorner.has_value());
+        QMouseEvent firstPress(QEvent::MouseButtonPress, QPointF(*firstCorner),
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        window.viewer_->mousePressEvent(&firstPress);
+        QCOMPARE(window.chamferCorners_.size(), std::size_t(1));
+        QVERIFY(!window.viewer_->sketchTrimPreviewObject_.IsNull());
+        QMouseEvent secondMove(QEvent::MouseMove, QPointF(*secondCorner), Qt::NoButton,
+            Qt::NoButton, Qt::NoModifier);
+        window.viewer_->mouseMoveEvent(&secondMove);
+        QVERIFY(!window.viewer_->sketchTrimPreviewObject_.IsNull());
+        int previewEdges = 0;
+        for (TopExp_Explorer explorer(window.viewer_->sketchTrimPreviewObject_->Shape(),
+                                      TopAbs_EDGE); explorer.More(); explorer.Next()) {
+            ++previewEdges;
+        }
+        QCOMPARE(previewEdges, 6);
+        QMouseEvent secondPress(QEvent::MouseButtonPress, QPointF(*secondCorner),
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        window.viewer_->mousePressEvent(&secondPress);
+        QCOMPARE(window.chamferCorners_.size(), std::size_t(2));
+
+        const std::array<gp_Pnt2d, 4> corners{{{40.0, -20.0}, {40.0, 20.0},
+                                                {-40.0, 20.0}, {-40.0, -20.0}}};
+        window.selectSketchChamferTool();
+        window.chamferCorners_.clear();
+        for (std::size_t index = 0; index < corners.size(); ++index) {
+            const auto screen = window.viewer_->sketchPointToScreen(corners[index]);
+            QVERIFY(screen.has_value());
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(*screen),
+                Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            window.viewer_->mousePressEvent(&press);
+            QCOMPARE(window.chamferCorners_.size(), index + 1);
+        }
+        const auto lastScreen = window.viewer_->sketchPointToScreen(corners.back());
+        QVERIFY(lastScreen.has_value());
+        QMouseEvent ctrlRemove(QEvent::MouseButtonPress, QPointF(*lastScreen),
+            Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        window.viewer_->mousePressEvent(&ctrlRemove);
+        QCOMPARE(window.chamferCorners_.size(), std::size_t(3));
+        QMouseEvent addBack(QEvent::MouseButtonPress, QPointF(*lastScreen),
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        window.viewer_->mousePressEvent(&addBack);
+        QCOMPARE(window.chamferCorners_.size(), std::size_t(4));
     }
 
     void sketchLinePickerChoosesNearestAndPrefersConstructionOnOverlap()

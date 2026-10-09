@@ -3034,9 +3034,12 @@ ParametricFeature::Ptr SketchFeature::clone(std::string newId) const
         copy = std::make_shared<SketchFeature>(
             std::move(newId), supportSource_.lock(), *faceReference_, entities_);
     } else {
-        copy = std::make_shared<SketchFeature>(std::move(newId), width_, height_);
+        copy = std::make_shared<SketchFeature>(
+            std::move(newId), supportType_, width_, height_, entities_);
     }
     copyPlacementTo(copy);
+    if (const auto sketchCopy = std::dynamic_pointer_cast<SketchFeature>(copy))
+        sketchCopy->replaceConstraints(constraints_);
     return copy;
 }
 

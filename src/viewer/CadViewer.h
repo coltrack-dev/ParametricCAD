@@ -174,9 +174,10 @@ public:
                          const QString& featureId);
     void exitSketchMode();
     bool sketchMode() const noexcept;
-    enum class SketchPreviewTool { None, Line, Circle, Arc, CenterArc, Rectangle, Trim, Extend };
+    enum class SketchPreviewTool { None, Line, Circle, Arc, CenterArc, Rectangle, Trim, Extend, Fillet, Chamfer };
     void setSketchPreviewTool(SketchPreviewTool tool);
-    void setSketchPointClickedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
+    void setSketchPointClickedHandler(
+        std::function<void(const gp_Pnt2d&, double, Qt::KeyboardModifiers)> handler);
     void setSketchMouseMovedHandler(std::function<void(const gp_Pnt2d&, double)> handler);
     void setSketchCancelHandler(std::function<void()> handler);
     void setSketchConstraintMarkerClickedHandler(std::function<void(const std::string&)> handler);
@@ -192,6 +193,8 @@ public:
                               bool invalid = false);
     void setSketchExtendPreview(const std::vector<cad::parametric::SketchEntity>& entities);
     void clearSketchTrimPreview();
+    void setSketchCornerMarkers(const std::vector<gp_Pnt2d>& points);
+    void clearSketchCornerMarkers();
     void setSketchConstraintMarkers(const cad::parametric::SketchFeature& sketch,
                                     const std::string& selectedConstraintId = {});
     void clearSketchConstraintMarkers();
@@ -416,10 +419,11 @@ private:
     std::optional<gp_Pnt> sketchPreviewSecondPoint_;
     std::optional<gp_Pnt2d> sketchPreviewPointOverride_;
     Handle(AIS_Shape) sketchPreviewObject_;
-    std::function<void(const gp_Pnt2d&, double)> sketchPointClickedHandler_;
+    std::function<void(const gp_Pnt2d&, double, Qt::KeyboardModifiers)> sketchPointClickedHandler_;
     std::function<void(const gp_Pnt2d&, double)> sketchMouseMovedHandler_;
     std::function<void()> sketchCancelHandler_;
     Handle(AIS_Shape) sketchTrimPreviewObject_;
+    Handle(AIS_Shape) sketchCornerMarkerObject_;
     struct SketchConstraintMarker
     {
         cad::parametric::SketchConstraintId constraintId;

@@ -88,7 +88,7 @@ constexpr int DetectedCyclePositionTolerance = 3;
 constexpr double AxisIndicatorScale = 0.12;
 constexpr double AxisIndicatorArm = 0.65;
 constexpr double AxisIndicatorHitRadius = 0.30;
-constexpr double SketchTrimHitPixels = 8.0;
+constexpr double SketchTrimHitPixels = 10.0;
 constexpr Standard_Real GhostTransparency = 0.78;
 
 const char* selectionModeName(const CadViewer::SelectionMode mode)
@@ -396,6 +396,29 @@ TopoDS_Shape makeTrimPreviewShape(
             if (edgeBuilder.IsDone()) edge = edgeBuilder.Edge();
         }
         if (!edge.IsNull()) builder.Add(compound, edge);
+    }
+    return compound;
+}
+
+TopoDS_Shape makeSketchCornerMarkerShape(
+    const cad::parametric::SketchFrame& frame,
+    const std::vector<gp_Pnt2d>& points)
+{
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    constexpr double markerSize = 0.8;
+    for (const auto& point : points) {
+        const gp_Pnt center = sketchWorldPoint(frame, point);
+        for (const auto& direction : {gp_Vec(frame.xDirection) * markerSize,
+                                      gp_Vec(frame.yDirection) * markerSize}) {
+            gp_Pnt start = center;
+            gp_Pnt end = center;
+            start.Translate(-direction);
+            end.Translate(direction);
+            auto edge = BRepBuilderAPI_MakeEdge(start, end);
+            if (edge.IsDone()) builder.Add(compound, edge.Edge());
+        }
     }
     return compound;
 }
@@ -754,6 +777,7 @@ void CadViewer::exitSketchMode()
     }
     sketchPreviewObject_.Nullify();
     clearSketchTrimPreview();
+    clearSketchCornerMarkers();
     clearSketchConstraintMarkers();
     clearSketchConstraintHighlight();
     traceSelectionLifecycle(QString("Sketch edit releases feature=%1; register fresh")
@@ -790,7 +814,7 @@ void CadViewer::setSketchPreviewTool(const SketchPreviewTool tool)
 }
 
 void CadViewer::setSketchPointClickedHandler(
-    std::function<void(const gp_Pnt2d&, double)> handler)
+    std::function<void(const gp_Pnt2d&, double, Qt::KeyboardModifiers)> handler)
 {
     sketchPointClickedHandler_ = std::move(handler);
 }
@@ -929,10 +953,14 @@ void CadViewer::setSketchTrimPreview(
         sketchTrimPreviewObject_->SetDisplayMode(AIS_WireFrame);
         sketchTrimPreviewObject_->SetColor(invalid ? Quantity_NOC_RED : Quantity_NOC_YELLOW);
         sketchTrimPreviewObject_->SetWidth(4.0);
+        traceSelectionLifecycle(QString("cornerPreview Display invalid=%1 object=%2")
+            .arg(invalid).arg(selectionObjectPointer(sketchTrimPreviewObject_)));
         context_->Display(sketchTrimPreviewObject_, Standard_True);
     } else {
         sketchTrimPreviewObject_->SetColor(invalid ? Quantity_NOC_RED : Quantity_NOC_YELLOW);
         sketchTrimPreviewObject_->SetShape(shape);
+        traceSelectionLifecycle(QString("cornerPreview Redisplay invalid=%1 object=%2")
+            .arg(invalid).arg(selectionObjectPointer(sketchTrimPreviewObject_)));
         context_->Redisplay(sketchTrimPreviewObject_, Standard_True);
     }
 }
@@ -952,6 +980,37 @@ void CadViewer::clearSketchTrimPreview()
         traceSelectionLifecycle("AIS Remove trimPreview after");
     }
     sketchTrimPreviewObject_.Nullify();
+}
+
+void CadViewer::setSketchCornerMarkers(const std::vector<gp_Pnt2d>& points)
+{
+    if (points.empty() || !sketchMode_ || context_.IsNull()) {
+        clearSketchCornerMarkers();
+        return;
+    }
+    const auto shape = makeSketchCornerMarkerShape(
+        {sketchOrigin_, sketchXDirection_, sketchYDirection_, sketchNormal_}, points);
+    if (shape.IsNull()) {
+        clearSketchCornerMarkers();
+        return;
+    }
+    if (sketchCornerMarkerObject_.IsNull()) {
+        sketchCornerMarkerObject_ = new AIS_Shape(shape);
+        sketchCornerMarkerObject_->SetDisplayMode(AIS_WireFrame);
+        sketchCornerMarkerObject_->SetColor(Quantity_NOC_GREEN);
+        sketchCornerMarkerObject_->SetWidth(3.0);
+        context_->Display(sketchCornerMarkerObject_, Standard_True);
+    } else {
+        sketchCornerMarkerObject_->SetShape(shape);
+        context_->Redisplay(sketchCornerMarkerObject_, Standard_True);
+    }
+}
+
+void CadViewer::clearSketchCornerMarkers()
+{
+    if (!sketchCornerMarkerObject_.IsNull() && !context_.IsNull())
+        context_->Remove(sketchCornerMarkerObject_, Standard_True);
+    sketchCornerMarkerObject_.Nullify();
 }
 
 void CadViewer::clearSketchConstraintMarkers()
@@ -3656,7 +3715,9 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
                 .arg(sketchNormal_.X()).arg(sketchNormal_.Y()).arg(sketchNormal_.Z())
                 .arg(sketchPreviewFirstPoint_.has_value());
         }
-        if (point && sketchPreviewTool_ != SketchPreviewTool::None) {
+        if (point && sketchPreviewTool_ != SketchPreviewTool::None
+            && sketchPreviewTool_ != SketchPreviewTool::Fillet
+            && sketchPreviewTool_ != SketchPreviewTool::Chamfer) {
             gp_Pnt world = sketchOrigin_;
             world.Translate(gp_Vec(sketchXDirection_) * point->X()
                 + gp_Vec(sketchYDirection_) * point->Y());
@@ -3703,7 +3764,8 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         }
         if (sketchPointClickedHandler_) {
             if (point) sketchPointClickedHandler_(*point,
-                sketchLocalToleranceFromPixels(lastMousePosition_, SketchTrimHitPixels));
+                sketchLocalToleranceFromPixels(lastMousePosition_, SketchTrimHitPixels),
+                event->modifiers());
         }
         return;
     }
@@ -3855,9 +3917,28 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         }
     }
 
+    if (sketchMode_ && (sketchPreviewTool_ == SketchPreviewTool::Fillet
+        || sketchPreviewTool_ == SketchPreviewTool::Chamfer)) {
+        const auto point = sketchPointAtScreen(currentPosition);
+        const double tolerance = sketchLocalToleranceFromPixels(
+            currentPosition, SketchTrimHitPixels);
+        traceSelectionLifecycle(QString("cornerHover tool=%1 screen=(%2,%3) point=%4 tolerance=%5")
+            .arg(static_cast<int>(sketchPreviewTool_))
+            .arg(currentPosition.x()).arg(currentPosition.y())
+            .arg(point ? QString("(%1,%2)").arg(point->X()).arg(point->Y()) : QStringLiteral("<none>"))
+            .arg(tolerance));
+        if (point && sketchMouseMovedHandler_) {
+            sketchMouseMovedHandler_(*point, tolerance);
+        } else {
+            clearSketchTrimPreview();
+        }
+    }
+
     if (sketchMode_ && sketchPreviewFirstPoint_
         && sketchPreviewTool_ != SketchPreviewTool::Trim
-        && sketchPreviewTool_ != SketchPreviewTool::Extend) {
+        && sketchPreviewTool_ != SketchPreviewTool::Extend
+        && sketchPreviewTool_ != SketchPreviewTool::Fillet
+        && sketchPreviewTool_ != SketchPreviewTool::Chamfer) {
         const auto point = sketchPointAtScreen(currentPosition);
         if (point && sketchPreviewTool_ != SketchPreviewTool::None) {
             if (sketchPreviewTool_ == SketchPreviewTool::Rectangle
