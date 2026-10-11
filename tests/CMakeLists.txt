@@ -80,7 +80,6 @@ add_library(model_test_support STATIC
     ../src/operations/ImportedFeature.cpp
     ../src/import/IfcOpenShellAdapter090.cpp
     ../src/import/IfcMetadata.cpp
-    ../src/viewer/PushPullDrag.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
@@ -167,8 +166,7 @@ target_link_libraries(undo_panel_tests PRIVATE model_test_support Qt6::Test Qt6:
 add_test(NAME undo_panel_tests COMMAND undo_panel_tests)
 set_tests_properties(undo_panel_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
 
-add_executable(main_window_tests
-    main_window_tests.cpp
+add_library(main_window_test_support STATIC
     ../src/resources/toolbar_icons.qrc
     ../src/viewer/MainWindow.cpp
     ../src/viewer/ModelPresenter.cpp
@@ -184,9 +182,13 @@ add_executable(main_window_tests
     ../src/viewer/CadViewer.cpp
     ../src/viewer/SketchEntityPicker.cpp
 )
-target_link_libraries(main_window_tests PRIVATE
+target_include_directories(main_window_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(main_window_test_support PUBLIC
     model_test_support Qt6::Test Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets
     Qt6::Concurrent ParametricCAD::OCCTVisualization)
+
+add_executable(main_window_tests main_window_tests.cpp)
+target_link_libraries(main_window_tests PRIVATE main_window_test_support)
 add_test(NAME main_window_tests COMMAND main_window_tests)
 set_tests_properties(main_window_tests PROPERTIES
     ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
