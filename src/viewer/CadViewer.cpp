@@ -220,6 +220,64 @@ void traceOcctMoveTo(
         .arg(windowWidth).arg(windowHeight);
 }
 
+void traceWheelCoordinates(
+    const char* stage,
+    const CadViewer& viewer,
+    const QWheelEvent& event,
+    const QPoint& position,
+    const Handle(V3d_View)& view)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) return;
+
+    Standard_Integer windowWidth = 0;
+    Standard_Integer windowHeight = 0;
+    if (!view.IsNull() && !view->Window().IsNull()) {
+        view->Window()->Size(windowWidth, windowHeight);
+    }
+    const auto window = viewer.windowHandle();
+    const auto screen = viewer.screen();
+    const double widgetWidth = std::max(viewer.width(), 1);
+    const double widgetHeight = std::max(viewer.height(), 1);
+    const double scaleX = static_cast<double>(windowWidth) / widgetWidth;
+    const double scaleY = static_cast<double>(windowHeight) / widgetHeight;
+    qInfo().noquote() << QString(
+        "[COORD] %1 wheel local=(%2,%3) global=(%4,%5) widget=(%6,%7) "
+        "dprWidget=%8 dprWindow=%9 dprScreen=%10 occtWindow=(%11,%12) "
+        "passedOcct=(%2,%3) ratioScaled=(%13,%14) angleDelta=(%15,%16)")
+        .arg(QString::fromLatin1(stage))
+        .arg(position.x()).arg(position.y())
+        .arg(event.globalPosition().x()).arg(event.globalPosition().y())
+        .arg(viewer.width()).arg(viewer.height())
+        .arg(viewer.devicePixelRatioF(), 0, 'f', 3)
+        .arg(window ? window->devicePixelRatio() : 0.0, 0, 'f', 3)
+        .arg(screen ? screen->devicePixelRatio() : 0.0, 0, 'f', 3)
+        .arg(windowWidth).arg(windowHeight)
+        .arg(qRound(position.x() * scaleX)).arg(qRound(position.y() * scaleY))
+        .arg(event.angleDelta().x()).arg(event.angleDelta().y());
+}
+
+void traceCameraState(
+    const char* stage,
+    const Handle(V3d_View)& view)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) return;
+
+    if (view.IsNull() || view->Camera().IsNull()) {
+        qInfo().noquote() << QString("[COORD] %1 camera=null")
+            .arg(QString::fromLatin1(stage));
+        return;
+    }
+    const auto camera = view->Camera();
+    const gp_Pnt eye = camera->Eye();
+    const gp_Pnt center = camera->Center();
+    qInfo().noquote() << QString(
+        "[COORD] %1 camera eye=(%2,%3,%4) center=(%5,%6,%7) scale=%8")
+        .arg(QString::fromLatin1(stage))
+        .arg(eye.X()).arg(eye.Y()).arg(eye.Z())
+        .arg(center.X()).arg(center.Y()).arg(center.Z())
+        .arg(camera->Scale());
+}
+
 QPointF projectWorldPoint(
     const Handle(V3d_View)& view,
     const gp_Pnt& point,
@@ -1498,8 +1556,16 @@ void CadViewer::invalidateSnapReferenceCache(const char* reason)
 
 void CadViewer::invalidateSnapProjectionCache(const char* reason)
 {
-    Q_UNUSED(reason);
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        qInfo().noquote() << QString(
+            "[COORD] snap projection cache invalidate reason=%1 entriesBefore=%2")
+            .arg(QString::fromLatin1(reason != nullptr ? reason : "unknown"))
+            .arg(snapScreenProjectionCache_.size());
+    }
     snapScreenProjectionCache_.clear();
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        qInfo().noquote() << "[COORD] snap projection cache invalidated entriesAfter=0";
+    }
 }
 
 void CadViewer::updateTransformSnap(
@@ -1567,8 +1633,11 @@ void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
 {
     QElapsedTimer timer;
     timer.start();
+    traceCameraState("wheel before zoom", view_);
     const auto pointBefore = worldAnchorAtScreenPoint(position);
     view_->SetZoom(factor);
+    invalidateSnapProjectionCache("CAMERA_CHANGED: zoom scale");
+    traceCameraState("wheel after SetZoom", view_);
 
     if (pointBefore) {
         const auto pointAfter = worldAnchorAtScreenPoint(position);
@@ -1583,9 +1652,11 @@ void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
             eye.Translate(correction);
             center.Translate(correction);
             camera->SetEyeAndCenter(eye, center);
+            invalidateSnapProjectionCache("CAMERA_CHANGED: zoom anchor correction");
         }
     }
 
+    traceCameraState("wheel after zoom", view_);
     view_->Redraw();
     recordPerformanceSample("zoom redraw", timer.elapsed());
 }
@@ -2709,6 +2780,7 @@ void CadViewer::fitAll()
     timer.start();
     view_->FitAll();
     view_->ZFitAll();
+    invalidateSnapProjectionCache("CAMERA_CHANGED: fit all");
     view_->Redraw();
     recordPerformanceSample("FitAll", timer.elapsed());
 }
@@ -4109,8 +4181,8 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         const int deltaY = lastMousePosition_.y() - currentPosition.y();
         QElapsedTimer timer;
         timer.start();
-        invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         view_->Pan(deltaX, deltaY);
+        invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         recordPerformanceSample("pan redraw", timer.elapsed());
         lastMousePosition_ = currentPosition;
         return;
@@ -4275,8 +4347,10 @@ void CadViewer::wheelEvent(QWheelEvent* event)
             ? 0.8
             : 1.25;
 
-    zoomAtCursor(event->position().toPoint(), factor);
-    invalidateSnapProjectionCache("CAMERA_CHANGED: zoom");
+    const QPoint position = event->position().toPoint();
+    traceWheelCoordinates("wheel before zoom", *this, *event, position, view_);
+    zoomAtCursor(position, factor);
+    traceWheelCoordinates("wheel after zoom", *this, *event, position, view_);
 }
 
 void CadViewer::keyPressEvent(QKeyEvent* event)
