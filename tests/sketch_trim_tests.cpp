@@ -3,6 +3,9 @@
 #include "application/ModelingController.h"
 #include "model/ProjectFile.h"
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cmath>
 #include <iostream>
