@@ -166,22 +166,25 @@ target_link_libraries(undo_panel_tests PRIVATE model_test_support Qt6::Test Qt6:
 add_test(NAME undo_panel_tests COMMAND undo_panel_tests)
 set_tests_properties(undo_panel_tests PROPERTIES ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
 
-add_library(main_window_test_support STATIC
-    ../src/resources/toolbar_icons.qrc
-    ../src/viewer/MainWindow.cpp
-    ../src/viewer/ModelPresenter.cpp
-    ../src/viewer/PushPullDrag.cpp
-    ../src/viewer/TransformMath.cpp
-    ../src/viewer/TransformGizmo.cpp
-    ../src/viewer/TransformGizmoPicking.cpp
-    ../src/viewer/SnapManager.cpp
-    ../src/viewer/SelectionAdapter.cpp
-    ../src/viewer/FeatureEditorPanel.cpp
-    ../src/viewer/BimNavigationPanel.cpp
-    ../src/viewer/BimInspectorPanel.cpp
-    ../src/viewer/CadViewer.cpp
-    ../src/viewer/SketchEntityPicker.cpp
+set(_main_window_test_support_sources
+    "${PROJECT_SOURCE_DIR}/src/resources/toolbar_icons.qrc"
+    "${PROJECT_SOURCE_DIR}/src/viewer/MainWindow.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/MainWindow.h"
+    "${PROJECT_SOURCE_DIR}/src/viewer/ModelPresenter.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/PushPullDrag.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/TransformMath.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/TransformGizmo.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/TransformGizmoPicking.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/SnapManager.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/SelectionAdapter.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/FeatureEditorPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/BimNavigationPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/BimInspectorPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/CadViewer.cpp"
+    "${PROJECT_SOURCE_DIR}/src/viewer/SketchEntityPicker.cpp"
 )
+add_library(main_window_test_support STATIC ${_main_window_test_support_sources})
+unset(_main_window_test_support_sources)
 target_include_directories(main_window_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(main_window_test_support PUBLIC
     model_test_support Qt6::Test Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets
