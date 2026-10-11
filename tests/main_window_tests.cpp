@@ -29,6 +29,7 @@
 #include <OpenGl_GraphicDriver.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopAbs.hxx>
+#include <TColStd_ListOfInteger.hxx>
 
 class MainWindowTests final : public QObject
 {
