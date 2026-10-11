@@ -13,10 +13,12 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 option(PARAMETRIC_CAD_BUILD_TESTS "Build unit tests" ON)
-option(PARAMETRIC_CAD_ENABLE_IFC "Enable the pinned IfcOpenShell adapter" ON)
+option(PARAMETRIC_CAD_ENABLE_IFC "Enable the IfcOpenShell 0.9 adapter" ON)
 
 set(PARAMETRIC_CAD_IFCOPENSHELL_ROOT "" CACHE PATH
-    "Root of a separately built IfcOpenShell v0.7.1 installation")
+    "Prefix or build tree of an IfcOpenShell 0.9.0 installation")
+set(PARAMETRIC_CAD_IFCOPENSHELL_SOURCE_DIR "" CACHE PATH
+    "Optional IfcOpenShell 0.9.0 source tree for the OpenCASCADE conversion bridge")
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Concurrent)
 
@@ -94,39 +96,69 @@ if(PARAMETRIC_CAD_ENABLE_IFC)
     if(NOT PARAMETRIC_CAD_IFCOPENSHELL_ROOT)
         message(FATAL_ERROR "PARAMETRIC_CAD_IFCOPENSHELL_ROOT is required when IFC support is enabled")
     endif()
-    find_path(PARAMETRIC_CAD_IFC_INCLUDE_DIR
-        NAMES ifcgeom_schema_agnostic/IfcGeomIterator.h
-        PATHS "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/include"
-              "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/src"
-        NO_DEFAULT_PATH)
-    find_library(PARAMETRIC_CAD_IFC_GEOM_LIBRARY NAMES IfcGeom
-        PATHS "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib"
-              "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib64"
-        NO_DEFAULT_PATH)
-    find_library(PARAMETRIC_CAD_IFC_PARSE_LIBRARY NAMES IfcParse
-        PATHS "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib"
-              "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib64"
-        NO_DEFAULT_PATH)
-    find_library(PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY NAMES IfcGeom_ifc2x3
-        PATHS "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib"
-              "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib64"
-        NO_DEFAULT_PATH)
-    find_library(PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY NAMES IfcGeom_ifc4
-        PATHS "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib"
-              "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib64"
-        NO_DEFAULT_PATH)
-    if(NOT PARAMETRIC_CAD_IFC_INCLUDE_DIR OR
-       NOT EXISTS "${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}" OR
-       NOT EXISTS "${PARAMETRIC_CAD_IFC_PARSE_LIBRARY}" OR
-       NOT EXISTS "${PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY}" OR
-       NOT EXISTS "${PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY}")
-        message(FATAL_ERROR "IfcOpenShell v0.7.1 headers/libraries were not found under PARAMETRIC_CAD_IFCOPENSHELL_ROOT")
+    set(_ifc_config_paths
+        "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib/cmake/IfcOpenShell"
+        "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib64/cmake/IfcOpenShell"
+        "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/build/lib/cmake/IfcOpenShell"
+        "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/build")
+    find_package(IfcOpenShell 0.9.0 CONFIG QUIET
+        PATHS ${_ifc_config_paths} NO_DEFAULT_PATH)
+    unset(_ifc_config_paths)
+    if(NOT TARGET IfcOpenShell::IfcGeom OR NOT TARGET IfcOpenShell::IfcParse
+       OR NOT TARGET IfcOpenShell::geometry_kernel_opencascade)
+        message(FATAL_ERROR
+            "IfcOpenShell 0.9.0 CMake targets (IfcGeom, IfcParse, or the "
+            "OpenCASCADE geometry kernel) were not found. Set "
+            "PARAMETRIC_CAD_IFCOPENSHELL_ROOT to its install prefix (or a build "
+            "tree exporting IfcOpenShellTargets.cmake). ParametricCAD requires "
+            "the 0.9.0 API and does not fall back to older libraries.")
     endif()
-    # The IfcOpenShell libraries are installed outside the system linker path.
-    # Keep the runtime path next to the explicit CMake library discovery so an
-    # IFC-enabled build runs without requiring LD_LIBRARY_PATH.
-    get_filename_component(PARAMETRIC_CAD_IFC_LIBRARY_DIR
-        "${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}" DIRECTORY)
+    get_target_property(_ifc_target_include_dirs
+        IfcOpenShell::IfcGeom INTERFACE_INCLUDE_DIRECTORIES)
+    if(NOT _ifc_target_include_dirs OR _ifc_target_include_dirs STREQUAL "_ifc_target_include_dirs-NOTFOUND")
+        set(_ifc_target_include_dirs
+            "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/include")
+    endif()
+    find_path(_ifc_internal_include_dir
+        NAMES ifcgeom/kernels/ifc_geomlibrary_api.h
+        PATHS ${_ifc_target_include_dirs}
+        NO_DEFAULT_PATH)
+    find_path(_ifc_source_include_dir
+        NAMES ifcgeom/kernels/ifc_geomlibrary_api.h
+        PATHS
+            "${PARAMETRIC_CAD_IFCOPENSHELL_SOURCE_DIR}/src"
+            "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/src"
+        NO_DEFAULT_PATH)
+    if(_ifc_source_include_dir)
+        # IfcOpenShell 0.9.0's installed OpenCASCADE conversion header refers
+        # to this private API header, which some 0.9.0 installs omit. Prefer
+        # the matching source header before the installed public headers; this
+        # does not modify the SDK or the system include tree.
+        set(PARAMETRIC_CAD_IFC_INCLUDE_DIR
+            "${_ifc_source_include_dir};${_ifc_target_include_dirs}")
+    elseif(_ifc_internal_include_dir)
+        set(PARAMETRIC_CAD_IFC_INCLUDE_DIR "${_ifc_target_include_dirs}")
+    else()
+        message(FATAL_ERROR
+            "The IfcOpenShell 0.9.0 SDK is missing ifc_geomlibrary_api.h, which is "
+            "required by its OpenCASCADE conversion bridge. Set "
+            "PARAMETRIC_CAD_IFCOPENSHELL_SOURCE_DIR to the matching 0.9.0 source "
+            "tree, or use an installation containing the complete kernel headers.")
+    endif()
+    unset(_ifc_internal_include_dir)
+    unset(_ifc_source_include_dir)
+    unset(_ifc_target_include_dirs)
+    set(PARAMETRIC_CAD_IFC_GEOM_LIBRARY IfcOpenShell::IfcGeom)
+    set(PARAMETRIC_CAD_IFC_PARSE_LIBRARY IfcOpenShell::IfcParse)
+    set(PARAMETRIC_CAD_IFC_OCCT_KERNEL_LIBRARY
+        IfcOpenShell::geometry_kernel_opencascade)
+    set(PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY "")
+    set(PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY "")
+    if(DEFINED IFCOPENSHELL_LIBRARY_DIR)
+        set(PARAMETRIC_CAD_IFC_LIBRARY_DIR "${IFCOPENSHELL_LIBRARY_DIR}")
+    else()
+        set(PARAMETRIC_CAD_IFC_LIBRARY_DIR "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT}/lib")
+    endif()
 endif()
 
 add_subdirectory(src)

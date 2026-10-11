@@ -15,7 +15,7 @@ set(PARAMETRIC_CAD_SOURCES
     application/IfcImporter.h
     application/BimNavigationModel.cpp
     application/BimNavigationModel.h
-    import/IfcOpenShellAdapter.cpp
+    import/IfcOpenShellAdapter090.cpp
     import/IfcOpenShellAdapter.h
     import/IfcMetadata.cpp
     import/IfcMetadata.h
@@ -121,9 +121,7 @@ endif()
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(ParametricCAD PRIVATE
         PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
-        HAS_SCHEMA_2x3
-        HAS_SCHEMA_4
-        "SCHEMA_SEQ=(2x3)(4)")
+        PARAMETRIC_CAD_IFCOPENSHELL_090=1)
     target_include_directories(ParametricCAD SYSTEM PRIVATE ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
 endif()
 
@@ -144,8 +142,7 @@ if(PARAMETRIC_CAD_ENABLE_IFC)
     target_link_libraries(ParametricCAD PRIVATE
         ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
         ${PARAMETRIC_CAD_IFC_PARSE_LIBRARY}
-        ${PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY}
-        ${PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY})
+        ${PARAMETRIC_CAD_IFC_OCCT_KERNEL_LIBRARY})
 endif()
 
 if(MSVC)

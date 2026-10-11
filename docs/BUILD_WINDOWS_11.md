@@ -23,7 +23,7 @@ add user-specific paths to CMake files.
 - Qt 6.12.0 built for MSVC x64;
 - OCCT 7.9 built for MSVC x64;
 - vcpkg with `minizip:x64-windows`;
-- optional IfcOpenShell v0.7.1 built with the same MSVC/OCCT ABI.
+- optional IfcOpenShell 0.9.0 built with the same MSVC/OCCT ABI.
 
 The project requires C++20. The Windows viewer already uses OCCT's native
 `WNT_Window` path. Linux X11/XCB and macOS Cocoa paths are not used on Windows.
@@ -172,27 +172,26 @@ Get-ChildItem "$env:OCCT_ROOT" -Recurse -Filter OpenCASCADEConfig.cmake
 
 ## 5. IfcOpenShell C++ support (optional)
 
-IFC is disabled by default. The validated native baseline is IfcOpenShell
-v0.7.1 at commit `ed8cbff3d253691ac81450eaf16cad46bf6149e5`, built with the
-same MSVC x64 compiler and OCCT headers/libraries as ParametricCAD. A Python
-wheel is not a substitute for the C++ libraries and Python is not a runtime
-dependency of ParametricCAD.
+IFC is disabled by default. The supported native dependency is IfcOpenShell
+0.9.0, built with the same MSVC x64 compiler and OCCT headers/libraries as
+ParametricCAD. The ParametricCAD Windows integration still requires a native
+application build and IFC fixture run for release verification; an
+`IfcConvert` run alone is not that verification. A Python wheel is not a
+substitute for the C++ libraries and Python is not a runtime dependency.
 
 IfcOpenShell source builds may need Boost, Eigen, GMP, MPFR, CGAL, zlib, and
 other optional build dependencies. Install them for the same x64 triplet or
 use the dependency helper belonging to the pinned IfcOpenShell checkout. Keep
-all prefixes and the compiler architecture consistent. The v0.7.1 checkout
-uses `BUILD_IFCPYTHON`, not the `WITH_PYTHON`/`WITH_SWIG` names used by newer
-documentation.
+all prefixes and the compiler architecture consistent. The 0.9.0 checkout
+uses the current IfcOpenShell CMake options.
 
 ```powershell
-git clone --branch v0.7.1 --recursive `
-  https://github.com/IfcOpenShell/IfcOpenShell.git C:\dev\ifcopenshell
-Set-Location C:\dev\ifcopenshell
-git checkout ed8cbff3d253691ac81450eaf16cad46bf6149e5
+git clone --branch v0.9.0 --recursive `
+  https://github.com/IfcOpenShell/IfcOpenShell.git C:\dev\ifcopenshell-0.9.0
+Set-Location C:\dev\ifcopenshell-0.9.0
 
 $env:IFCOPENSHELL_ROOT = 'C:\dev\ifcopenshell-install'
-cmake -S C:\dev\ifcopenshell -B C:\dev\ifcopenshell-build -G Ninja `
+cmake -S C:\dev\ifcopenshell-0.9.0 -B C:\dev\ifcopenshell-build -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_INSTALL_PREFIX="$env:IFCOPENSHELL_ROOT" `
   -DCMAKE_PREFIX_PATH="$env:OCCT_ROOT;$env:VCPKG_ROOT\installed\x64-windows" `
@@ -211,8 +210,8 @@ cmake --build C:\dev\ifcopenshell-build --parallel
 cmake --install C:\dev\ifcopenshell-build
 ```
 
-The v0.7.1 install must provide `ifcgeom_schema_agnostic/IfcGeomIterator.h`,
-`IfcGeom`, `IfcParse`, `IfcGeom_ifc2x3`, and `IfcGeom_ifc4`. If symbols fail to
+The 0.9.0 install must provide `ifcgeom/iterator.h` and the exported
+`IfcOpenShell::IfcGeom` and `IfcOpenShell::IfcParse` CMake targets. If symbols fail to
 resolve, verify the exact IfcOpenShell commit, OCCT version, MSVC runtime,
 architecture, and DLL search path before changing source code.
 

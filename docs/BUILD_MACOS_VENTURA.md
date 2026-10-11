@@ -40,7 +40,7 @@ baseline used by the project documentation is:
 | Qt | Qt 6.12.0 source build, or a Qt 6 release supporting Ventura |
 | OCCT | 7.6.3 for the validated IFC combination |
 | minizip | Homebrew `minizip` |
-| IfcOpenShell | v0.7.1, commit `ed8cbff3d253691ac81450eaf16cad46bf6149e5` |
+| IfcOpenShell | 0.9.0 |
 
 Check the selected Qt release's supported macOS baseline before using it on
 Ventura. The ParametricCAD code only requires Qt 6 APIs and does not require a
@@ -191,10 +191,11 @@ Set `OpenCASCADE_DIR` to the directory containing that file.
 
 ## 4. IfcOpenShell C++ support (optional)
 
-IFC is disabled by default. The validated native C++ baseline is IfcOpenShell
-v0.7.1 at commit `ed8cbff3d253691ac81450eaf16cad46bf6149e5`, built against
-the same OCCT headers, libraries, compiler, and architecture as ParametricCAD.
-The Python package is not a ParametricCAD runtime dependency.
+IFC is disabled by default. The supported native C++ dependency is IfcOpenShell
+0.9.0, built against the same OCCT headers, libraries, compiler, and
+architecture as ParametricCAD. macOS IFC integration remains unverified in
+this repository checkout; the Python package is not a ParametricCAD runtime
+dependency.
 
 Install common source-build dependencies:
 
@@ -202,18 +203,16 @@ Install common source-build dependencies:
 brew install boost zlib
 ```
 
-Build the C++ core outside the project. The v0.7.1 checkout uses
-`BUILD_IFCPYTHON`, rather than the option names used by newer IfcOpenShell
-documentation. Build only the C++ geometry core:
+Build the C++ core outside the project using the 0.9.0 CMake options. Build
+only the C++ geometry core:
 
 ```bash
 export IFCOS_SRC="$HOME/dev/ifcopenshell"
 export IFCOS_BUILD="$HOME/dev/ifcopenshell-build-$(uname -m)"
-export IFCOS_ROOT="$HOME/opt/ifcopenshell-v0.7.1-$(uname -m)"
+export IFCOS_ROOT="$HOME/opt/ifcopenshell-0.9.0-$(uname -m)"
 
-git clone --branch v0.7.1 --recursive \
+git clone --branch v0.9.0 --recursive \
   https://github.com/IfcOpenShell/IfcOpenShell.git "$IFCOS_SRC"
-git -C "$IFCOS_SRC" checkout ed8cbff3d253691ac81450eaf16cad46bf6149e5
 cmake -S "$IFCOS_SRC" -B "$IFCOS_BUILD" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$IFCOS_ROOT" \
@@ -230,8 +229,8 @@ cmake --build "$IFCOS_BUILD" --parallel
 cmake --install "$IFCOS_BUILD"
 ```
 
-The install must contain `ifcgeom_schema_agnostic/IfcGeomIterator.h`,
-`IfcGeom`, `IfcParse`, `IfcGeom_ifc2x3`, and `IfcGeom_ifc4`. Do not mix a
+The install must contain `ifcgeom/iterator.h` and the exported
+`IfcOpenShell::IfcGeom` and `IfcOpenShell::IfcParse` CMake targets. Do not mix a
 prebuilt IfcOpenShell binary with another OCCT version; unresolved symbols
 usually indicate exactly that ABI mismatch.
 

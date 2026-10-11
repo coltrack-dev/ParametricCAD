@@ -48,13 +48,13 @@ ParametricCAD feature ID.
 
 ## Dependency strategy
 
-The application uses OCCT 7.6.3. Phase B pins IfcOpenShell `v0.7.1`, commit
-`ed8cbff3d253691ac81450eaf16cad46bf6149e5`, built separately against the same
-OCCT headers and libraries. The complete IfcOpenShell source is not vendored.
-The verified build used GCC 13.3.0, `/usr/include/opencascade`, and
-`/usr/lib/x86_64-linux-gnu`; it produced `libIfcGeom.so`, `libIfcParse.so`,
-`libIfcGeom_ifc2x3.a`, and `libIfcGeom_ifc4.a` against that same OCCT runtime.
-IFC support is enabled by default for the canonical Linux development build.
+The application uses OCCT 7.6.3 in the current Linux development environment.
+The IFC adapter targets IfcOpenShell 0.9.0 and is not vendored. IfcOpenShell
+must be built or installed against a compatible OCCT ABI; ParametricCAD uses
+the exported `IfcOpenShell::IfcGeom` and `IfcOpenShell::IfcParse` CMake targets.
+The 0.9 adapter uses native OpenCASCADE iterator output and the runtime
+geometry-kernel plugin supplied by IfcOpenShell. It does not link the removed
+0.7 schema-specific libraries.
 Use the repository scripts so the configured and launched binary always come
 from `build/`:
 
@@ -68,35 +68,45 @@ For a manual configure, use:
 ```text
 cmake -S . -B build -G Ninja \
   -DPARAMETRIC_CAD_ENABLE_IFC=ON \
-  -DPARAMETRIC_CAD_IFCOPENSHELL_ROOT=/path/to/ifcopenshell-v0.7.1-install
+  -DPARAMETRIC_CAD_IFCOPENSHELL_ROOT=/path/to/ifcopenshell-0.9.0-install \
+  -DPARAMETRIC_CAD_IFCOPENSHELL_SOURCE_DIR=/path/to/ifcopenshell-0.9.0
 ```
+
+Some 0.9.0 installations contain the OpenCASCADE conversion header but omit
+its matching `ifc_geomlibrary_api.h` header. In that case the source-tree
+option supplies only the matching upstream include directory; ParametricCAD
+does not modify or copy files into the SDK or system include directories. A
+complete SDK may omit this option. `configure.sh` also accepts the source path
+through `PARAMETRIC_CAD_IFCOPENSHELL_SOURCE_DIR`.
 
 `build-ifc/` is obsolete as a normal development directory. Keep special
 builds under explicit names such as `build-asan` or `build-release`.
 
-The external build must expose `IfcGeom`, `IfcParse`, `IfcGeom_ifc2x3`, and
-`IfcGeom_ifc4`, and must use the same compiler ABI and OCCT 7.6.3 build. The
-A build with IFC explicitly disabled has no IfcOpenShell or Python runtime
+The external build must expose the 0.9 CMake package and the `IfcGeom` and
+`IfcParse` targets, and must use the same compiler ABI and OCCT build. A build
+with IFC explicitly disabled has no IfcOpenShell or Python runtime
 dependency and reports a structured diagnostic if IFC support is unavailable.
 
 When IFC is explicitly enabled, CMake requires these headers and libraries and
 fails during configuration with an actionable error if they are missing. The
-verified developer commands are:
+following commands are a build recipe; fixture results must be recorded for
+the specific platform and IfcOpenShell/OCCT build:
 
 ```text
 cmake -S . -B build -G Ninja \
   -DPARAMETRIC_CAD_ENABLE_IFC=ON \
-  -DPARAMETRIC_CAD_IFCOPENSHELL_ROOT=/tmp/ifcopenshell-v071-install
+  -DPARAMETRIC_CAD_IFCOPENSHELL_ROOT=/path/to/ifcopenshell-0.9.0-install \
+  -DPARAMETRIC_CAD_IFCOPENSHELL_SOURCE_DIR=/path/to/ifcopenshell-0.9.0
 cmake --build build -j
-LD_LIBRARY_PATH=/tmp/ifcopenshell-v071-install/lib \
+LD_LIBRARY_PATH=/path/to/ifcopenshell-0.9.0-install/lib \
   ./build/tests/ifc_import_tests
-LD_LIBRARY_PATH=/tmp/ifcopenshell-v071-install/lib \
+LD_LIBRARY_PATH=/path/to/ifcopenshell-0.9.0-install/lib \
   ./build/tests/ifc_building_acceptance
 ```
 
 ## Geometry, placement, and units
 
-The adapter uses `IfcGeom::Iterator` with native B-Rep output, world
+The adapter uses the 0.9 `ifcopenshell::geom::iterator` with native B-Rep output, world
 coordinates, opening subtraction, and no independent per-product
 `create_shape()` calls. Resulting geometry is normalized exactly once to
 ParametricCAD's canonical millimetre unit. `ImportedFeature::placement()` is

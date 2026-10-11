@@ -126,8 +126,13 @@ int main()
         for (const auto& diagnostic : result.diagnostics)
             std::cerr << "IFC diagnostic: " << diagnostic.message.toStdString() << '\n';
         check(result.statistics.schema == "IFC2X3", "Duplex schema");
-        check(result.statistics.importedCount > 0 && !unavailableBody.features().empty(),
-              "Duplex import");
+        check(result.statistics.consideredCount == 286, "Duplex product count changed");
+        check(result.statistics.productsWithGeometry == 215,
+              "Duplex geometry count changed");
+        check(result.statistics.importedCount == 215, "Duplex imported count changed");
+        check(result.statistics.skippedCount == 71, "Duplex skipped count changed");
+        check(result.statistics.failedCount == 0, "Duplex geometry failures");
+        check(!unavailableBody.features().empty(), "Duplex import");
         std::cout << "Duplex IFC import\n"
                   << "  schema: " << result.statistics.schema.toStdString() << '\n'
                   << "  considered: " << result.statistics.consideredCount << '\n'

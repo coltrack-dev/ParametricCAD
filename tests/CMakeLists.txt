@@ -78,7 +78,7 @@ add_library(model_test_support STATIC
     ../src/operations/SketchConstraintSolver.cpp
     ../src/operations/PatternFeatures.cpp
     ../src/operations/ImportedFeature.cpp
-    ../src/import/IfcOpenShellAdapter.cpp
+    ../src/import/IfcOpenShellAdapter090.cpp
     ../src/import/IfcMetadata.cpp
     ../src/viewer/PushPullDrag.cpp
 )
@@ -91,15 +91,12 @@ target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(model_test_support PUBLIC
         PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
-        HAS_SCHEMA_2x3
-        HAS_SCHEMA_4
-        "SCHEMA_SEQ=(2x3)(4)")
+        PARAMETRIC_CAD_IFCOPENSHELL_090=1)
     target_include_directories(model_test_support SYSTEM PUBLIC ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
     target_link_libraries(model_test_support PUBLIC
         ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
         ${PARAMETRIC_CAD_IFC_PARSE_LIBRARY}
-        ${PARAMETRIC_CAD_IFC_SCHEMA_2X3_LIBRARY}
-        ${PARAMETRIC_CAD_IFC_SCHEMA_4_LIBRARY})
+        ${PARAMETRIC_CAD_IFC_OCCT_KERNEL_LIBRARY})
 endif()
 add_executable(project_file_tests project_file_tests.cpp)
 target_compile_definitions(project_file_tests PRIVATE
@@ -124,10 +121,21 @@ target_link_libraries(ifc_workflow_tests PRIVATE model_test_support)
 add_test(NAME ifc_workflow_tests COMMAND ifc_workflow_tests)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
+    set(_parametriccad_ifc_test_rpath "${PARAMETRIC_CAD_IFC_LIBRARY_DIR}")
+    set_target_properties(ifc_import_tests ifc_workflow_tests
+        PROPERTIES
+            BUILD_RPATH "${_parametriccad_ifc_test_rpath}"
+            INSTALL_RPATH "${_parametriccad_ifc_test_rpath}")
     add_executable(ifc_building_acceptance ifc_building_acceptance.cpp)
     target_compile_definitions(ifc_building_acceptance PRIVATE
         PARAMETRIC_CAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     target_link_libraries(ifc_building_acceptance PRIVATE model_test_support)
+    set_target_properties(ifc_building_acceptance
+        PROPERTIES
+            BUILD_RPATH "${_parametriccad_ifc_test_rpath}"
+            INSTALL_RPATH "${_parametriccad_ifc_test_rpath}")
+    add_test(NAME ifc_building_acceptance COMMAND ifc_building_acceptance)
+    unset(_parametriccad_ifc_test_rpath)
 endif()
 
 add_executable(model_tests model_tests.cpp)

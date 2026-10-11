@@ -91,7 +91,8 @@ int main()
         const auto result = importer.importIntoBody(temporaryIfc, body);
         const auto importMilliseconds = timer.elapsed();
         check(result.statistics.schema == "IFC4", "Building schema");
-        check(result.statistics.importedCount > 1000, "Building imported count");
+        check(result.statistics.importedCount == 5586, "Building imported count changed");
+        check(result.statistics.skippedCount == 246, "Building skipped count changed");
         check(result.statistics.failedCount == 0, "Building geometry failures");
         const auto modelBounds = bounds(body);
         cad::application::BimNavigationModel navigation;
