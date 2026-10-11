@@ -34,6 +34,7 @@ class QLineEdit;
 class QPushButton;
 class QDockWidget;
 namespace cad::viewer { class ModelPresenter; }
+class MainWindowTests;
 
 class MainWindow final : public QMainWindow
 {
@@ -44,6 +45,7 @@ public:
     ~MainWindow() override;
 
 private:
+    friend class MainWindowTests;
     void closeEvent(QCloseEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void newDocument();

@@ -16,6 +16,7 @@ class QLabel;
 class QTreeWidget;
 class QListWidget;
 class QPushButton;
+class MainWindowTests;
 
 struct SketchConstraintListItem
 {
@@ -93,6 +94,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    friend class MainWindowTests;
     void createUi();
     void updateSelectedProperties();
 

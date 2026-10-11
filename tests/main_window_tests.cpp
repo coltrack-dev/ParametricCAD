@@ -15,10 +15,8 @@
 #include <array>
 #include <QtTest/QtTest>
 
-#define private public
 #include "viewer/MainWindow.h"
 #include "viewer/FeatureEditorPanel.h"
-#undef private
 #include "viewer/CadViewer.h"
 #include "viewer/SketchEntityPicker.h"
 #include <QTreeWidget>
