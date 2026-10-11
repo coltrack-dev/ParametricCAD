@@ -20,6 +20,7 @@
 #include <map>
 #include <numeric>
 #include <set>
+#include <iostream>
 
 namespace cad::viewer {
 
@@ -255,11 +256,15 @@ std::optional<cad::topology::TopologicalReference> makeTopologyReference(
 std::vector<SnapReference> buildIntersectionReferences(
     const std::vector<SnapReference>& edges)
 {
+    std::cerr << "[SnapManager] buildIntersectionReferences entry edgeCount="
+              << edges.size() << '\n' << std::flush;
     std::vector<SnapReference> result;
     std::set<QString> points;
     gLastNearbyEdgePairCount = 0;
     gLastIntersectionCandidateCount = 0;
     for (std::size_t first = 0; first < edges.size(); ++first) {
+        std::cerr << "[SnapManager] intersection edge loop first=" << first
+                  << '/' << edges.size() << '\n' << std::flush;
         const auto edgeA = edgeShape(edges[first]);
         if (!edgeA) continue;
         Standard_Real firstA = 0.0;
@@ -267,6 +272,9 @@ std::vector<SnapReference> buildIntersectionReferences(
         const auto curveA = BRep_Tool::Curve(*edgeA, firstA, lastA);
         if (curveA.IsNull()) continue;
         for (std::size_t second = first + 1; second < edges.size(); ++second) {
+            std::cerr << "[SnapManager] intersection pair first=" << first
+                      << " second=" << second << '/' << edges.size()
+                      << '\n' << std::flush;
             const auto edgeB = edgeShape(edges[second]);
             if (!edgeB) continue;
             if (std::hypot(edges[first].screenPoint.x() - edges[second].screenPoint.x(),
@@ -278,6 +286,8 @@ std::vector<SnapReference> buildIntersectionReferences(
             const auto curveB = BRep_Tool::Curve(*edgeB, firstB, lastB);
             if (curveB.IsNull()) continue;
             try {
+                std::cerr << "[SnapManager] extrema generation first=" << first
+                          << " second=" << second << '\n' << std::flush;
                 const GeomAPI_ExtremaCurveCurve extrema(
                     curveA, curveB, firstA, lastA, firstB, lastB);
                 for (int index = 1; index <= extrema.NbExtrema(); ++index) {
@@ -302,6 +312,8 @@ std::vector<SnapReference> buildIntersectionReferences(
                         reference.relatedTopology.push_back(*edges[second].topology);
                     const QString key = referenceKey(reference);
                     if (points.insert(key).second) {
+                        std::cerr << "[SnapManager] intersection cache insertion index="
+                                  << index << '\n' << std::flush;
                         result.push_back(std::move(reference));
                         ++gLastIntersectionCandidateCount;
                     }
@@ -311,6 +323,8 @@ std::vector<SnapReference> buildIntersectionReferences(
             }
         }
     }
+    std::cerr << "[SnapManager] buildIntersectionReferences exit resultCount="
+              << result.size() << '\n' << std::flush;
     return result;
 }
 
@@ -369,8 +383,18 @@ std::vector<SnapReference> SnapManager::collectReferences(
 {
     std::vector<SnapReference> result;
     int index = 0;
+    std::cerr << "[SnapManager] collectReferences entry owner="
+              << ownerId.toStdString() << " shapeNull=" << shape.IsNull() << '\n'
+              << std::flush;
+    std::cerr << "[SnapManager] vertex loop begin\n" << std::flush;
     for (TopExp_Explorer explorer(shape, TopAbs_VERTEX); explorer.More(); explorer.Next()) {
         ++index;
+        std::cerr << "[SnapManager] vertex index=" << index << '\n' << std::flush;
+        if (explorer.Current().IsNull() || explorer.Current().ShapeType() != TopAbs_VERTEX) {
+            std::cerr << "[SnapManager] invalid vertex topology at index=" << index
+                      << '\n' << std::flush;
+            continue;
+        }
         const auto vertex = TopoDS::Vertex(explorer.Current());
         SnapReference reference;
         reference.ownerId = ownerId;
@@ -382,8 +406,15 @@ std::vector<SnapReference> SnapManager::collectReferences(
         result.push_back(std::move(reference));
     }
     index = 0;
+    std::cerr << "[SnapManager] edge loop begin\n" << std::flush;
     for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
         ++index;
+        std::cerr << "[SnapManager] edge index=" << index << '\n' << std::flush;
+        if (explorer.Current().IsNull() || explorer.Current().ShapeType() != TopAbs_EDGE) {
+            std::cerr << "[SnapManager] invalid edge topology at index=" << index
+                      << '\n' << std::flush;
+            continue;
+        }
         const auto edge = TopoDS::Edge(explorer.Current());
         Standard_Real first = 0.0;
         Standard_Real last = 0.0;
@@ -401,6 +432,8 @@ std::vector<SnapReference> SnapManager::collectReferences(
         const auto firstVertex = TopExp::FirstVertex(edge, Standard_True);
         const auto lastVertex = TopExp::LastVertex(edge, Standard_True);
         if (!firstVertex.IsNull() && !lastVertex.IsNull()) {
+            std::cerr << "[SnapManager] endpoint generation edge index=" << index
+                      << '\n' << std::flush;
             SnapReference start;
             start.ownerId = ownerId;
             start.subshapeId = QStringLiteral("edge:%1:start").arg(index);
@@ -419,6 +452,8 @@ std::vector<SnapReference> SnapManager::collectReferences(
             result.push_back(std::move(end));
         }
         if (!curve.IsNull()) {
+            std::cerr << "[SnapManager] midpoint generation edge index=" << index
+                      << '\n' << std::flush;
             SnapReference midpoint;
             midpoint.ownerId = ownerId;
             midpoint.subshapeId = QStringLiteral("edge:%1:midpoint").arg(index);
@@ -430,6 +465,8 @@ std::vector<SnapReference> SnapManager::collectReferences(
         }
         const auto circle = Handle(Geom_Circle)::DownCast(curve);
         if (!circle.IsNull()) {
+            std::cerr << "[SnapManager] axis generation edge index=" << index
+                      << '\n' << std::flush;
             const gp_Circ data = circle->Circ();
             SnapReference center;
             center.ownerId = ownerId;
@@ -443,8 +480,15 @@ std::vector<SnapReference> SnapManager::collectReferences(
         }
     }
     index = 0;
+    std::cerr << "[SnapManager] face loop begin\n" << std::flush;
     for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
         ++index;
+        std::cerr << "[SnapManager] face index=" << index << '\n' << std::flush;
+        if (explorer.Current().IsNull() || explorer.Current().ShapeType() != TopAbs_FACE) {
+            std::cerr << "[SnapManager] invalid face topology at index=" << index
+                      << '\n' << std::flush;
+            continue;
+        }
         const auto face = TopoDS::Face(explorer.Current());
         BRepGProp_Face properties(face);
         gp_Pnt point;
@@ -456,6 +500,8 @@ std::vector<SnapReference> SnapManager::collectReferences(
         // entering the generic FaceToFace candidate pipeline and falling back
         // to an ambiguous point translation.
         if (frame) {
+            std::cerr << "[SnapManager] face candidate generation index=" << index
+                      << '\n' << std::flush;
             SnapReference reference;
             reference.ownerId = ownerId;
             reference.subshapeId = QStringLiteral("face:%1").arg(index);
@@ -468,6 +514,8 @@ std::vector<SnapReference> SnapManager::collectReferences(
         }
         BRepAdaptor_Surface surface(face, Standard_True);
         if (surface.GetType() == GeomAbs_Cylinder) {
+            std::cerr << "[SnapManager] face axis generation index=" << index
+                      << '\n' << std::flush;
             const gp_Ax1 axis = surface.Cylinder().Axis();
             SnapReference center;
             center.ownerId = ownerId;
@@ -487,6 +535,8 @@ std::vector<SnapReference> SnapManager::collectReferences(
             result.push_back(std::move(axisReference));
         }
     }
+    std::cerr << "[SnapManager] collectReferences exit count=" << result.size()
+              << '\n' << std::flush;
     for (auto& reference : result) {
         if (!reference.shape.IsNull()) {
             reference.geometry = std::make_shared<TopoDS_Shape>(reference.shape);
@@ -529,17 +579,25 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     const std::vector<SnapReference>& targets
 ) const
 {
+    std::cerr << "[SnapManager] buildCandidates entry sources=" << sources.size()
+              << " targets=" << targets.size() << '\n' << std::flush;
     std::vector<SnapCandidate> result;
     std::vector<SnapReference> uniqueSources;
     std::vector<SnapReference> uniqueTargets;
     std::set<QString> sourceKeys;
     std::set<QString> targetKeys;
+    std::size_t sourceIndex = 0;
     for (const auto& source : sources) {
+        std::cerr << "[SnapManager] source dedup index=" << sourceIndex++ << '/'
+                  << sources.size() << '\n' << std::flush;
         if (sourceKeys.insert(referenceKey(source)).second) {
             uniqueSources.push_back(source);
         }
     }
+    std::size_t targetIndex = 0;
     for (const auto& target : targets) {
+        std::cerr << "[SnapManager] target dedup index=" << targetIndex++ << '/'
+                  << targets.size() << '\n' << std::flush;
         if (targetKeys.insert(referenceKey(target)).second) {
             uniqueTargets.push_back(target);
         }
@@ -547,16 +605,30 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
     gLastUniqueSourceReferenceCount = uniqueSources.size();
     gLastUniqueTargetReferenceCount = uniqueTargets.size();
     std::vector<SnapReference> edgeTargets;
+    std::size_t uniqueTargetIndex = 0;
     for (const auto& target : uniqueTargets) {
+        std::cerr << "[SnapManager] edge-target scan index=" << uniqueTargetIndex++
+                  << '/' << uniqueTargets.size() << '\n' << std::flush;
         if (target.type == SnapReferenceType::Edge) edgeTargets.push_back(target);
     }
+    std::cerr << "[SnapManager] before intersection generation edgeTargets="
+              << edgeTargets.size() << '\n' << std::flush;
     for (auto& intersection : buildIntersectionReferences(edgeTargets)) {
+        std::cerr << "[SnapManager] intersection dedup/cache insertion\n" << std::flush;
         if (targetKeys.insert(referenceKey(intersection)).second)
             uniqueTargets.push_back(std::move(intersection));
     }
-    std::size_t sourceIndex = 0;
+    std::cerr << "[SnapManager] after intersection generation uniqueTargets="
+              << uniqueTargets.size() << '\n' << std::flush;
+    sourceIndex = 0;
     for (const auto& source : uniqueSources) {
+        std::cerr << "[SnapManager] candidate source loop index=" << sourceIndex
+                  << '/' << uniqueSources.size() << '\n' << std::flush;
+        std::size_t candidateTargetIndex = 0;
         for (const auto& target : uniqueTargets) {
+            std::cerr << "[SnapManager] candidate target loop source=" << sourceIndex
+                      << " target=" << candidateTargetIndex++ << '/'
+                      << uniqueTargets.size() << '\n' << std::flush;
             // A feature must never snap to its own references. In the viewer
             // this is normally filtered while building the target cache, but
             // keeping the invariant here also protects direct/test callers.
@@ -573,6 +645,8 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
             }
             const auto kind = compatible(source, target);
             if (!kind) continue;
+            std::cerr << "[SnapManager] face/edge/vertex candidate generation source="
+                      << sourceIndex << '\n' << std::flush;
             // Exact edge/face projection is deliberately deferred until a candidate
             // is actually close to the cursor. Doing it here made pattern features
             // turn source x target pairing into thousands of OCCT distance queries.
@@ -590,10 +664,14 @@ std::vector<SnapCandidate> SnapManager::buildCandidates(
                 specificity(*kind),
                 sourceIndex
             });
+            std::cerr << "[SnapManager] candidate cache insertion resultCount="
+                      << result.size() << '\n' << std::flush;
         }
         ++sourceIndex;
     }
     gLastCandidateCount = result.size();
+    std::cerr << "[SnapManager] buildCandidates exit resultCount=" << result.size()
+              << '\n' << std::flush;
     return result;
 }
 
