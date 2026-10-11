@@ -18,6 +18,7 @@
 #include <ifcparse/express.h>
 #include <ifcparse/file.h>
 #include <ifcparse/instance_data.h>
+#include <plugin/plugin.h>
 #endif
 
 namespace cad::import {
@@ -27,6 +28,16 @@ namespace {
 
 using IfcBase = express::base;
 using IfcEntity = express::entity;
+
+void configurePluginSearchPath()
+{
+    static const bool configured = [] {
+        ifcopenshell::plugin::set_search_paths({
+            PARAMETRIC_CAD_IFCOPENSHELL_PLUGIN_DIR});
+        return true;
+    }();
+    Q_UNUSED(configured);
+}
 
 bool excluded(const QString& type)
 {
@@ -317,7 +328,7 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
     Q_UNUSED(progress);
     Q_UNUSED(cancellation);
     result.diagnostics.push_back({ImportSeverity::Error, {}, {},
-        QStringLiteral("IfcOpenShell support is disabled. Configure IfcOpenShell 0.9.0 with "
+        QStringLiteral("IfcOpenShell support is disabled. Configure IfcOpenShell 0.9.x with "
                        "PARAMETRIC_CAD_ENABLE_IFC=ON.")});
     result.fatal = true;
     result.statistics.failedCount = 1;
@@ -325,6 +336,7 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
     return result;
 #else
     try {
+        configurePluginSearchPath();
         if (progress) progress({IfcImportStage::Opening, 0, 0});
         if (cancellation && cancellation()) { result.cancelled = true; return result; }
         QElapsedTimer parse;
@@ -333,7 +345,7 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
         auto file = std::make_unique<ifcopenshell::file>(ifcopenshell::uninitialized_tag{});
         if (!file->initialize(path.toStdString()) || !file->good()) {
             result.diagnostics.push_back({ImportSeverity::Error, {}, {},
-                QStringLiteral("IfcOpenShell 0.9.0 could not open the IFC file")});
+                QStringLiteral("IfcOpenShell 0.9.x could not open the IFC file")});
             result.fatal = true;
             result.statistics.failedCount = 1;
             return result;

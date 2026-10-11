@@ -2,14 +2,21 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-build_dir="$repo_root/build"
+case "$(uname -s)" in
+    Darwin)
+        build_dir="${PARAMETRIC_CAD_BUILD_DIR:-$repo_root/build-macos}"
+        ;;
+    *)
+        build_dir="${PARAMETRIC_CAD_BUILD_DIR:-$repo_root/build}"
+        ;;
+esac
 
 if [[ -n "${PARAMETRIC_CAD_IFCOPENSHELL_ROOT:-}" ]]; then
     ifc_root=$PARAMETRIC_CAD_IFCOPENSHELL_ROOT
 elif [[ -d "$repo_root/../deps/ifcopenshell-v090" ]]; then
     ifc_root="$repo_root/../deps/ifcopenshell-v090"
 else
-    echo "IfcOpenShell 0.9.0 was not found." >&2
+    echo "IfcOpenShell 0.9.x was not found." >&2
     echo "Set PARAMETRIC_CAD_IFCOPENSHELL_ROOT to its install directory." >&2
     exit 1
 fi

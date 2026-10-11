@@ -90,7 +90,8 @@ target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(model_test_support PUBLIC
         PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
-        PARAMETRIC_CAD_IFCOPENSHELL_090=1)
+        PARAMETRIC_CAD_IFCOPENSHELL_090=1
+        PARAMETRIC_CAD_IFCOPENSHELL_PLUGIN_DIR="${PARAMETRIC_CAD_IFC_PLUGIN_DIR}")
     target_include_directories(model_test_support SYSTEM PUBLIC ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
     target_link_libraries(model_test_support PUBLIC
         ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
