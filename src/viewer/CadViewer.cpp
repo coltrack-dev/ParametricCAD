@@ -53,6 +53,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TColStd_ListOfInteger.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <gp_Dir.hxx>
