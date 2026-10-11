@@ -272,14 +272,31 @@ int main()
     const auto boxSnapReferences = snapManager.collectReferences(
         QStringLiteral("box-target"), targetBox);
     trace("after box references");
+    std::cerr << "[push_pull_drag_tests] box references size="
+              << boxSnapReferences.size() << '\n' << std::flush;
+    trace("before box buildCandidates");
     const auto boxCandidates = snapManager.buildCandidates({sourceVertex}, boxSnapReferences);
     trace("after box candidates");
+    std::cerr << "[push_pull_drag_tests] box candidates size="
+              << boxCandidates.size() << '\n' << std::flush;
+    trace("before endpoint count");
     const auto endpointCount = std::count_if(boxCandidates.begin(), boxCandidates.end(),
         [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Endpoint; });
+    trace("after endpoint count");
+    std::cerr << "[push_pull_drag_tests] endpoint count="
+              << endpointCount << '\n' << std::flush;
+    trace("before midpoint count");
     const auto midpointCount = std::count_if(boxCandidates.begin(), boxCandidates.end(),
         [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Midpoint; });
+    trace("after midpoint count");
+    std::cerr << "[push_pull_drag_tests] midpoint count="
+              << midpointCount << '\n' << std::flush;
+    trace("before endpoint assertion");
     assert(endpointCount == 8);
+    trace("after endpoint assertion");
+    trace("before midpoint assertion");
     assert(midpointCount == 12);
+    trace("after midpoint assertion");
 
     const auto arc = BRepBuilderAPI_MakeEdge(
         gp_Circ(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), 5.0),
