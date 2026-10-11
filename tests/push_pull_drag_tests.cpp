@@ -28,6 +28,18 @@ int main()
 {
     using namespace cad::viewer;
 
+    const auto trace = [](const char* stage) {
+        std::cerr << "[push_pull_drag_tests] " << stage << '\n' << std::flush;
+    };
+    struct TeardownTrace final {
+        ~TeardownTrace()
+        {
+            std::cerr << "[push_pull_drag_tests] END teardown\n" << std::flush;
+        }
+    } teardownTrace;
+
+    trace("BEGIN setup");
+
     const auto state = makePushPullDragState(
         gp_Pnt(0.0, 0.0, 0.0),
         gp_Dir(0.0, 0.0, 1.0),
@@ -203,23 +215,33 @@ int main()
     }
     std::cout << "cached SnapManager::findCandidate x1000: "
               << cachedTimer.elapsed() << " ms\n";
+    std::cout.flush();
+    trace("after benchmark");
     assert(cachedTimer.elapsed() < 1000);
+
+    trace("BEGIN face candidate");
     auto faceTarget = *face;
     faceTarget.screenPoint = QPointF(0.0, 0.0);
     auto faceCandidate = snapManager.findCandidate(
         {sourceVertex}, {faceTarget}, std::nullopt);
     assert(faceCandidate && faceCandidate->kind == SnapKind::VertexToFace);
+    trace("after face candidate");
 
+    trace("BEGIN face-to-face candidate");
     auto sourceFace = *face;
     sourceFace.ownerId = QStringLiteral("moving");
     sourceFace.screenPoint = QPointF(0.0, 0.0);
     auto faceToFace = snapManager.findCandidate(
         {sourceFace}, {faceTarget}, std::nullopt);
     assert(faceToFace && faceToFace->kind == SnapKind::FaceToFace);
+    trace("after face-to-face candidate");
 
+    trace("BEGIN cylinder setup");
     const auto cylinder = BRepPrimAPI_MakeCylinder(5.0, 10.0).Shape();
+    trace("after cylinder creation");
     const auto cylinderReferences = snapManager.collectReferences(
         QStringLiteral("cylinder"), cylinder);
+    trace("after cylinder references");
     const auto axis = std::find_if(cylinderReferences.begin(), cylinderReferences.end(),
         [](const auto& ref) { return ref.type == SnapReferenceType::Axis; });
     const auto center = std::find_if(cylinderReferences.begin(), cylinderReferences.end(),
@@ -233,6 +255,7 @@ int main()
     auto axisCandidate = snapManager.findCandidate(
         {sourceAxis}, {targetAxis}, std::nullopt);
     assert(axisCandidate && axisCandidate->kind == SnapKind::AxisToAxis);
+    trace("after axis candidate");
     auto sourceCenter = *center;
     sourceCenter.ownerId = QStringLiteral("moving");
     sourceCenter.screenPoint = QPointF(0.0, 0.0);
@@ -241,12 +264,16 @@ int main()
     auto centerCandidate = snapManager.findCandidate(
         {sourceCenter}, {targetCenter}, std::nullopt);
     assert(centerCandidate && centerCandidate->kind == SnapKind::CenterToCenter);
+    trace("after center candidate");
 
     // Topology-aware endpoint/midpoint references are generated once from the
     // cached model geometry and deduplicated before candidate pairing.
+    trace("BEGIN box topology references");
     const auto boxSnapReferences = snapManager.collectReferences(
         QStringLiteral("box-target"), targetBox);
+    trace("after box references");
     const auto boxCandidates = snapManager.buildCandidates({sourceVertex}, boxSnapReferences);
+    trace("after box candidates");
     const auto endpointCount = std::count_if(boxCandidates.begin(), boxCandidates.end(),
         [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Endpoint; });
     const auto midpointCount = std::count_if(boxCandidates.begin(), boxCandidates.end(),
@@ -257,7 +284,9 @@ int main()
     const auto arc = BRepBuilderAPI_MakeEdge(
         gp_Circ(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), 5.0),
         0.0, 1.5707963267948966).Edge();
+    trace("after arc creation");
     const auto arcReferences = snapManager.collectReferences(QStringLiteral("arc"), arc);
+    trace("after arc references");
     const auto arcMidpoint = std::find_if(arcReferences.begin(), arcReferences.end(),
         [](const auto& reference) { return reference.type == SnapReferenceType::Midpoint; });
     assert(arcMidpoint != arcReferences.end());
@@ -270,8 +299,10 @@ int main()
         gp_Pnt(0.0, -5.0, 0.0), gp_Pnt(0.0, 5.0, 0.0)).Edge();
     auto crossingReferences = snapManager.collectReferences(QStringLiteral("crossing-a"), crossingA);
     const auto crossingBReferences = snapManager.collectReferences(QStringLiteral("crossing-b"), crossingB);
+    trace("after crossing references");
     crossingReferences.insert(crossingReferences.end(), crossingBReferences.begin(), crossingBReferences.end());
     const auto intersectionCandidates = snapManager.buildCandidates({sourceVertex}, crossingReferences);
+    trace("after intersection candidates");
     const auto intersection = std::find_if(intersectionCandidates.begin(), intersectionCandidates.end(),
         [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Intersection; });
     assert(intersection != intersectionCandidates.end());
@@ -285,6 +316,7 @@ int main()
     const auto disjointBReferences = snapManager.collectReferences(QStringLiteral("disjoint-b"), disjointB);
     disjointReferences.insert(disjointReferences.end(), disjointBReferences.begin(), disjointBReferences.end());
     const auto disjointCandidates = snapManager.buildCandidates({sourceVertex}, disjointReferences);
+    trace("after disjoint candidates");
     assert(std::none_of(disjointCandidates.begin(), disjointCandidates.end(),
         [](const auto& candidate) { return candidate.target.type == SnapReferenceType::Intersection; }));
 
@@ -306,6 +338,7 @@ int main()
     const auto priority = snapManager.findCandidate(
         {endpointSource}, {midpointTarget, endpointTarget}, std::nullopt);
     assert(priority && priority->kind == SnapKind::Endpoint);
+    trace("after priority candidate");
 
     gp_Trsf rawTranslation;
     rawTranslation.SetTranslation(gp_Vec(3.0, 0.0, 0.0));
@@ -317,11 +350,13 @@ int main()
     auto exact = snapManager.findCandidate(
         exactCandidates, rawTranslation, {}, std::nullopt);
     assert(exact);
+    trace("after exact candidate");
     gp_Trsf committed = exact->correction;
     committed.Multiply(rawTranslation);
     gp_Pnt committedPoint = endpointSource.point;
     committedPoint.Transform(committed);
     assert(committedPoint.Distance(transformedEndpoint.point) < 1.0e-9);
 
+    trace("before cleanup");
     return 0;
 }
