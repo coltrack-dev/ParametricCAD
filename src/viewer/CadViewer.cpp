@@ -23,10 +23,12 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QShowEvent>
 #include <QToolBar>
 #include <QToolButton>
 #include <QWheelEvent>
+#include <QWindow>
 
 #include <AIS_DisplayMode.hxx>
 #include <TCollection_ExtendedString.hxx>
@@ -135,6 +137,17 @@ bool makeViewRay(
     gp_Dir& direction
 )
 {
+    Standard_Integer windowWidth = 0;
+    Standard_Integer windowHeight = 0;
+    if (!view.IsNull() && !view->Window().IsNull()) {
+        view->Window()->Size(windowWidth, windowHeight);
+    }
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        qInfo().noquote() << QString(
+            "[COORD] ConvertWithProj input=(%1,%2) occtWindow=(%3,%4)")
+            .arg(position.x()).arg(position.y())
+            .arg(windowWidth).arg(windowHeight);
+    }
     Standard_Real x = 0.0;
     Standard_Real y = 0.0;
     Standard_Real z = 0.0;
@@ -145,6 +158,11 @@ bool makeViewRay(
         position.x(), position.y(),
         x, y, z, vx, vy, vz
     );
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        qInfo().noquote() << QString(
+            "[COORD] ConvertWithProj output origin=(%1,%2,%3) direction=(%4,%5,%6)")
+            .arg(x).arg(y).arg(z).arg(vx).arg(vy).arg(vz);
+    }
     const gp_Vec rayDirection(vx, vy, vz);
     if (rayDirection.Magnitude() <= 1.0e-9) {
         return false;
@@ -152,6 +170,54 @@ bool makeViewRay(
     origin.SetCoord(x, y, z);
     direction = gp_Dir(rayDirection);
     return true;
+}
+
+void traceMouseCoordinates(
+    const char* stage,
+    const CadViewer& viewer,
+    const QMouseEvent& event,
+    const QPoint& localPosition,
+    const Handle(V3d_View)& view)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) return;
+
+    Standard_Integer windowWidth = 0;
+    Standard_Integer windowHeight = 0;
+    if (!view.IsNull() && !view->Window().IsNull()) {
+        view->Window()->Size(windowWidth, windowHeight);
+    }
+    const auto window = viewer.windowHandle();
+    const auto screen = viewer.screen();
+    qInfo().noquote() << QString(
+        "[COORD] %1 local=(%2,%3) global=(%4,%5) widget=(%6,%7) "
+        "dprWidget=%8 dprWindow=%9 dprScreen=%10 occtWindow=(%11,%12) "
+        "passedOcct=(%2,%3)")
+        .arg(QString::fromLatin1(stage))
+        .arg(localPosition.x()).arg(localPosition.y())
+        .arg(event.globalPosition().x()).arg(event.globalPosition().y())
+        .arg(viewer.width()).arg(viewer.height())
+        .arg(viewer.devicePixelRatioF(), 0, 'f', 3)
+        .arg(window ? window->devicePixelRatio() : 0.0, 0, 'f', 3)
+        .arg(screen ? screen->devicePixelRatio() : 0.0, 0, 'f', 3)
+        .arg(windowWidth).arg(windowHeight);
+}
+
+void traceOcctMoveTo(
+    const char* stage,
+    const QPoint& position,
+    const Handle(V3d_View)& view)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) return;
+    Standard_Integer windowWidth = 0;
+    Standard_Integer windowHeight = 0;
+    if (!view.IsNull() && !view->Window().IsNull()) {
+        view->Window()->Size(windowWidth, windowHeight);
+    }
+    qInfo().noquote() << QString(
+        "[COORD] %1 AIS_InteractiveContext::MoveTo passed=(%2,%3) occtWindow=(%4,%5)")
+        .arg(QString::fromLatin1(stage))
+        .arg(position.x()).arg(position.y())
+        .arg(windowWidth).arg(windowHeight);
 }
 
 QPointF projectWorldPoint(
@@ -1768,6 +1834,19 @@ void CadViewer::resizeEvent(QResizeEvent* event)
 
     if (initialized_) {
         view_->MustBeResized();
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+            Standard_Integer windowWidth = 0;
+            Standard_Integer windowHeight = 0;
+            view_->Window()->Size(windowWidth, windowHeight);
+            qInfo().noquote() << QString(
+                "[COORD] resize widget=(%1,%2) dprWidget=%3 dprWindow=%4 "
+                "dprScreen=%5 occtWindow=(%6,%7)")
+                .arg(width()).arg(height())
+                .arg(devicePixelRatioF(), 0, 'f', 3)
+                .arg(windowHandle() ? windowHandle()->devicePixelRatio() : 0.0, 0, 'f', 3)
+                .arg(screen() ? screen()->devicePixelRatio() : 0.0, 0, 'f', 3)
+                .arg(windowWidth).arg(windowHeight);
+        }
         invalidateSnapProjectionCache("CAMERA_CHANGED: viewport resized");
     }
 
@@ -3653,6 +3732,7 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
 {
     lastMousePosition_ =
         event->position().toPoint();
+    traceMouseCoordinates("mousePress", *this, *event, lastMousePosition_, view_);
     mousePressPosition_ = lastMousePosition_;
     interactionMode_ = InteractionMode::None;
     clearAxisHover();
@@ -3685,6 +3765,7 @@ void CadViewer::mousePressEvent(QMouseEvent* event)
         if (sketchPreviewTool_ != SketchPreviewTool::Trim
             && sketchPreviewTool_ != SketchPreviewTool::Extend
             && !context_.IsNull()) {
+            traceOcctMoveTo("sketch mousePress", lastMousePosition_, view_);
             context_->MoveTo(lastMousePosition_.x(), lastMousePosition_.y(), view_, Standard_False);
             const auto detected = context_->HasDetected()
                 ? context_->DetectedInteractive()
@@ -3890,12 +3971,14 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
     const QPoint currentPosition =
         event->position().toPoint();
+    traceMouseCoordinates("mouseMove", *this, *event, currentPosition, view_);
 
     if (sketchLinePickSketch_ && event->buttons() == Qt::NoButton) {
         updateSketchLinePickHover(currentPosition);
     }
 
     if (sketchMode_ && sketchPreviewTool_ == SketchPreviewTool::None && !context_.IsNull()) {
+        traceOcctMoveTo("sketch mouseMove", currentPosition, view_);
         context_->MoveTo(currentPosition.x(), currentPosition.y(), view_, Standard_False);
         std::string hovered;
         const auto detected = context_->HasDetected()
@@ -4121,6 +4204,8 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
 
 void CadViewer::mouseReleaseEvent(QMouseEvent* event)
 {
+    traceMouseCoordinates(
+        "mouseRelease", *this, *event, event->position().toPoint(), view_);
     if ((sketchLinePickSketch_ || sketchLinePickMousePress_)
         && event->button() == Qt::LeftButton) {
         sketchLinePickMousePress_ = false;

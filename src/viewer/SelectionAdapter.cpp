@@ -7,6 +7,8 @@
 
 #include <utility>
 
+#include <QDebug>
+
 namespace cad::viewer {
 
 OcctSelectionAdapter::OcctSelectionAdapter(
@@ -36,6 +38,15 @@ void OcctSelectionAdapter::moveTo(
 ) const
 {
     if (context_.IsNull() || view.IsNull()) return;
+
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        Standard_Integer width = 0;
+        Standard_Integer height = 0;
+        if (!view->Window().IsNull()) view->Window()->Size(width, height);
+        qInfo().noquote() << QString(
+            "[COORD] AIS_InteractiveContext::MoveTo input=(%1,%2) occtWindow=(%3,%4)")
+            .arg(position.x()).arg(position.y()).arg(width).arg(height);
+    }
 
     context_->MoveTo(
         position.x(),

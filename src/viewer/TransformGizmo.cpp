@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include <QDebug>
+
 namespace cad::viewer {
 
 namespace
@@ -155,11 +157,22 @@ TransformHandle TransformGizmo::hitTest(
     Standard_Integer width = 0;
     Standard_Integer height = 0;
     view->Window()->Size(width, height);
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        qInfo().noquote() << QString(
+            "[COORD] TransformGizmo::hitTest input=(%1,%2) occtWindow=(%3,%4)")
+            .arg(position.x()).arg(position.y()).arg(width).arg(height);
+    }
     const QPointF point(position.x(), height - position.y());
     std::vector<ScreenHandleGeometry> geometries;
     geometries.reserve(parts_.size());
     const auto screenPoint = [&](const gp_Pnt& worldPoint) {
         const gp_Pnt projected = project(worldPoint, view);
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+            qInfo().noquote() << QString(
+                "[COORD] TransformGizmo::Convert world=(%1,%2,%3) screen=(%4,%5)")
+                .arg(worldPoint.X()).arg(worldPoint.Y()).arg(worldPoint.Z())
+                .arg(projected.X()).arg(projected.Y());
+        }
         return QPointF(projected.X(), height - projected.Y());
     };
     for (const auto& part : parts_) {
