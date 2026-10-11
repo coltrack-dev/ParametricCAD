@@ -12,6 +12,7 @@
 #include <GeomAPI_ExtremaCurveCurve.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 
 #include <cmath>
@@ -37,6 +38,27 @@ std::size_t gLastCollectedReferenceCount = 0;
 std::size_t gLastUniqueSourceReferenceCount = 0;
 std::size_t gLastUniqueTargetReferenceCount = 0;
 std::size_t gLastCandidateCount = 0;
+
+template <typename Hasher>
+auto diagnosticShapeHash(const TopoDS_Shape& shape, int)
+    -> decltype(Hasher{}(shape), std::size_t{})
+{
+    return static_cast<std::size_t>(Hasher{}(shape));
+}
+
+template <typename Hasher>
+std::size_t diagnosticShapeHash(const TopoDS_Shape& shape, long)
+{
+    // OCCT versions predating the functor call expose the same hasher as a
+    // static function. Keep Linux/macOS builds using those versions
+    // compatible while preferring the OCCT 7.9 API above.
+    return static_cast<std::size_t>(Hasher::HashCode(shape, 1000003));
+}
+
+std::size_t diagnosticShapeHash(const TopoDS_Shape& shape)
+{
+    return diagnosticShapeHash<TopTools_ShapeMapHasher>(shape, 0);
+}
 
 QString referenceKey(const SnapReference& reference)
 {
@@ -238,10 +260,10 @@ std::optional<TopoDS_Edge> edgeShape(const SnapReference& reference)
         : reference.geometry ? reference.geometry.get() : nullptr;
     if (!shape || shape->IsNull() || shape->ShapeType() != TopAbs_EDGE) return std::nullopt;
     std::cerr << "[SnapManager] before TopoDS::Edge cast hash="
-              << shape->HashCode(1000003) << '\n' << std::flush;
+              << diagnosticShapeHash(*shape) << '\n' << std::flush;
     const auto edge = TopoDS::Edge(*shape);
     std::cerr << "[SnapManager] after TopoDS::Edge cast hash="
-              << edge.HashCode(1000003) << '\n' << std::flush;
+              << diagnosticShapeHash(edge) << '\n' << std::flush;
     return edge;
 }
 
@@ -254,7 +276,7 @@ void logEdgeDetails(const char* label, const TopoDS_Edge& edge,
               << " ShapeType=" << static_cast<int>(edge.ShapeType())
               << " Orientation=" << static_cast<int>(edge.Orientation())
               << " Degenerated=" << BRep_Tool::Degenerated(edge)
-              << " hash=" << edge.HashCode(1000003)
+              << " hash=" << diagnosticShapeHash(edge)
               << " curveNull=" << curve.IsNull()
               << " range=[" << first << ',' << last << ']';
     if (!curve.IsNull()) {
