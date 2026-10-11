@@ -237,7 +237,39 @@ std::optional<TopoDS_Edge> edgeShape(const SnapReference& reference)
         ? &reference.shape
         : reference.geometry ? reference.geometry.get() : nullptr;
     if (!shape || shape->IsNull() || shape->ShapeType() != TopAbs_EDGE) return std::nullopt;
-    return TopoDS::Edge(*shape);
+    std::cerr << "[SnapManager] before TopoDS::Edge cast hash="
+              << shape->HashCode(1000003) << '\n' << std::flush;
+    const auto edge = TopoDS::Edge(*shape);
+    std::cerr << "[SnapManager] after TopoDS::Edge cast hash="
+              << edge.HashCode(1000003) << '\n' << std::flush;
+    return edge;
+}
+
+void logEdgeDetails(const char* label, const TopoDS_Edge& edge,
+                    const Handle(Geom_Curve)& curve, const Standard_Real first,
+                    const Standard_Real last)
+{
+    std::cerr << "[SnapManager] " << label
+              << " IsNull=" << edge.IsNull()
+              << " ShapeType=" << static_cast<int>(edge.ShapeType())
+              << " Orientation=" << static_cast<int>(edge.Orientation())
+              << " Degenerated=" << BRep_Tool::Degenerated(edge)
+              << " hash=" << edge.HashCode(1000003)
+              << " curveNull=" << curve.IsNull()
+              << " range=[" << first << ',' << last << ']';
+    if (!curve.IsNull()) {
+        std::cerr << " curveType=" << curve->DynamicType()->Name();
+    }
+    const auto firstVertex = TopExp::FirstVertex(edge, Standard_True);
+    const auto lastVertex = TopExp::LastVertex(edge, Standard_True);
+    if (!firstVertex.IsNull() && !lastVertex.IsNull()) {
+        const auto firstPoint = BRep_Tool::Pnt(firstVertex);
+        const auto lastPoint = BRep_Tool::Pnt(lastVertex);
+        std::cerr << " endpoints=(" << firstPoint.X() << ',' << firstPoint.Y()
+                  << ',' << firstPoint.Z() << ")->(" << lastPoint.X() << ','
+                  << lastPoint.Y() << ',' << lastPoint.Z() << ')';
+    }
+    std::cerr << '\n' << std::flush;
 }
 
 std::optional<cad::topology::TopologicalReference> makeTopologyReference(
@@ -269,8 +301,18 @@ std::vector<SnapReference> buildIntersectionReferences(
         if (!edgeA) continue;
         Standard_Real firstA = 0.0;
         Standard_Real lastA = 0.0;
+        std::cerr << "[SnapManager] before BRep_Tool::Curve first=" << first
+                  << '\n' << std::flush;
         const auto curveA = BRep_Tool::Curve(*edgeA, firstA, lastA);
-        if (curveA.IsNull()) continue;
+        std::cerr << "[SnapManager] after BRep_Tool::Curve first=" << first
+                  << '\n' << std::flush;
+        logEdgeDetails("edgeA", *edgeA, curveA, firstA, lastA);
+        if (curveA.IsNull() || BRep_Tool::Degenerated(*edgeA)
+            || !std::isfinite(firstA) || !std::isfinite(lastA) || firstA >= lastA) {
+            std::cerr << "[SnapManager] skipping invalid first edge index=" << first
+                      << '\n' << std::flush;
+            continue;
+        }
         for (std::size_t second = first + 1; second < edges.size(); ++second) {
             std::cerr << "[SnapManager] intersection pair first=" << first
                       << " second=" << second << '/' << edges.size()
@@ -283,18 +325,51 @@ std::vector<SnapReference> buildIntersectionReferences(
             ++gLastNearbyEdgePairCount;
             Standard_Real firstB = 0.0;
             Standard_Real lastB = 0.0;
+            std::cerr << "[SnapManager] before BRep_Tool::Curve second=" << second
+                      << '\n' << std::flush;
             const auto curveB = BRep_Tool::Curve(*edgeB, firstB, lastB);
-            if (curveB.IsNull()) continue;
+            std::cerr << "[SnapManager] after BRep_Tool::Curve second=" << second
+                      << '\n' << std::flush;
+            logEdgeDetails("edgeB", *edgeB, curveB, firstB, lastB);
+            if (curveB.IsNull() || BRep_Tool::Degenerated(*edgeB)
+                || !std::isfinite(firstB) || !std::isfinite(lastB) || firstB >= lastB) {
+                std::cerr << "[SnapManager] skipping invalid second edge index=" << second
+                      << '\n' << std::flush;
+                continue;
+            }
+            const bool sameTShape = edgeA->TShape() == edgeB->TShape();
+            std::cerr << "[SnapManager] edge pair same underlying TShape="
+                      << sameTShape << " first=" << first << " second=" << second
+                      << '\n' << std::flush;
+            if (sameTShape) {
+                std::cerr << "[SnapManager] skipping same underlying TShape first="
+                          << first << " second=" << second << '\n' << std::flush;
+                continue;
+            }
             try {
                 std::cerr << "[SnapManager] extrema generation first=" << first
                           << " second=" << second << '\n' << std::flush;
                 const GeomAPI_ExtremaCurveCurve extrema(
                     curveA, curveB, firstA, lastA, firstB, lastB);
-                for (int index = 1; index <= extrema.NbExtrema(); ++index) {
+                std::cerr << "[SnapManager] extrema construction complete first=" << first
+                          << " second=" << second << '\n' << std::flush;
+                const int extremaCount = extrema.NbExtrema();
+                std::cerr << "[SnapManager] extrema NbExtrema=" << extremaCount
+                          << " first=" << first << " second=" << second
+                          << '\n' << std::flush;
+                for (int index = 1; index <= extremaCount; ++index) {
+                    std::cerr << "[SnapManager] extrema solution index=" << index
+                              << '/' << extremaCount << '\n' << std::flush;
+                    std::cerr << "[SnapManager] before extrema.Distance index=" << index
+                              << '\n' << std::flush;
                     if (extrema.Distance(index) > IntersectionTolerance) continue;
+                    std::cerr << "[SnapManager] before extrema.Points index=" << index
+                              << '\n' << std::flush;
                     gp_Pnt pointA;
                     gp_Pnt pointB;
                     extrema.Points(index, pointA, pointB);
+                    std::cerr << "[SnapManager] after extrema.Points index=" << index
+                              << '\n' << std::flush;
                     SnapReference reference;
                     reference.ownerId = edges[first].ownerId == edges[second].ownerId
                         ? edges[first].ownerId
