@@ -23,6 +23,7 @@
 #include <QTreeWidgetItemIterator>
 #include <QMouseEvent>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <AIS_Triangulation.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <TopExp_Explorer.hxx>
@@ -456,6 +457,42 @@ private slots:
         QVERIFY(modes.IsEmpty());
         viewer.exitSketchMode();
         QCOMPARE(viewer.managedSelectionModes_.at(id), AIS_Shape::SelectionMode(TopAbs_FACE));
+        modes.Clear();
+        viewer.context_->ActivatedModes(viewer.featureObjects_.at(id), modes);
+        QCOMPARE(modes.Extent(), 1);
+        QCOMPARE(modes.First(), AIS_Shape::SelectionMode(TopAbs_FACE));
+    }
+
+    void xRayKeepsFaceSelectionAndCaePresentationIsNotSelectable()
+    {
+        CadViewer viewer;
+        const Handle(OpenGl_GraphicDriver) driver = new OpenGl_GraphicDriver(
+            Handle(Aspect_DisplayConnection)(), Standard_False);
+        viewer.viewer_ = new V3d_Viewer(driver);
+        viewer.context_ = new AIS_InteractiveContext(viewer.viewer_);
+        viewer.initialized_ = true;
+
+        const QString id = "xray-box";
+        viewer.display(BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape(), id, false);
+        viewer.setSelectionMode(CadViewer::SelectionMode::Face);
+        viewer.setXRayEnabled(true);
+
+        TColStd_ListOfInteger modes;
+        viewer.context_->ActivatedModes(viewer.featureObjects_.at(id), modes);
+        QCOMPARE(modes.Extent(), 1);
+        QCOMPARE(modes.First(), AIS_Shape::SelectionMode(TopAbs_FACE));
+
+        cad::cae::VolumeMesh mesh;
+        mesh.nodes = {{0, 0.0, 0.0, 0.0}, {1, 1.0, 0.0, 0.0},
+                      {2, 0.0, 1.0, 0.0}, {3, 0.0, 0.0, 1.0}};
+        mesh.tetrahedra = {{0, {0, 1, 2, 3}}};
+        mesh.surfaceTriangles = {{{0, 1, 2}, 1, 0}};
+        viewer.showMesh(mesh);
+        modes.Clear();
+        viewer.context_->ActivatedModes(viewer.meshObject_, modes);
+        QVERIFY(modes.IsEmpty());
+
+        viewer.setXRayEnabled(false);
         modes.Clear();
         viewer.context_->ActivatedModes(viewer.featureObjects_.at(id), modes);
         QCOMPARE(modes.Extent(), 1);

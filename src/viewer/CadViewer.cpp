@@ -29,6 +29,7 @@
 #include <QToolButton>
 #include <QWheelEvent>
 #include <QWindow>
+#include <QThread>
 
 #include <AIS_DisplayMode.hxx>
 #include <AIS_Triangulation.hxx>
@@ -56,6 +57,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TColStd_ListOfInteger.hxx>
 #include <TColStd_HArray1OfInteger.hxx>
 #include <TopoDS.hxx>
@@ -598,8 +600,11 @@ CadViewer::CadViewer(
 void CadViewer::traceSelectionLifecycle(const QString& message) const
 {
     if (!selectionTraceEnabled_) return;
-    const QString line = QString("[SEL %1] %2")
+    const QString line = QString("[SEL %1 tid=%2 mode=%3 xray=%4] %5")
         .arg(++selectionTraceSequence_, 5, 10, QLatin1Char('0'))
+        .arg(QString::asprintf("%p", QThread::currentThreadId()))
+        .arg(selectionModeName(selectionMode_))
+        .arg(xRayEnabled_ ? 1 : 0)
         .arg(message);
     const QByteArray encoded = line.toLocal8Bit();
     std::fprintf(stderr, "%s\n", encoded.constData());
@@ -2672,6 +2677,9 @@ void CadViewer::updateManagedShape(const QString& featureId,
 {
     // Release selection while the old shape is still intact. The cache must
     // never describe selection structures belonging to a previous shape.
+    if (selectionAdapter_) {
+        selectionAdapter_->clearSelectedPresentation(object);
+    }
     releaseManagedSelection(featureId);
     object->SetShape(shape);
     context_->Redisplay(object, Standard_False);
@@ -2817,6 +2825,9 @@ void CadViewer::showMesh(const cad::cae::VolumeMesh& mesh)
     meshObject_->SetColor(Quantity_Color(Quantity_NOC_CYAN1));
     meshObject_->SetTransparency(0.35);
     context_->Display(meshObject_, Standard_False);
+    // CAE presentations are visualization-only. They must not become
+    // detected owners and steal CAD Face/Edge/Vertex picks.
+    context_->Deactivate(meshObject_);
     meshVisible_ = true;
     context_->UpdateCurrentViewer();
 }
@@ -2867,6 +2878,7 @@ void CadViewer::showMeshScalar(
     meshObject_->SetColors(colors);
     meshObject_->SetTransparency(0.15);
     context_->Display(meshObject_, Standard_False);
+    context_->Deactivate(meshObject_);
     meshVisible_ = true;
     context_->UpdateCurrentViewer();
 }
@@ -3191,11 +3203,28 @@ std::vector<cad::topology::TopologicalReference> CadViewer::captureTopologySelec
 
     for (const auto& hit : selectionAdapter_->selectedHits()) {
         if (!hit.hasSubshape() || hit.shape.IsNull()) continue;
+        if (!cad::viewer::OcctSelectionAdapter::isValidSubshapeHit(hit)) {
+            traceSelectionLifecycle(QString("reject topology capture feature=%1 reason=stale subshape")
+                .arg(hit.item.featureId));
+            continue;
+        }
         const auto feature = body.findFeature(hit.item.featureId.toStdString());
         if (!feature || feature->shape().IsNull()) continue;
+        TopTools_IndexedMapOfShape currentSubshapes;
+        TopExp::MapShapes(feature->shape(), hit.shape.ShapeType(), currentSubshapes);
+        if (currentSubshapes.FindIndex(hit.shape) <= 0) {
+            traceSelectionLifecycle(QString("reject topology capture feature=%1 reason=not in current feature shape")
+                .arg(hit.item.featureId));
+            continue;
+        }
         try {
-            result.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
-                feature->id(), feature->shape(), hit.shape));
+            const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+                feature->id(), feature->shape(), hit.shape);
+            result.push_back(reference);
+            traceSelectionLifecycle(QString("topology capture success feature=%1 kind=%2 index=%3")
+                .arg(hit.item.featureId)
+                .arg(static_cast<int>(hit.item.kind))
+                .arg(reference.transientIndex.value_or(0)));
         } catch (const Standard_Failure& failure) {
             qCWarning(pcadViewerLog) << "failed to capture topology"
                                      << hit.item.featureId
@@ -3435,6 +3464,11 @@ void CadViewer::setXRayEnabled(bool enabled)
         context_->Redisplay(pushPullPreview_, Standard_False);
     }
 
+    // Transparency changes can rebuild presentation-sensitive selection data
+    // on different OCCT backends. Reconcile the requested CAD mode explicitly
+    // after the X-Ray transition instead of relying on the old activation.
+    selectionActivationDirty_ = true;
+    applySelectionMode();
     context_->UpdateCurrentViewer();
     syncToolBarState();
 }
@@ -3454,9 +3488,16 @@ void CadViewer::updateHover(const QPoint& position)
         recordPerformanceSample("hover MoveTo", timer.elapsed());
         const auto detected = selectionAdapter_->detectedHit();
         if (!detected) {
+            traceSelectionLifecycle(QString("hover no detected owner position=(%1,%2)")
+                .arg(position.x()).arg(position.y()));
             selectionState_.hovered.reset();
         } else if (!selectionState_.hovered
                    || !selectionState_.hovered->hasSameTransientIdentity(*detected)) {
+            traceSelectionLifecycle(QString("hover detected feature=%1 kind=%2 index=%3 presentation=%4")
+                .arg(detected->item.featureId)
+                .arg(static_cast<int>(detected->item.kind))
+                .arg(detected->item.currentSubshapeIndex.value_or(0))
+                .arg(selectionObjectPointer(detected->presentation)));
             selectionState_.hovered = detected;
         }
     }

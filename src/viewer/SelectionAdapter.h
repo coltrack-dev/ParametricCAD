@@ -41,6 +41,10 @@ public:
 
     std::optional<SelectionHit> validatedSelectedObjectHit() const;
 
+    // Remove only selected owners belonging to one presentation. This keeps
+    // selections on unrelated features intact when an AIS_Shape is rebuilt.
+    void clearSelectedPresentation(const Handle(AIS_InteractiveObject)& presentation) const;
+
     bool isValidObjectHit(const SelectionHit& hit) const;
 
     static bool isValidSubshapeHit(const SelectionHit& hit);

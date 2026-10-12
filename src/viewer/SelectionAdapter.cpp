@@ -164,6 +164,22 @@ std::optional<SelectionHit> OcctSelectionAdapter::validatedSelectedObjectHit() c
     return hits.front();
 }
 
+void OcctSelectionAdapter::clearSelectedPresentation(
+    const Handle(AIS_InteractiveObject)& presentation) const
+{
+    if (context_.IsNull() || presentation.IsNull()) return;
+
+    std::vector<Handle(SelectMgr_EntityOwner)> owners;
+    for (context_->InitSelected(); context_->MoreSelected(); context_->NextSelected()) {
+        if (context_->SelectedInteractive() == presentation) {
+            owners.push_back(context_->SelectedOwner());
+        }
+    }
+    for (const auto& owner : owners) {
+        if (!owner.IsNull()) context_->SetSelectedState(owner, Standard_False);
+    }
+}
+
 std::optional<SelectionHit> OcctSelectionAdapter::makeHit(
     const Handle(AIS_InteractiveObject)& presentation,
     const TopoDS_Shape& selectedShape,
