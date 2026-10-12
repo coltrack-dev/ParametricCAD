@@ -9,6 +9,7 @@
 #include "application/ProjectController.h"
 #include "application/VisibilityManager.h"
 #include "application/BimNavigationModel.h"
+#include "application/SimulationController.h"
 #include "application/InteractiveOperation.h"
 #include "model/TopologicalReference.h"
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
@@ -74,6 +75,11 @@ private:
     void saveWindowLayout();
     void createParametricPanel();
     void createBimPanel();
+    void createSimulationPanel();
+    void generateMesh();
+    void finishMeshGeneration();
+    void cancelMeshGeneration();
+    void updateMeshInspector();
     void updateBimInspector(const QStringList& featureIds);
     void refreshBimNavigation();
     void refreshModelView(bool fitView = false);
@@ -252,6 +258,8 @@ private:
 #endif
     QAction* bimNavigatorAction_{nullptr};
     QAction* bimInspectorAction_{nullptr};
+    QAction* generateMeshAction_{nullptr};
+    QAction* meshInspectorAction_{nullptr};
     QAction* createSketchAction_{nullptr};
     QAction* editSketchAction_{nullptr};
     QAction* sketchLineAction_{nullptr};
@@ -345,6 +353,21 @@ private:
     QPushButton* sketchChamferCancel_{nullptr};
     BimNavigationPanel* bimNavigationPanel_{nullptr};
     BimInspectorPanel* bimInspectorPanel_{nullptr};
+    QDockWidget* meshInspectorDock_{nullptr};
+    QDoubleSpinBox* meshMinimumSize_{nullptr};
+    QDoubleSpinBox* meshMaximumSize_{nullptr};
+    QComboBox* meshDisplayMode_{nullptr};
+    QLabel* meshStatisticsLabel_{nullptr};
+    QPushButton* meshGenerateButton_{nullptr};
+    QPushButton* meshCancelButton_{nullptr};
+    QPushButton* meshShowButton_{nullptr};
+    QPushButton* meshHideButton_{nullptr};
+    QPushButton* meshDeleteButton_{nullptr};
+    cad::application::SimulationController simulation_;
+    QFutureWatcher<std::shared_ptr<cad::cae::MeshGenerationResult>> meshWatcher_;
+    std::shared_ptr<std::atomic_bool> meshCancelRequested_;
+    QString meshSourceFeatureId_;
+    bool meshGenerating_{false};
     cad::application::BimNavigationModel bimNavigationModel_;
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;
     QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>> projectLoadWatcher_;

@@ -31,6 +31,7 @@
 #include <QWindow>
 
 #include <AIS_DisplayMode.hxx>
+#include <AIS_Triangulation.hxx>
 #include <TCollection_ExtendedString.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <Aspect_DisplayConnection.hxx>
@@ -2322,6 +2323,8 @@ void CadViewer::clearSpatialBox()
     if (spatialBoxObject_.IsNull() || context_.IsNull()) return;
     context_->Remove(spatialBoxObject_, Standard_False);
     spatialBoxObject_.Nullify();
+    meshObject_.Nullify();
+    meshVisible_ = false;
     spatialBoxMin_ = gp_Pnt();
     spatialBoxMax_ = gp_Pnt();
     spatialBoxHandle_ = -1;
@@ -2755,6 +2758,8 @@ void CadViewer::clear()
     spatialBoxObject_.Nullify();
     displayedShapes_.clear();
     featureObjects_.clear();
+    geometryVisibilityBeforeMeshOnly_.clear();
+    meshDisplayMode_ = MeshDisplayMode::Geometry;
     sketchConstructionObjects_.clear();
     managedSelectionModes_.clear();
     editingSketchFeatureId_.clear();
@@ -2783,6 +2788,91 @@ void CadViewer::fitAll()
     invalidateSnapProjectionCache("CAMERA_CHANGED: fit all");
     view_->Redraw();
     recordPerformanceSample("FitAll", timer.elapsed());
+}
+
+void CadViewer::showMesh(const cad::cae::VolumeMesh& mesh)
+{
+    if (mesh.nodes.empty() || mesh.surfaceTriangles.empty()) {
+        deleteMeshPresentation();
+        return;
+    }
+    initializeOcc();
+    TColgp_Array1OfPnt nodes(1, static_cast<Standard_Integer>(mesh.nodes.size()));
+    for (Standard_Integer index = 1; index <= nodes.Upper(); ++index) {
+        const auto& node = mesh.nodes[static_cast<std::size_t>(index - 1)];
+        nodes.SetValue(index, gp_Pnt(node.x, node.y, node.z));
+    }
+    Poly_Array1OfTriangle triangles(
+        1, static_cast<Standard_Integer>(mesh.surfaceTriangles.size()));
+    for (Standard_Integer index = 1; index <= triangles.Upper(); ++index) {
+        const auto& triangle = mesh.surfaceTriangles[static_cast<std::size_t>(index - 1)];
+        triangles.SetValue(index, Poly_Triangle(
+            static_cast<Standard_Integer>(triangle.nodes[0] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[1] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[2] + 1)));
+    }
+    if (!meshObject_.IsNull()) context_->Remove(meshObject_, Standard_False);
+    meshObject_ = new AIS_Triangulation(new Poly_Triangulation(nodes, triangles));
+    meshObject_->SetColor(Quantity_Color(Quantity_NOC_CYAN1));
+    meshObject_->SetTransparency(0.35);
+    context_->Display(meshObject_, Standard_False);
+    meshVisible_ = true;
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::hideMesh()
+{
+    if (!meshObject_.IsNull() && !context_.IsNull()) context_->Erase(meshObject_, Standard_False);
+    meshVisible_ = false;
+    if (!context_.IsNull()) context_->UpdateCurrentViewer();
+}
+
+void CadViewer::deleteMeshPresentation()
+{
+    if (!meshObject_.IsNull() && !context_.IsNull()) context_->Remove(meshObject_, Standard_False);
+    meshObject_.Nullify();
+    meshVisible_ = false;
+    if (!context_.IsNull()) context_->UpdateCurrentViewer();
+}
+
+bool CadViewer::meshVisible() const noexcept
+{
+    return meshVisible_;
+}
+
+void CadViewer::setMeshDisplayMode(const MeshDisplayMode mode)
+{
+    initializeOcc();
+    if (mode == meshDisplayMode_) return;
+    if (mode == MeshDisplayMode::Mesh && meshDisplayMode_ != MeshDisplayMode::Mesh) {
+        geometryVisibilityBeforeMeshOnly_.clear();
+        for (const auto& [id, object] : featureObjects_) {
+            const bool displayed = !object.IsNull() && context_->IsDisplayed(object);
+            geometryVisibilityBeforeMeshOnly_[id] = displayed;
+            if (displayed) context_->Erase(object, Standard_False);
+        }
+    } else if (meshDisplayMode_ == MeshDisplayMode::Mesh) {
+        for (const auto& [id, object] : featureObjects_) {
+            const auto previous = geometryVisibilityBeforeMeshOnly_.find(id);
+            if (previous != geometryVisibilityBeforeMeshOnly_.end() && previous->second
+                && !object.IsNull()) {
+                context_->Display(object, Standard_False);
+            }
+        }
+        geometryVisibilityBeforeMeshOnly_.clear();
+    }
+    meshDisplayMode_ = mode;
+    if (mode == MeshDisplayMode::Geometry) hideMesh();
+    else if (!meshObject_.IsNull()) {
+        context_->Display(meshObject_, Standard_False);
+        meshVisible_ = true;
+    }
+    context_->UpdateCurrentViewer();
+}
+
+CadViewer::MeshDisplayMode CadViewer::meshDisplayMode() const noexcept
+{
+    return meshDisplayMode_;
 }
 
 void CadViewer::setSelectionMode(SelectionMode mode)

@@ -61,6 +61,12 @@ target_link_libraries(parametriccad_occt_visualization INTERFACE
 add_library(ParametricCAD::OCCTModeling ALIAS parametriccad_occt_modeling)
 add_library(ParametricCAD::OCCTVisualization ALIAS parametriccad_occt_visualization)
 
+add_library(parametriccae_core STATIC
+    src/cae/Mesh.cpp
+    src/cae/Mesh.h)
+target_include_directories(parametriccae_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_library(ParametricCAD::CAECore ALIAS parametriccae_core)
+
 # Prefer the package target supplied by vcpkg (and other CONFIG packages). It
 # carries both the minizip include directory and its transitive dependencies.
 # Keep a small Unix fallback for distributions that only provide libminizip

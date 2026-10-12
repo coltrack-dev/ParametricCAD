@@ -13,6 +13,8 @@ set(PARAMETRIC_CAD_SOURCES
     application/VisibilityManager.h
     application/IfcImporter.cpp
     application/IfcImporter.h
+    application/SimulationController.cpp
+    application/SimulationController.h
     application/BimNavigationModel.cpp
     application/BimNavigationModel.h
     import/IfcOpenShellAdapter090.cpp
@@ -95,6 +97,9 @@ set(PARAMETRIC_CAD_SOURCES
     operations/ImportedFeature.h
     geometry/Point3D.h
     geometry/Vector3D.h
+    cae/MeshGenerator.h
+    cae/GmshMeshGenerator.cpp
+    cae/GmshMeshGenerator.h
 )
 
 add_executable(ParametricCAD ${PARAMETRIC_CAD_SOURCES})
@@ -137,6 +142,7 @@ target_link_libraries(ParametricCAD
         ${PARAMETRIC_CAD_MINIZIP_TARGET}
         ParametricCAD::OCCTModeling
         ParametricCAD::OCCTVisualization
+        ParametricCAD::CAECore
 )
 
 if(PARAMETRIC_CAD_ENABLE_IFC)

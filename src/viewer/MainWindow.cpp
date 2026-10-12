@@ -35,6 +35,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -275,6 +276,7 @@ MainWindow::MainWindow(QWidget* parent)
     createActions();
     createParametricPanel();
     createBimPanel();
+    createSimulationPanel();
     setupToolbars();
     restoreWindowLayout();
     featureEditorPanel_->setSketchConstraintSelectionHandler(
@@ -543,6 +545,8 @@ MainWindow::MainWindow(QWidget* parent)
         this, &MainWindow::sampleProjectLoadEventLoop);
     connect(&projectLoadWatcher_, &QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>>::finished,
         this, &MainWindow::finishProjectLoad);
+    connect(&meshWatcher_, &QFutureWatcher<std::shared_ptr<cad::cae::MeshGenerationResult>>::finished,
+        this, &MainWindow::finishMeshGeneration);
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     connect(&ifcImportProgressTimer_, &QTimer::timeout,
         this, &MainWindow::updateIfcImportProgress);
@@ -555,6 +559,10 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    if (meshGenerating_ && meshCancelRequested_) {
+        meshCancelRequested_->store(true, std::memory_order_relaxed);
+        meshWatcher_.future().waitForFinished();
+    }
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     if (ifcImporting_ && ifcImportCancelRequested_) {
         ifcImportCancelRequested_->store(true, std::memory_order_relaxed);
@@ -899,6 +907,163 @@ void MainWindow::createBimPanel()
     refreshBimNavigation();
 }
 
+void MainWindow::createSimulationPanel()
+{
+    meshInspectorDock_ = new QDockWidget("Mesh Inspector", this);
+    meshInspectorDock_->setObjectName("MeshInspectorDock");
+    meshInspectorDock_->setMinimumWidth(ModelPanelWidth);
+    auto* panel = new QWidget(meshInspectorDock_);
+    auto* layout = new QVBoxLayout(panel);
+    auto* form = new QFormLayout();
+    meshMinimumSize_ = new QDoubleSpinBox(panel);
+    meshMinimumSize_->setRange(0.001, 1.0e6);
+    meshMinimumSize_->setValue(1.0);
+    meshMinimumSize_->setDecimals(3);
+    meshMaximumSize_ = new QDoubleSpinBox(panel);
+    meshMaximumSize_->setRange(0.001, 1.0e6);
+    meshMaximumSize_->setValue(10.0);
+    meshMaximumSize_->setDecimals(3);
+    form->addRow("Minimum element", meshMinimumSize_);
+    form->addRow("Maximum element", meshMaximumSize_);
+    layout->addLayout(form);
+    meshDisplayMode_ = new QComboBox(panel);
+    meshDisplayMode_->addItems({"Geometry", "Mesh", "Geometry + Mesh"});
+    form->addRow("Display", meshDisplayMode_);
+    connect(meshDisplayMode_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [this](const int index) {
+            viewer_->setMeshDisplayMode(static_cast<CadViewer::MeshDisplayMode>(index));
+            updateMeshInspector();
+        });
+    meshStatisticsLabel_ = new QLabel("No mesh generated", panel);
+    meshStatisticsLabel_->setWordWrap(true);
+    layout->addWidget(meshStatisticsLabel_);
+    meshGenerateButton_ = new QPushButton("Generate Mesh", panel);
+    meshCancelButton_ = new QPushButton("Cancel", panel);
+    meshShowButton_ = new QPushButton("Show Mesh", panel);
+    meshHideButton_ = new QPushButton("Hide Mesh", panel);
+    meshDeleteButton_ = new QPushButton("Delete Mesh", panel);
+    for (auto* button : {meshGenerateButton_, meshCancelButton_, meshShowButton_,
+                         meshHideButton_, meshDeleteButton_}) layout->addWidget(button);
+    layout->addStretch();
+    meshInspectorDock_->setWidget(panel);
+    addDockWidget(Qt::RightDockWidgetArea, meshInspectorDock_);
+    meshInspectorAction_ = meshInspectorDock_->toggleViewAction();
+    meshInspectorAction_->setText("Mesh Inspector");
+    connect(meshGenerateButton_, &QPushButton::clicked, this, &MainWindow::generateMesh);
+    connect(meshCancelButton_, &QPushButton::clicked, this, &MainWindow::cancelMeshGeneration);
+    connect(meshShowButton_, &QPushButton::clicked, this, [this]() {
+        viewer_->showMesh(simulation_.study().mesh);
+        viewer_->setMeshDisplayMode(CadViewer::MeshDisplayMode::GeometryAndMesh);
+        meshDisplayMode_->setCurrentIndex(2);
+        updateMeshInspector();
+    });
+    connect(meshHideButton_, &QPushButton::clicked, this, [this]() {
+        viewer_->hideMesh();
+        viewer_->setMeshDisplayMode(CadViewer::MeshDisplayMode::Geometry);
+        meshDisplayMode_->setCurrentIndex(0);
+        updateMeshInspector();
+    });
+    connect(meshDeleteButton_, &QPushButton::clicked, this, [this]() {
+        simulation_.deleteMesh();
+        viewer_->deleteMeshPresentation();
+        updateMeshInspector();
+    });
+    updateMeshInspector();
+    for (auto* action : menuBar()->actions()) {
+        auto* menu = action->menu();
+        if (menu && menu->title() == QStringLiteral("&View")) {
+            menu->addSeparator();
+            menu->addAction(meshInspectorAction_);
+            break;
+        }
+    }
+}
+
+void MainWindow::updateMeshInspector()
+{
+    if (!meshStatisticsLabel_) return;
+    const auto& study = simulation_.study();
+    if (study.status == cad::application::SimulationStatus::Generating) {
+        meshStatisticsLabel_->setText("Generating mesh...");
+    } else if (study.status == cad::application::SimulationStatus::Failed) {
+        meshStatisticsLabel_->setText(QString::fromStdString(study.diagnostic));
+    } else if (study.status == cad::application::SimulationStatus::Outdated) {
+        meshStatisticsLabel_->setText("Mesh outdated; regenerate after geometry changes");
+    } else if (study.statistics.tetrahedronCount == 0) {
+        meshStatisticsLabel_->setText("No mesh generated");
+    } else {
+        meshStatisticsLabel_->setText(QString("Nodes: %1\nTetrahedra: %2\nVolume: %3\nMin quality: %4\nAverage quality: %5")
+            .arg(static_cast<qulonglong>(study.statistics.nodeCount))
+            .arg(static_cast<qulonglong>(study.statistics.tetrahedronCount))
+            .arg(study.statistics.volume, 0, 'f', 3)
+            .arg(study.statistics.minimumQuality, 0, 'f', 4)
+            .arg(study.statistics.averageQuality, 0, 'f', 4));
+    }
+    if (meshCancelButton_) meshCancelButton_->setEnabled(meshGenerating_);
+    if (meshGenerateButton_) meshGenerateButton_->setEnabled(!meshGenerating_);
+    if (meshShowButton_) meshShowButton_->setEnabled(!study.mesh.tetrahedra.empty());
+    if (meshHideButton_) meshHideButton_->setEnabled(viewer_ && viewer_->meshVisible());
+    if (meshDeleteButton_) meshDeleteButton_->setEnabled(!study.mesh.tetrahedra.empty());
+}
+
+void MainWindow::generateMesh()
+{
+    const auto ids = selectedIds();
+    if (ids.size() != 1) {
+        statusBar()->showMessage("Select one closed solid first", 3000);
+        return;
+    }
+    const auto feature = modeling_.body().findFeature(ids.front());
+    if (!feature || feature->shape().ShapeType() != TopAbs_SOLID
+        || !BRepCheck_Analyzer(feature->shape()).IsValid()) {
+        statusBar()->showMessage("Selected feature is not a valid closed solid", 3000);
+        return;
+    }
+    const cad::cae::MeshSettings settings{
+        meshMinimumSize_->value(), meshMaximumSize_->value()};
+    meshSourceFeatureId_ = QString::fromStdString(ids.front());
+    meshCancelRequested_ = std::make_shared<std::atomic_bool>(false);
+    meshGenerating_ = true;
+    simulation_.study().status = cad::application::SimulationStatus::Generating;
+    updateMeshInspector();
+    const auto shape = feature->shape();
+    const auto cancel = meshCancelRequested_;
+    meshWatcher_.setFuture(QtConcurrent::run([shape, settings, cancel]() {
+        cad::cae::GmshMeshGenerator generator;
+        return std::make_shared<cad::cae::MeshGenerationResult>(
+            generator.generate(shape, settings, cancel.get()));
+    }));
+}
+
+void MainWindow::cancelMeshGeneration()
+{
+    if (meshCancelRequested_) meshCancelRequested_->store(true, std::memory_order_relaxed);
+}
+
+void MainWindow::finishMeshGeneration()
+{
+    meshGenerating_ = false;
+    const auto result = meshWatcher_.result();
+    auto& study = simulation_.study();
+    study.sourceFeatureId = meshSourceFeatureId_.toStdString();
+    study.settings = {meshMinimumSize_->value(), meshMaximumSize_->value()};
+    if (result && result->success) {
+        study.mesh = result->mesh;
+        study.statistics = result->statistics;
+        study.diagnostic.clear();
+        study.status = cad::application::SimulationStatus::Ready;
+        viewer_->showMesh(study.mesh);
+        statusBar()->showMessage("Mesh generated", 3000);
+    } else {
+        study.diagnostic = result ? result->diagnostic : "Mesh generation failed";
+        study.status = study.diagnostic == "Mesh generation cancelled"
+            ? cad::application::SimulationStatus::NotGenerated
+            : cad::application::SimulationStatus::Failed;
+        statusBar()->showMessage(QString::fromStdString(study.diagnostic), 4000);
+    }
+    updateMeshInspector();
+}
+
 void MainWindow::refreshBimNavigation()
 {
     if (!bimNavigationPanel_) return;
@@ -963,6 +1128,12 @@ void MainWindow::commitVisibilityConfiguration(
 
 void MainWindow::refreshModelView(const bool fitView)
 {
+    if (!meshSourceFeatureId_.isEmpty()
+        && simulation_.study().status == cad::application::SimulationStatus::Ready) {
+        simulation_.markGeometryChanged(meshSourceFeatureId_.toStdString());
+        if (simulation_.study().status == cad::application::SimulationStatus::Outdated)
+            viewer_->deleteMeshPresentation();
+    }
     const auto result = presenter_->refreshModel();
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
@@ -1596,7 +1767,10 @@ void MainWindow::createActions()
     });
 
     auto* modelingMenu = menuBar()->addMenu("&Modeling");
+    auto* simulationMenu = menuBar()->addMenu("&Simulation");
     auto* viewMenu = menuBar()->addMenu("&View");
+    generateMeshAction_ = simulationMenu->addAction("Generate Mesh");
+    connect(generateMeshAction_, &QAction::triggered, this, &MainWindow::generateMesh);
 
     auto* spatialHiddenAction = viewMenu->addAction("Activate Spatial Visibility");
     connect(spatialHiddenAction, &QAction::triggered, this,

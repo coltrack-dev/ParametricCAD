@@ -38,12 +38,14 @@
 #include "application/VisibilityManager.h"
 #include "operations/ParametricFeatures.h"
 #include "model/TopologicalReference.h"
+#include "cae/Mesh.h"
 
 namespace cad::parametric {
 class Body;
 }
 
 class QAction;
+class AIS_Triangulation;
 class QLabel;
 class QToolBar;
 class QKeyEvent;
@@ -79,6 +81,13 @@ public:
         Shaded,
         ShadedWithEdges,
         Wireframe
+    };
+
+    enum class MeshDisplayMode
+    {
+        Geometry,
+        Mesh,
+        GeometryAndMesh
     };
 
     enum class SectionAxis
@@ -147,6 +156,12 @@ public:
     void clear();
     bool hasDisplayedShapes() const;
     void fitAll();
+    void showMesh(const cad::cae::VolumeMesh& mesh);
+    void hideMesh();
+    void deleteMeshPresentation();
+    bool meshVisible() const noexcept;
+    void setMeshDisplayMode(MeshDisplayMode mode);
+    MeshDisplayMode meshDisplayMode() const noexcept;
     QAction* objectSelectionAction() const noexcept { return selectObjectAction_; }
     QAction* faceSelectionAction() const noexcept { return selectFaceAction_; }
     QAction* edgeSelectionAction() const noexcept { return selectEdgeAction_; }
@@ -350,6 +365,10 @@ private:
     Handle(AIS_Shape) sectionPlaneObject_;
     Handle(AIS_Shape) sectionHandleObject_;
     Handle(AIS_Shape) sectionNormalObject_;
+    Handle(AIS_Triangulation) meshObject_;
+    bool meshVisible_{false};
+    MeshDisplayMode meshDisplayMode_{MeshDisplayMode::Geometry};
+    std::map<QString, bool> geometryVisibilityBeforeMeshOnly_;
     Handle(Graphic3d_ClipPlane) sectionClipPlane_;
     SectionState sectionState_;
     Bnd_Box sectionBounds_;

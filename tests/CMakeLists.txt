@@ -15,6 +15,31 @@ endif()
 
 add_test(NAME geometry_tests COMMAND geometry_tests)
 
+add_executable(cae_mesh_tests
+    cae_mesh_tests.cpp
+)
+target_include_directories(cae_mesh_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(cae_mesh_tests PRIVATE ParametricCAD::CAECore)
+add_test(NAME cae_mesh_tests COMMAND cae_mesh_tests)
+
+find_program(PARAMETRIC_CAD_GMSH_EXECUTABLE gmsh)
+if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
+    add_executable(gmsh_mesh_tests
+        gmsh_mesh_tests.cpp
+        ../src/cae/GmshMeshGenerator.cpp
+    )
+    target_include_directories(gmsh_mesh_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(gmsh_mesh_tests PRIVATE
+        Qt6::Core
+        ParametricCAD::CAECore
+        ParametricCAD::OCCTModeling)
+    add_test(NAME gmsh_mesh_tests COMMAND gmsh_mesh_tests)
+    set_tests_properties(gmsh_mesh_tests PROPERTIES
+        ENVIRONMENT "PARAMETRIC_CAD_GMSH_EXECUTABLE=${PARAMETRIC_CAD_GMSH_EXECUTABLE}")
+else()
+    message(STATUS "Gmsh not found: gmsh_mesh_tests will not be built")
+endif()
+
 add_executable(push_pull_drag_tests
     push_pull_drag_tests.cpp
     ../src/viewer/PushPullDrag.cpp
@@ -53,6 +78,7 @@ add_library(model_test_support STATIC
     ../src/application/SelectionResolver.cpp
     ../src/application/ProjectController.cpp
     ../src/application/IfcImporter.cpp
+    ../src/application/SimulationController.cpp
     ../src/application/BimNavigationModel.cpp
     ../src/application/VisibilityManager.cpp
     ../src/model/ProjectFile.cpp
@@ -80,12 +106,14 @@ add_library(model_test_support STATIC
     ../src/operations/ImportedFeature.cpp
     ../src/import/IfcOpenShellAdapter090.cpp
     ../src/import/IfcMetadata.cpp
+    ../src/cae/GmshMeshGenerator.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     ${PARAMETRIC_CAD_MINIZIP_TARGET}
     ParametricCAD::OCCTModeling
-    ParametricCAD::OCCTVisualization)
+    ParametricCAD::OCCTVisualization
+    ParametricCAD::CAECore)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(model_test_support PUBLIC
