@@ -130,6 +130,17 @@ target_include_directories(electrostatic_boundary_tests PRIVATE ${PROJECT_SOURCE
 target_link_libraries(electrostatic_boundary_tests PRIVATE model_test_support)
 add_test(NAME electrostatic_boundary_tests COMMAND electrostatic_boundary_tests)
 
+if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
+    add_executable(cae_resolve_integration_tests
+        cae_resolve_integration_tests.cpp
+    )
+    target_include_directories(cae_resolve_integration_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(cae_resolve_integration_tests PRIVATE model_test_support)
+    add_test(NAME cae_resolve_integration_tests COMMAND cae_resolve_integration_tests)
+    set_tests_properties(cae_resolve_integration_tests PROPERTIES
+        ENVIRONMENT "PARAMETRIC_CAD_GMSH_EXECUTABLE=${PARAMETRIC_CAD_GMSH_EXECUTABLE}")
+endif()
+
 add_executable(simulation_state_tests
     simulation_state_tests.cpp
 )

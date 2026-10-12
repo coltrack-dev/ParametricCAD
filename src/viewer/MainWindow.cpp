@@ -51,6 +51,7 @@
 #include <QElapsedTimer>
 #include <QProgressDialog>
 #include <QTimer>
+#include <QThread>
 #include <QDebug>
 #include <QHash>
 #include <QMenu>
@@ -78,6 +79,16 @@ void traceActionState(const char* event, const QString& details)
     static unsigned long long sequence = 0;
     const auto text = details.toUtf8();
     std::fprintf(stderr, "[ACTION %llu] %s %s\n", ++sequence, event, text.constData());
+    std::fflush(stderr);
+}
+
+void traceCae(const char* event, const QString& details)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRIC_CAD_CAE_TRACE")) return;
+    static unsigned long long sequence = 0;
+    const auto text = details.toUtf8();
+    std::fprintf(stderr, "[CAE %llu thread=%p] %s %s\n", ++sequence,
+        QThread::currentThreadId(), event, text.constData());
     std::fflush(stderr);
 }
 
@@ -1037,6 +1048,14 @@ void MainWindow::updateMeshInspector()
 {
     if (!meshStatisticsLabel_) return;
     const auto& study = simulation_.study();
+    traceCae("mesh-inspector", QString("studyId=%1 meshStatus=%2 solutionStatus=%3 geometryRevision=%4 meshRevision=%5 solvedMeshRevision=%6 boundaries=%7")
+        .arg(QString::fromStdString(study.studyId))
+        .arg(static_cast<int>(study.status))
+        .arg(static_cast<int>(study.solutionStatus))
+        .arg(static_cast<qulonglong>(study.geometryRevision))
+        .arg(static_cast<qulonglong>(study.meshRevision))
+        .arg(static_cast<qulonglong>(study.solvedMeshRevision))
+        .arg(static_cast<qulonglong>(study.boundaryConditions.size())));
     if (study.status == cad::application::SimulationStatus::Generating) {
         meshStatisticsLabel_->setText("Mesh Status: Generating...");
     } else if (study.status == cad::application::SimulationStatus::Failed) {
@@ -1181,12 +1200,20 @@ void MainWindow::editBoundary()
 
 void MainWindow::solveElectrostatics()
 {
+    traceCae("solve-action", QString("studyId=%1 feature=%2")
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
     if (electrostaticSolving_) {
+        traceCae("solve-reject", "code=SOLVE_ALREADY_RUNNING");
         statusBar()->showMessage("Another electrostatic solve is running", 4000);
         return;
     }
     const auto& study = simulation_.study();
     if (study.status != cad::application::SimulationStatus::Ready) {
+        traceCae("solve-reject", QString("code=%1 meshStatus=%2")
+            .arg(study.status == cad::application::SimulationStatus::Outdated
+                ? "STUDY_GEOMETRY_OUTDATED" : "MESH_NOT_READY")
+            .arg(static_cast<int>(study.status)));
         statusBar()->showMessage(
             study.status == cad::application::SimulationStatus::Outdated
                 ? "Study geometry is outdated; regenerate the mesh first"
@@ -1194,21 +1221,35 @@ void MainWindow::solveElectrostatics()
         return;
     }
     if (study.boundaryConditions.empty()) {
+        traceCae("solve-reject", "code=MISSING_DIRICHLET_BOUNDARIES");
         statusBar()->showMessage("Missing required Dirichlet boundary conditions", 5000);
         return;
     }
     for (const auto& boundary : study.boundaryConditions) {
         if (!boundary.valid) {
+            traceCae("solve-reject", QString("code=BOUNDARY_INVALID name=%1 diagnostic=%2")
+                .arg(QString::fromStdString(boundary.name))
+                .arg(QString::fromStdString(boundary.diagnostic)));
             statusBar()->showMessage(QString::fromStdString(boundary.diagnostic), 5000);
             return;
         }
     }
     simulation_.setMaterial({relativePermittivity_->value(), chargeDensity_->value()});
     simulation_.clearElectrostaticResult();
-    simulation_.beginElectrostaticSolve();
+    electrostaticSolveRequestId_ = simulation_.beginElectrostaticSolve();
     electrostaticSolving_ = true;
     updateElectrostaticPanel();
     electrostaticSolveRevision_ = simulation_.study().meshRevision;
+    std::size_t dirichletNodes = 0;
+    for (const auto& boundary : study.boundaryConditions)
+        dirichletNodes += boundary.meshNodes.size();
+    traceCae("solve-start", QString("requestId=%1 studyId=%2 geometryRevision=%3 meshRevision=%4 boundaries=%5 dirichletNodes=%6")
+        .arg(static_cast<qulonglong>(electrostaticSolveRequestId_))
+        .arg(QString::fromStdString(study.studyId))
+        .arg(static_cast<qulonglong>(study.geometryRevision))
+        .arg(static_cast<qulonglong>(study.meshRevision))
+        .arg(static_cast<qulonglong>(study.boundaryConditions.size()))
+        .arg(static_cast<qulonglong>(dirichletNodes)));
     const auto problem = simulation_.study().electrostaticProblem;
     electrostaticWatcher_.setFuture(QtConcurrent::run([problem]() {
         return std::make_shared<cad::cae::ElectrostaticResult>(
@@ -1221,11 +1262,26 @@ void MainWindow::finishElectrostaticSolve()
     electrostaticSolving_ = false;
     const auto result = electrostaticWatcher_.result();
     const bool current = result
+        && electrostaticSolveRequestId_ == simulation_.study().pendingSolveRequestId
         && electrostaticSolveRevision_ == simulation_.study().geometryRevision
         && electrostaticSolveRevision_ == simulation_.study().meshRevision;
-    if (result && current) simulation_.adoptElectrostaticResult(*result, electrostaticSolveRevision_);
-    else if (result) simulation_.study().solutionStatus =
-        cad::application::ElectrostaticSolutionStatus::Outdated;
+    traceCae("solve-finish", QString("requestId=%1 result=%2 current=%3 status=%4 diagnostic=%5")
+        .arg(static_cast<qulonglong>(electrostaticSolveRequestId_))
+        .arg(result ? 1 : 0).arg(current ? 1 : 0)
+        .arg(result ? static_cast<int>(result->convergenceStatus) : -1)
+        .arg(result ? QString::fromStdString(result->diagnostic) : "no result"));
+    if (result && current) simulation_.adoptElectrostaticResult(
+        *result, electrostaticSolveRevision_, electrostaticSolveRequestId_);
+    else if (result
+        && electrostaticSolveRequestId_ == simulation_.study().pendingSolveRequestId)
+        simulation_.study().solutionStatus =
+            cad::application::ElectrostaticSolutionStatus::Outdated;
+    traceCae("solve-apply", QString("requestId=%1 applied=%2 meshStatus=%3 solutionStatus=%4 solvedMeshRevision=%5")
+        .arg(static_cast<qulonglong>(electrostaticSolveRequestId_))
+        .arg(current ? 1 : 0)
+        .arg(static_cast<int>(simulation_.study().status))
+        .arg(static_cast<int>(simulation_.study().solutionStatus))
+        .arg(static_cast<qulonglong>(simulation_.study().solvedMeshRevision)));
     updateElectrostaticPanel();
     if (!result || result->convergenceStatus != cad::cae::ElectrostaticConvergenceStatus::Converged) {
         statusBar()->showMessage(result ? QString::fromStdString(result->diagnostic)
@@ -1273,6 +1329,11 @@ void MainWindow::generateMesh()
         meshMinimumSize_->value(), meshMaximumSize_->value()};
     const auto featureId = ids.front();
     const auto geometryRevision = feature->geometryRevision();
+    traceCae("mesh-action", QString("feature=%1 revision=%2 studyId=%3 studyFeature=%4")
+        .arg(QString::fromStdString(featureId))
+        .arg(static_cast<qulonglong>(geometryRevision))
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
     meshGenerationId_ = simulation_.beginMeshGeneration(
         featureId, geometryRevision);
     if (meshGenerationId_ == 0) {
@@ -1283,6 +1344,10 @@ void MainWindow::generateMesh()
     meshGenerationRevision_ = geometryRevision;
     meshCancelRequested_ = std::make_shared<std::atomic_bool>(false);
     meshGenerating_ = true;
+    traceCae("mesh-worker-launch", QString("generationId=%1 feature=%2 revision=%3")
+        .arg(static_cast<qulonglong>(meshGenerationId_))
+        .arg(meshSourceFeatureId_)
+        .arg(static_cast<qulonglong>(meshGenerationRevision_)));
     updateMeshInspector();
     const auto shape = feature->shape();
     const auto cancel = meshCancelRequested_;
@@ -1303,6 +1368,13 @@ void MainWindow::finishMeshGeneration()
     meshGenerating_ = false;
     const auto result = meshWatcher_.result();
     auto& study = simulation_.study();
+    traceCae("mesh-finish", QString("generationId=%1 result=%2 studyId=%3 feature=%4 geometryRevision=%5 meshRevision=%6")
+        .arg(static_cast<qulonglong>(meshGenerationId_))
+        .arg(result ? 1 : 0)
+        .arg(QString::fromStdString(study.studyId))
+        .arg(QString::fromStdString(study.sourceFeatureId))
+        .arg(static_cast<qulonglong>(study.geometryRevision))
+        .arg(static_cast<qulonglong>(study.meshRevision)));
     study.settings = {meshMinimumSize_->value(), meshMaximumSize_->value()};
     if (result && simulation_.acceptMeshResult(
             *result, meshGenerationRevision_, meshGenerationId_)) {
@@ -1314,6 +1386,23 @@ void MainWindow::finishMeshGeneration()
             remapDiagnostic = "Source CAD feature is no longer available";
         }
         viewer_->showMesh(simulation_.study().mesh);
+        std::size_t validBoundaries = 0;
+        std::size_t dirichletNodes = 0;
+        for (const auto& boundary : study.boundaryConditions) {
+            if (boundary.valid) ++validBoundaries;
+            dirichletNodes += boundary.meshNodes.size();
+        }
+        traceCae("mesh-apply", QString("generationId=%1 accepted=1 remapped=%2 meshStatus=%3 solutionStatus=%4 geometryRevision=%5 meshRevision=%6 boundaries=%7 validBoundaries=%8 dirichletNodes=%9 diagnostic=%10")
+            .arg(static_cast<qulonglong>(meshGenerationId_))
+            .arg(remapped ? 1 : 0)
+            .arg(static_cast<int>(study.status))
+            .arg(static_cast<int>(study.solutionStatus))
+            .arg(static_cast<qulonglong>(study.geometryRevision))
+            .arg(static_cast<qulonglong>(study.meshRevision))
+            .arg(static_cast<qulonglong>(study.boundaryConditions.size()))
+            .arg(static_cast<qulonglong>(validBoundaries))
+            .arg(static_cast<qulonglong>(dirichletNodes))
+            .arg(QString::fromStdString(remapDiagnostic)));
         statusBar()->showMessage(remapped
             ? "Mesh generated"
             : QString("Mesh generated; boundary remapping failed: %1")

@@ -395,6 +395,7 @@ private:
     bool meshGenerating_{false};
     QFutureWatcher<std::shared_ptr<cad::cae::ElectrostaticResult>> electrostaticWatcher_;
     std::uint64_t electrostaticSolveRevision_{0};
+    std::uint64_t electrostaticSolveRequestId_{0};
     bool electrostaticSolving_{false};
     cad::application::BimNavigationModel bimNavigationModel_;
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;

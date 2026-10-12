@@ -11,6 +11,8 @@
 #include <QDoubleSpinBox>
 #include <QToolBar>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QThread>
 #include <QSet>
 #include <array>
 #include <QtTest/QtTest>
@@ -1051,6 +1053,75 @@ private slots:
         QCOMPARE(viewer->managedSelectionModes_.at(id), 0);
         viewer->setSelectionMode(CadViewer::SelectionMode::Face);
         QCOMPARE(viewer->managedSelectionModes_.at(id), AIS_Shape::SelectionMode(TopAbs_FACE));
+    }
+
+    void electrostaticResolvesAgainThroughMainWindowAfterGeometryChange()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()
+            || qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen")
+            QSKIP("Native OCCT viewer is required for the MainWindow CAE regression test");
+        if (QStandardPaths::findExecutable("gmsh").isEmpty())
+            QSKIP("Gmsh is required for the MainWindow electrostatic regression test");
+
+        MainWindow window;
+        const auto box = window.modeling_.createBox();
+        QVERIFY(box.success);
+        window.refreshModelView();
+        window.applySelection({QString::fromStdString(box.id)});
+
+        window.generateMesh();
+        const auto waitFor = [](const auto& predicate) {
+            QElapsedTimer timer;
+            timer.start();
+            while (!predicate() && timer.elapsed() < 30000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                QThread::msleep(10);
+            }
+            return predicate();
+        };
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
+
+        std::vector<cad::topology::TopologicalReference> faces;
+        for (TopExp_Explorer explorer(window.modeling_.body().findFeature(box.id)->shape(),
+                                      TopAbs_FACE);
+             explorer.More(); explorer.Next()) {
+            faces.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+                box.id, window.modeling_.body().findFeature(box.id)->shape(),
+                explorer.Current()));
+        }
+        QVERIFY(faces.size() == 6);
+        std::string diagnostic;
+        QVERIFY(window.simulation_.addVoltageBoundary("Ground", 0.0,
+            {faces[0]}, diagnostic));
+        QVERIFY(window.simulation_.addVoltageBoundary("Voltage", 100.0,
+            {faces[1]}, diagnostic));
+        window.solveElectrostatics();
+        QVERIFY(waitFor([&window]() { return !window.electrostaticSolving_; }));
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Ready);
+
+        QVERIFY(window.modeling_.setFeatureProperty(box.id, "width", 120.0).success);
+        window.refreshModelView();
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Outdated);
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Outdated);
+        window.applySelection({QString::fromStdString(box.id)});
+        window.generateMesh();
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
+        QVERIFY(window.simulation_.study().boundaryConditions[0].valid);
+        QVERIFY(window.simulation_.study().boundaryConditions[1].valid);
+
+        window.solveElectrostatics();
+        QVERIFY(waitFor([&window]() { return !window.electrostaticSolving_; }));
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Ready);
+        QVERIFY(window.simulation_.study().solvedMeshRevision
+            == window.simulation_.study().meshRevision);
     }
 };
 

@@ -174,13 +174,26 @@ int main()
     assertMeshReady(controller);
     assertSolutionReady(controller);
 
+    const auto staleSolveRequest = controller.beginElectrostaticSolve();
+    controller.markGeometryChanged("box", 3);
+    controller.beginMeshGeneration("box", 3);
+    assert(controller.acceptMeshResult(successfulMesh(), 3));
+    const auto currentSolveRequest = controller.beginElectrostaticSolve();
+    assert(!controller.adoptElectrostaticResult(
+        successfulSolution(), 2, staleSolveRequest));
+    assert(controller.study().solutionStatus
+        == cad::application::ElectrostaticSolutionStatus::Solving);
+    assert(controller.adoptElectrostaticResult(
+        successfulSolution(), 3, currentSolveRequest));
+    assertSolutionReady(controller);
+
     // A result from an older asynchronous generation must not become current.
     controller.beginMeshGeneration("box", 3);
     controller.markGeometryChanged("box", 4);
     const auto staleMeshAccepted = controller.acceptMeshResult(successfulMesh(), 3);
     assert(!staleMeshAccepted);
     assert(controller.study().status == cad::application::SimulationStatus::Outdated);
-    assert(controller.study().meshRevision == 2);
+    assert(controller.study().meshRevision == 3);
 
     // The revision used by a study belongs to its source feature, not to
     // the whole Body. An unrelated feature must not invalidate the study.

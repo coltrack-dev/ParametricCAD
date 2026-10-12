@@ -28,6 +28,7 @@ struct SimulationStudy
     std::uint64_t solvedMeshRevision{0};
     std::uint64_t pendingMeshRevision{0};
     std::uint64_t pendingMeshGenerationId{0};
+    std::uint64_t pendingSolveRequestId{0};
     cad::cae::ElectrostaticProblem electrostaticProblem;
     std::vector<ElectrostaticBoundaryCondition> boundaryConditions;
     cad::cae::ElectrostaticResult electrostaticResult;
@@ -74,9 +75,10 @@ public:
     bool removeBoundary(const std::string& id);
     bool updateBoundary(const std::string& id, const std::string& name, double potential);
     void setMaterial(const cad::cae::ElectrostaticMaterial& material);
-    void beginElectrostaticSolve();
+    std::uint64_t beginElectrostaticSolve();
     bool adoptElectrostaticResult(const cad::cae::ElectrostaticResult& result,
-                                  std::uint64_t geometryRevision = 0);
+                                  std::uint64_t geometryRevision = 0,
+                                  std::uint64_t requestId = 0);
     void clearElectrostaticResult();
 
 private:
@@ -84,6 +86,7 @@ private:
     std::unique_ptr<cad::cae::IMeshGenerator> generator_;
     std::size_t boundarySequence_{0};
     std::uint64_t meshGenerationSequence_{0};
+    std::uint64_t solveRequestSequence_{0};
 };
 
 } // namespace cad::application

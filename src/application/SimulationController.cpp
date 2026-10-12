@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <set>
 #include <map>
+#include <thread>
+#include <functional>
 
 namespace cad::application {
 
@@ -47,14 +49,27 @@ void traceTransition(const SimulationStudy& study, const char* reason,
                      const char* oldMesh, const char* oldSolution)
 {
     if (!simulationTraceEnabled()) return;
+    std::size_t validBoundaries = 0;
+    std::size_t dirichletNodes = 0;
+    for (const auto& boundary : study.boundaryConditions) {
+        if (boundary.valid) ++validBoundaries;
+        dirichletNodes += boundary.meshNodes.size();
+    }
     std::fprintf(stderr,
-        "[SIM] study=%p feature=%s mesh=%s->%s solution=%s->%s "
-        "geometryRevision=%llu meshRevision=%llu reason=%s\n",
-        static_cast<const void*>(&study), study.sourceFeatureId.c_str(), oldMesh,
+        "[SIM] thread=%zu studyId=%s feature=%s mesh=%s->%s solution=%s->%s "
+        "geometryRevision=%llu meshRevision=%llu solvedMeshRevision=%llu "
+        "boundaries=%zu valid=%zu invalid=%zu dirichletNodes=%zu "
+        "pendingSolve=%llu reason=%s\n",
+        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+        study.studyId.c_str(), study.sourceFeatureId.c_str(), oldMesh,
         meshStatusName(study.status), oldSolution,
         solutionStatusName(study.solutionStatus),
         static_cast<unsigned long long>(study.geometryRevision),
-        static_cast<unsigned long long>(study.meshRevision), reason);
+        static_cast<unsigned long long>(study.meshRevision),
+        static_cast<unsigned long long>(study.solvedMeshRevision),
+        study.boundaryConditions.size(), validBoundaries,
+        study.boundaryConditions.size() - validBoundaries, dirichletNodes,
+        static_cast<unsigned long long>(study.pendingSolveRequestId), reason);
     std::fflush(stderr);
 }
 
@@ -79,6 +94,7 @@ std::uint64_t SimulationController::beginMeshGeneration(
     if (study_.solutionStatus == ElectrostaticSolutionStatus::Ready
         || study_.solutionStatus == ElectrostaticSolutionStatus::Solving)
         study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+    study_.pendingSolveRequestId = 0;
     if (study_.solutionStatus != ElectrostaticSolutionStatus::NotSolved)
         study_.electrostaticResult = {};
     study_.solutionDiagnostic.clear();
@@ -192,6 +208,7 @@ void SimulationController::markGeometryChanged(
         if (study_.solutionStatus == ElectrostaticSolutionStatus::Ready
             || study_.solutionStatus == ElectrostaticSolutionStatus::Solving)
             study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+        study_.pendingSolveRequestId = 0;
         traceTransition(study_, "geometry revision changed", oldMesh, oldSolution);
     }
 }
@@ -207,6 +224,7 @@ void SimulationController::setMesh(const cad::cae::VolumeMesh& mesh,
     }
     study_.mesh = mesh;
     study_.solvedMeshRevision = 0;
+    study_.pendingSolveRequestId = 0;
     study_.statistics = cad::cae::meshStatistics(mesh);
     study_.electrostaticProblem.mesh = mesh;
     for (auto& boundary : study_.boundaryConditions) {
@@ -261,6 +279,14 @@ bool SimulationController::remapBoundaries(
         for (const auto& reference : boundary.faces) {
             const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
                 reference, currentShape);
+            if (simulationTraceEnabled()) {
+                std::fprintf(stderr,
+                    "[SIM] boundary-resolve studyId=%s boundaryId=%s status=%d candidates=%zu error=%s\n",
+                    study_.studyId.c_str(), boundary.id.c_str(),
+                    static_cast<int>(resolved.status),
+                    static_cast<std::size_t>(resolved.candidateCount),
+                    resolved.error.c_str());
+            }
             if (resolved.status != cad::topology::ResolveStatus::Resolved
                 || !resolved.shape) {
                 boundary.valid = false;
@@ -273,6 +299,12 @@ bool SimulationController::remapBoundaries(
                 const auto refreshed = cad::topology::TopologicalSignatureBuilder::createReference(
                     reference.featureId, currentShape, *resolved.shape);
                 const auto mapping = mapFaceToMeshRegion(refreshed, study_.mesh);
+                if (simulationTraceEnabled()) {
+                    std::fprintf(stderr,
+                        "[SIM] boundary-map studyId=%s boundaryId=%s valid=%d region=%d nodes=%zu diagnostic=%s\n",
+                        study_.studyId.c_str(), boundary.id.c_str(), mapping.valid ? 1 : 0,
+                        mapping.boundaryId, mapping.nodes.size(), mapping.diagnostic.c_str());
+                }
                 if (!mapping.valid) {
                     boundary.valid = false;
                     boundary.diagnostic = mapping.diagnostic;
@@ -329,6 +361,11 @@ bool SimulationController::remapBoundaries(
     }
     study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
     study_.solvedMeshRevision = 0;
+    if (simulationTraceEnabled()) {
+        std::fprintf(stderr, "[SIM] boundary-remap studyId=%s success=%d diagnostic=%s\n",
+            study_.studyId.c_str(), allValid ? 1 : 0, diagnostic.c_str());
+        std::fflush(stderr);
+    }
     if (!allValid && diagnostic.empty()) diagnostic = "One or more boundary references are invalid";
     return allValid;
 }
@@ -401,24 +438,32 @@ void SimulationController::setMaterial(const cad::cae::ElectrostaticMaterial& ma
     study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
 }
 
-void SimulationController::beginElectrostaticSolve()
+std::uint64_t SimulationController::beginElectrostaticSolve()
 {
     const auto oldMesh = meshStatusName(study_.status);
     const auto oldSolution = solutionStatusName(study_.solutionStatus);
     study_.solutionStatus = ElectrostaticSolutionStatus::Solving;
     study_.solvedMeshRevision = 0;
+    study_.pendingSolveRequestId = ++solveRequestSequence_;
     traceTransition(study_, "electrostatic solve started", oldMesh, oldSolution);
+    return study_.pendingSolveRequestId;
 }
 
 bool SimulationController::adoptElectrostaticResult(
-    const cad::cae::ElectrostaticResult& result, const std::uint64_t geometryRevision)
+    const cad::cae::ElectrostaticResult& result, const std::uint64_t geometryRevision,
+    const std::uint64_t requestId)
 {
     const auto oldMesh = meshStatusName(study_.status);
     const auto oldSolution = solutionStatusName(study_.solutionStatus);
+    if (requestId != 0 && requestId != study_.pendingSolveRequestId) {
+        traceTransition(study_, "stale electrostatic request rejected", oldMesh, oldSolution);
+        return false;
+    }
     if (geometryRevision != 0
         && (geometryRevision != study_.geometryRevision
             || geometryRevision != study_.meshRevision)) {
         study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+        study_.pendingSolveRequestId = 0;
         traceTransition(study_, "stale electrostatic result rejected", oldMesh, oldSolution);
         return false;
     }
@@ -429,6 +474,7 @@ bool SimulationController::adoptElectrostaticResult(
         ? ElectrostaticSolutionStatus::Ready : ElectrostaticSolutionStatus::Failed;
     study_.solvedMeshRevision = study_.solutionStatus == ElectrostaticSolutionStatus::Ready
         ? study_.meshRevision : 0;
+    study_.pendingSolveRequestId = 0;
     traceTransition(study_, "electrostatic solve completed", oldMesh, oldSolution);
     return true;
 }
@@ -439,6 +485,7 @@ void SimulationController::clearElectrostaticResult()
     study_.solutionDiagnostic.clear();
     study_.solutionStatus = ElectrostaticSolutionStatus::NotSolved;
     study_.solvedMeshRevision = 0;
+    study_.pendingSolveRequestId = 0;
 }
 
 } // namespace cad::application
