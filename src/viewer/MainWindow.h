@@ -78,6 +78,8 @@ private:
     void createBimPanel();
     void createSimulationPanel();
     void generateMesh();
+    void regenerateMesh();
+    bool startMeshGeneration(const std::string& featureId);
     void finishMeshGeneration();
     void cancelMeshGeneration();
     void updateMeshInspector();
@@ -382,6 +384,7 @@ private:
     QPushButton* removeBoundaryButton_{nullptr};
     QPushButton* editBoundaryButton_{nullptr};
     QPushButton* meshGenerateButton_{nullptr};
+    QPushButton* meshRegenerateButton_{nullptr};
     QPushButton* meshCancelButton_{nullptr};
     QPushButton* meshShowButton_{nullptr};
     QPushButton* meshHideButton_{nullptr};

@@ -1082,6 +1082,14 @@ private slots:
         QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
         QCOMPARE(window.simulation_.study().status,
                  cad::application::SimulationStatus::Ready);
+        const auto studyId = window.simulation_.study().studyId;
+        window.applySelection({});
+        QVERIFY(window.meshRegenerateButton_->isEnabled());
+        window.meshRegenerateButton_->click();
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().studyId, studyId);
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
 
         std::vector<cad::topology::TopologicalReference> faces;
         for (TopExp_Explorer explorer(window.modeling_.body().findFeature(box.id)->shape(),
@@ -1097,6 +1105,22 @@ private slots:
             {faces[0]}, diagnostic));
         QVERIFY(window.simulation_.addVoltageBoundary("Voltage", 100.0,
             {faces[1]}, diagnostic));
+        window.solveElectrostatics();
+        QVERIFY(waitFor([&window]() { return !window.electrostaticSolving_; }));
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Ready);
+
+        window.simulation_.deleteMesh();
+        window.viewer_->deleteMeshPresentation();
+        window.updateMeshInspector();
+        window.updateElectrostaticPanel();
+        QVERIFY(window.meshRegenerateButton_->isEnabled());
+        window.meshRegenerateButton_->click();
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
+        QVERIFY(window.simulation_.study().boundaryConditions[0].valid);
+        QVERIFY(window.simulation_.study().boundaryConditions[1].valid);
         window.solveElectrostatics();
         QVERIFY(waitFor([&window]() { return !window.electrostaticSolving_; }));
         QCOMPARE(window.simulation_.study().solutionStatus,

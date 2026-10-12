@@ -955,11 +955,12 @@ void MainWindow::createSimulationPanel()
     meshStatisticsLabel_->setWordWrap(true);
     layout->addWidget(meshStatisticsLabel_);
     meshGenerateButton_ = new QPushButton("Generate Mesh", panel);
+    meshRegenerateButton_ = new QPushButton("Regenerate Mesh", panel);
     meshCancelButton_ = new QPushButton("Cancel", panel);
     meshShowButton_ = new QPushButton("Show Mesh", panel);
     meshHideButton_ = new QPushButton("Hide Mesh", panel);
     meshDeleteButton_ = new QPushButton("Delete Mesh", panel);
-    for (auto* button : {meshGenerateButton_, meshCancelButton_, meshShowButton_,
+    for (auto* button : {meshGenerateButton_, meshRegenerateButton_, meshCancelButton_, meshShowButton_,
                          meshHideButton_, meshDeleteButton_}) layout->addWidget(button);
     auto* boundaryTitle = new QLabel("Electrostatic boundaries", panel);
     layout->addWidget(boundaryTitle);
@@ -1011,6 +1012,7 @@ void MainWindow::createSimulationPanel()
     meshInspectorAction_ = meshInspectorDock_->toggleViewAction();
     meshInspectorAction_->setText("Mesh Inspector");
     connect(meshGenerateButton_, &QPushButton::clicked, this, &MainWindow::generateMesh);
+    connect(meshRegenerateButton_, &QPushButton::clicked, this, &MainWindow::regenerateMesh);
     connect(meshCancelButton_, &QPushButton::clicked, this, &MainWindow::cancelMeshGeneration);
     connect(meshShowButton_, &QPushButton::clicked, this, [this]() {
         viewer_->showMesh(simulation_.study().mesh);
@@ -1080,8 +1082,25 @@ void MainWindow::updateMeshInspector()
             .arg(study.statistics.minimumQuality, 0, 'f', 4)
             .arg(study.statistics.averageQuality, 0, 'f', 4));
     }
+    const auto solutionStatusName = [](const auto status) {
+        switch (status) {
+        case cad::application::ElectrostaticSolutionStatus::NotSolved: return "NotSolved";
+        case cad::application::ElectrostaticSolutionStatus::Solving: return "Solving";
+        case cad::application::ElectrostaticSolutionStatus::Ready: return "Ready";
+        case cad::application::ElectrostaticSolutionStatus::Outdated: return "Outdated";
+        case cad::application::ElectrostaticSolutionStatus::Failed: return "Failed";
+        }
+        return "Unknown";
+    };
+    meshStatisticsLabel_->setText(meshStatisticsLabel_->text()
+        + QString("\nSolution Status: %1\nGeometry Revision: %2\nMesh Revision: %3")
+            .arg(solutionStatusName(study.solutionStatus))
+            .arg(static_cast<qulonglong>(study.geometryRevision))
+            .arg(static_cast<qulonglong>(study.meshRevision)));
     if (meshCancelButton_) meshCancelButton_->setEnabled(meshGenerating_);
     if (meshGenerateButton_) meshGenerateButton_->setEnabled(!meshGenerating_);
+    if (meshRegenerateButton_)
+        meshRegenerateButton_->setEnabled(!meshGenerating_ && !study.sourceFeatureId.empty());
     if (meshShowButton_) meshShowButton_->setEnabled(!study.mesh.tetrahedra.empty());
     if (meshHideButton_) meshHideButton_->setEnabled(viewer_ && viewer_->meshVisible());
     if (meshDeleteButton_) meshDeleteButton_->setEnabled(!study.mesh.tetrahedra.empty());
@@ -1326,15 +1345,32 @@ void MainWindow::generateMesh()
         statusBar()->showMessage("Select one closed solid first", 3000);
         return;
     }
-    const auto feature = modeling_.body().findFeature(ids.front());
+    startMeshGeneration(ids.front());
+}
+
+void MainWindow::regenerateMesh()
+{
+    const auto featureId = simulation_.study().sourceFeatureId;
+    traceCae("mesh-regenerate-request", QString("studyId=%1 feature=%2")
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(featureId)));
+    if (featureId.empty()) {
+        statusBar()->showMessage("No source feature is associated with this study", 4000);
+        return;
+    }
+    startMeshGeneration(featureId);
+}
+
+bool MainWindow::startMeshGeneration(const std::string& featureId)
+{
+    const auto feature = modeling_.body().findFeature(featureId);
     if (!feature || feature->shape().ShapeType() != TopAbs_SOLID
         || !BRepCheck_Analyzer(feature->shape()).IsValid()) {
-        statusBar()->showMessage("Selected feature is not a valid closed solid", 3000);
-        return;
+        statusBar()->showMessage("Study source feature is not a valid closed solid", 4000);
+        return false;
     }
     const cad::cae::MeshSettings settings{
         meshMinimumSize_->value(), meshMaximumSize_->value()};
-    const auto featureId = ids.front();
     const auto geometryRevision = feature->geometryRevision();
     traceCae("mesh-action", QString("feature=%1 revision=%2 studyId=%3 studyFeature=%4")
         .arg(QString::fromStdString(featureId))
@@ -1345,7 +1381,7 @@ void MainWindow::generateMesh()
         featureId, geometryRevision);
     if (meshGenerationId_ == 0) {
         statusBar()->showMessage("Mesh generation is already active", 3000);
-        return;
+        return false;
     }
     meshSourceFeatureId_ = QString::fromStdString(featureId);
     meshGenerationRevision_ = geometryRevision;
@@ -1363,6 +1399,7 @@ void MainWindow::generateMesh()
         return std::make_shared<cad::cae::MeshGenerationResult>(
             generator.generate(shape, settings, cancel.get()));
     }));
+    return true;
 }
 
 void MainWindow::cancelMeshGeneration()
