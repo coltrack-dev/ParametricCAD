@@ -22,6 +22,13 @@ target_include_directories(cae_mesh_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(cae_mesh_tests PRIVATE ParametricCAD::CAECore)
 add_test(NAME cae_mesh_tests COMMAND cae_mesh_tests)
 
+add_executable(cae_fem_tests
+    cae_fem_tests.cpp
+)
+target_include_directories(cae_fem_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(cae_fem_tests PRIVATE ParametricCAD::CAECore)
+add_test(NAME cae_fem_tests COMMAND cae_fem_tests)
+
 find_program(PARAMETRIC_CAD_GMSH_EXECUTABLE gmsh)
 if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
     add_executable(gmsh_mesh_tests

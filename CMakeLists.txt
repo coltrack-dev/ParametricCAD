@@ -63,7 +63,13 @@ add_library(ParametricCAD::OCCTVisualization ALIAS parametriccad_occt_visualizat
 
 add_library(parametriccae_core STATIC
     src/cae/Mesh.cpp
-    src/cae/Mesh.h)
+    src/cae/Mesh.h
+    src/cae/SparseMatrix.cpp
+    src/cae/SparseMatrix.h
+    src/cae/Tet4.cpp
+    src/cae/Tet4.h
+    src/cae/ElectrostaticSolver.cpp
+    src/cae/ElectrostaticSolver.h)
 target_include_directories(parametriccae_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(ParametricCAD::CAECore ALIAS parametriccae_core)
 
