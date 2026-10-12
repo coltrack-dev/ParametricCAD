@@ -4,6 +4,7 @@
 
 #include <TopoDS_Shape.hxx>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,11 +34,13 @@ public:
     void markDirtyFrom(const std::string& featureId);
 
     const std::string& lastError() const noexcept;
+    std::uint64_t geometryRevision() const noexcept { return geometryRevision_; }
 
 private:
     std::vector<FeaturePtr> features_;
     TopoDS_Shape resultShape_;
     std::string lastError_;
+    std::uint64_t geometryRevision_{0};
 };
 
 } // namespace cad::parametric

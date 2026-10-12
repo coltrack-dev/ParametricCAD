@@ -130,6 +130,13 @@ target_include_directories(electrostatic_boundary_tests PRIVATE ${PROJECT_SOURCE
 target_link_libraries(electrostatic_boundary_tests PRIVATE model_test_support)
 add_test(NAME electrostatic_boundary_tests COMMAND electrostatic_boundary_tests)
 
+add_executable(simulation_state_tests
+    simulation_state_tests.cpp
+)
+target_include_directories(simulation_state_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(simulation_state_tests PRIVATE model_test_support)
+add_test(NAME simulation_state_tests COMMAND simulation_state_tests)
+
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(model_test_support PUBLIC
         PARAMETRIC_CAD_HAS_IFCOPENSHELL=1

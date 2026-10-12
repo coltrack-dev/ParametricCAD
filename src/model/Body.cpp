@@ -27,6 +27,7 @@ void Body::appendFeatures(const std::vector<FeaturePtr>& features)
         }
     }
     features_.insert(features_.end(), features.begin(), features.end());
+    if (!features.empty()) ++geometryRevision_;
 }
 
 void Body::insertFeature(std::size_t position, const FeaturePtr& feature)
@@ -44,6 +45,7 @@ void Body::insertFeature(std::size_t position, const FeaturePtr& feature)
         }
     }
     features_.insert(insertion, feature);
+    ++geometryRevision_;
 }
 
 bool Body::canRemoveFeature(const std::string& featureId) const
@@ -77,6 +79,7 @@ bool Body::removeFeature(const std::string& featureId)
     }
     features_.erase(iterator);
     resultShape_.Nullify();
+    ++geometryRevision_;
     return true;
 }
 
@@ -125,10 +128,13 @@ bool Body::recomputeFeature(const std::size_t index)
     if (index >= features_.size()) return true;
     const FeaturePtr& feature = features_[index];
 
-    if (feature->isDirty() && !feature->recompute()) {
-        lastError_ =
-            "Feature '" + feature->name() + "' failed: " + feature->error();
-        return false;
+    if (feature->isDirty()) {
+        ++geometryRevision_;
+        if (!feature->recompute()) {
+            lastError_ =
+                "Feature '" + feature->name() + "' failed: " + feature->error();
+            return false;
+        }
     }
 
     if (feature->state() == FeatureState::Failed) {

@@ -5,6 +5,7 @@
 #include "cae/ElectrostaticSolver.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -21,6 +22,9 @@ struct SimulationStudy
     cad::cae::VolumeMesh mesh;
     cad::cae::MeshStatistics statistics;
     std::string diagnostic;
+    std::uint64_t geometryRevision{0};
+    std::uint64_t meshRevision{0};
+    std::uint64_t pendingMeshRevision{0};
     cad::cae::ElectrostaticProblem electrostaticProblem;
     std::vector<ElectrostaticBoundaryCondition> boundaryConditions;
     cad::cae::ElectrostaticResult electrostaticResult;
@@ -45,8 +49,13 @@ public:
                                              const cad::cae::MeshSettings& settings,
                                              const std::atomic_bool* cancel = nullptr);
     void deleteMesh();
-    void markGeometryChanged(const std::string& featureId);
-    void setMesh(const cad::cae::VolumeMesh& mesh);
+    void beginMeshGeneration(const std::string& featureId, std::uint64_t geometryRevision);
+    bool acceptMeshResult(const cad::cae::MeshGenerationResult& result,
+                          std::uint64_t geometryRevision);
+    void markGeometryChanged(const std::string& featureId,
+                             std::uint64_t geometryRevision = 0);
+    void setMesh(const cad::cae::VolumeMesh& mesh,
+                 std::uint64_t geometryRevision = 0);
     bool addVoltageBoundary(
         const std::string& name,
         double potential,
@@ -55,7 +64,9 @@ public:
     bool removeBoundary(const std::string& id);
     bool updateBoundary(const std::string& id, const std::string& name, double potential);
     void setMaterial(const cad::cae::ElectrostaticMaterial& material);
-    void adoptElectrostaticResult(const cad::cae::ElectrostaticResult& result);
+    void beginElectrostaticSolve();
+    bool adoptElectrostaticResult(const cad::cae::ElectrostaticResult& result,
+                                  std::uint64_t geometryRevision = 0);
     void clearElectrostaticResult();
 
 private:

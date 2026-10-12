@@ -389,8 +389,10 @@ private:
     QFutureWatcher<std::shared_ptr<cad::cae::MeshGenerationResult>> meshWatcher_;
     std::shared_ptr<std::atomic_bool> meshCancelRequested_;
     QString meshSourceFeatureId_;
+    std::uint64_t meshGenerationRevision_{0};
     bool meshGenerating_{false};
     QFutureWatcher<std::shared_ptr<cad::cae::ElectrostaticResult>> electrostaticWatcher_;
+    std::uint64_t electrostaticSolveRevision_{0};
     bool electrostaticSolving_{false};
     cad::application::BimNavigationModel bimNavigationModel_;
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;

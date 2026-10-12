@@ -1030,15 +1030,17 @@ void MainWindow::updateMeshInspector()
     if (!meshStatisticsLabel_) return;
     const auto& study = simulation_.study();
     if (study.status == cad::application::SimulationStatus::Generating) {
-        meshStatisticsLabel_->setText("Generating mesh...");
+        meshStatisticsLabel_->setText("Mesh Status: Generating...");
     } else if (study.status == cad::application::SimulationStatus::Failed) {
-        meshStatisticsLabel_->setText(QString::fromStdString(study.diagnostic));
+        meshStatisticsLabel_->setText("Mesh Status: Failed\n"
+            + QString::fromStdString(study.diagnostic));
     } else if (study.status == cad::application::SimulationStatus::Outdated) {
-        meshStatisticsLabel_->setText("Mesh outdated; regenerate after geometry changes");
+        meshStatisticsLabel_->setText("Mesh Status: Outdated\n"
+            "Regenerate after geometry changes");
     } else if (study.statistics.tetrahedronCount == 0) {
-        meshStatisticsLabel_->setText("No mesh generated");
+        meshStatisticsLabel_->setText("Mesh Status: NotGenerated\nNo mesh generated");
     } else {
-        meshStatisticsLabel_->setText(QString("Nodes: %1\nTetrahedra: %2\nVolume: %3\nMin quality: %4\nAverage quality: %5")
+        meshStatisticsLabel_->setText(QString("Mesh Status: Ready\nNodes: %1\nTetrahedra: %2\nVolume: %3\nMin quality: %4\nAverage quality: %5")
             .arg(static_cast<qulonglong>(study.statistics.nodeCount))
             .arg(static_cast<qulonglong>(study.statistics.tetrahedronCount))
             .arg(study.statistics.volume, 0, 'f', 3)
@@ -1069,13 +1071,14 @@ void MainWindow::updateElectrostaticPanel()
         if (!boundary.valid) item->setToolTip(QString::fromStdString(boundary.diagnostic));
     }
     if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Solving) {
-        electrostaticStatisticsLabel_->setText("Solving electrostatics...");
+        electrostaticStatisticsLabel_->setText("Solution Status: Solving...");
     } else if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Failed) {
-        electrostaticStatisticsLabel_->setText(QString::fromStdString(study.solutionDiagnostic));
+        electrostaticStatisticsLabel_->setText("Solution Status: Failed\n"
+            + QString::fromStdString(study.solutionDiagnostic));
     } else if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Outdated) {
-        electrostaticStatisticsLabel_->setText("Electrostatic result outdated");
+        electrostaticStatisticsLabel_->setText("Solution Status: Outdated");
     } else if (study.solutionStatus != cad::application::ElectrostaticSolutionStatus::Ready) {
-        electrostaticStatisticsLabel_->setText("Electrostatics not solved");
+        electrostaticStatisticsLabel_->setText("Solution Status: NotSolved");
     } else {
         const auto& result = study.electrostaticResult;
         const auto potentialRange = std::minmax_element(
@@ -1091,7 +1094,7 @@ void MainWindow::updateElectrostaticPanel()
                 maximumField = std::max(maximumField, magnitude);
             }
         }
-        electrostaticStatisticsLabel_->setText(QString("Status: converged\nCG iterations: %1\nResidual: %2\nPotential: %3 .. %4 V\nField: %5 .. %6 V/m")
+        electrostaticStatisticsLabel_->setText(QString("Solution Status: Ready\nCG iterations: %1\nResidual: %2\nPotential: %3 .. %4 V\nField: %5 .. %6 V/m")
             .arg(static_cast<qulonglong>(result.iterations))
             .arg(result.relativeResidual, 0, 'e', 3)
             .arg(potentialRange.first == result.nodalPotential.end() ? 0.0 : *potentialRange.first, 0, 'g', 8)
@@ -1165,9 +1168,10 @@ void MainWindow::solveElectrostatics()
     }
     simulation_.setMaterial({relativePermittivity_->value(), chargeDensity_->value()});
     simulation_.clearElectrostaticResult();
-    simulation_.study().solutionStatus = cad::application::ElectrostaticSolutionStatus::Solving;
+    simulation_.beginElectrostaticSolve();
     electrostaticSolving_ = true;
     updateElectrostaticPanel();
+    electrostaticSolveRevision_ = simulation_.study().meshRevision;
     const auto problem = simulation_.study().electrostaticProblem;
     electrostaticWatcher_.setFuture(QtConcurrent::run([problem]() {
         return std::make_shared<cad::cae::ElectrostaticResult>(
@@ -1179,7 +1183,12 @@ void MainWindow::finishElectrostaticSolve()
 {
     electrostaticSolving_ = false;
     const auto result = electrostaticWatcher_.result();
-    if (result) simulation_.adoptElectrostaticResult(*result);
+    const bool current = result
+        && electrostaticSolveRevision_ == simulation_.study().geometryRevision
+        && electrostaticSolveRevision_ == simulation_.study().meshRevision;
+    if (result && current) simulation_.adoptElectrostaticResult(*result, electrostaticSolveRevision_);
+    else if (result) simulation_.study().solutionStatus =
+        cad::application::ElectrostaticSolutionStatus::Outdated;
     updateElectrostaticPanel();
     if (!result || result->convergenceStatus != cad::cae::ElectrostaticConvergenceStatus::Converged) {
         statusBar()->showMessage(result ? QString::fromStdString(result->diagnostic)
@@ -1226,9 +1235,10 @@ void MainWindow::generateMesh()
     const cad::cae::MeshSettings settings{
         meshMinimumSize_->value(), meshMaximumSize_->value()};
     meshSourceFeatureId_ = QString::fromStdString(ids.front());
+    meshGenerationRevision_ = modeling_.body().geometryRevision();
     meshCancelRequested_ = std::make_shared<std::atomic_bool>(false);
     meshGenerating_ = true;
-    simulation_.study().status = cad::application::SimulationStatus::Generating;
+    simulation_.beginMeshGeneration(meshSourceFeatureId_.toStdString(), meshGenerationRevision_);
     updateMeshInspector();
     const auto shape = feature->shape();
     const auto cancel = meshCancelRequested_;
@@ -1249,21 +1259,15 @@ void MainWindow::finishMeshGeneration()
     meshGenerating_ = false;
     const auto result = meshWatcher_.result();
     auto& study = simulation_.study();
-    study.sourceFeatureId = meshSourceFeatureId_.toStdString();
     study.settings = {meshMinimumSize_->value(), meshMaximumSize_->value()};
-    if (result && result->success) {
-        study.mesh = result->mesh;
-        study.statistics = result->statistics;
-        study.diagnostic.clear();
-        study.status = cad::application::SimulationStatus::Ready;
-        simulation_.setMesh(study.mesh);
-        viewer_->showMesh(study.mesh);
+    if (result && simulation_.acceptMeshResult(*result, meshGenerationRevision_)) {
+        viewer_->showMesh(simulation_.study().mesh);
         statusBar()->showMessage("Mesh generated", 3000);
     } else {
-        study.diagnostic = result ? result->diagnostic : "Mesh generation failed";
-        study.status = study.diagnostic == "Mesh generation cancelled"
-            ? cad::application::SimulationStatus::NotGenerated
-            : cad::application::SimulationStatus::Failed;
+        if (!result) {
+            study.diagnostic = "Mesh generation failed";
+            study.status = cad::application::SimulationStatus::Failed;
+        }
         statusBar()->showMessage(QString::fromStdString(study.diagnostic), 4000);
     }
     updateMeshInspector();
@@ -1334,16 +1338,19 @@ void MainWindow::commitVisibilityConfiguration(
 
 void MainWindow::refreshModelView(const bool fitView)
 {
-    if (!meshSourceFeatureId_.isEmpty()
-        && simulation_.study().status == cad::application::SimulationStatus::Ready) {
-        simulation_.markGeometryChanged(meshSourceFeatureId_.toStdString());
+    const auto previousGeometryRevision = modeling_.body().geometryRevision();
+    const auto result = presenter_->refreshModel();
+    if (!meshSourceFeatureId_.isEmpty()) {
+        const auto currentGeometryRevision = modeling_.body().geometryRevision();
+        if (currentGeometryRevision != previousGeometryRevision)
+            simulation_.markGeometryChanged(
+                meshSourceFeatureId_.toStdString(), currentGeometryRevision);
         if (simulation_.study().status == cad::application::SimulationStatus::Outdated) {
             viewer_->deleteMeshPresentation();
             updateMeshInspector();
             updateElectrostaticPanel();
         }
     }
-    const auto result = presenter_->refreshModel();
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
