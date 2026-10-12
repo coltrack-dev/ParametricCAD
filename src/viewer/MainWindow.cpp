@@ -971,19 +971,24 @@ void MainWindow::createSimulationPanel()
     layout->addWidget(electrostaticStatisticsLabel_);
     auto* addVoltageButton = new QPushButton("Add Voltage Boundary", panel);
     auto* addGroundButton = new QPushButton("Add Ground Boundary", panel);
-    auto* removeBoundaryButton = new QPushButton("Remove Boundary", panel);
+    removeBoundaryButton_ = new QPushButton("Remove Boundary", panel);
     editBoundaryButton_ = new QPushButton("Edit Boundary", panel);
     auto* solveButton = new QPushButton("Solve Electrostatics", panel);
     auto* showPotentialButton = new QPushButton("Show Potential", panel);
     auto* showFieldButton = new QPushButton("Show Electric Field", panel);
     auto* clearResultButton = new QPushButton("Clear Results", panel);
-    for (auto* button : {addVoltageButton, addGroundButton, removeBoundaryButton,
+    for (auto* button : {addVoltageButton, addGroundButton, removeBoundaryButton_,
                          editBoundaryButton_,
                          solveButton, showPotentialButton, showFieldButton, clearResultButton})
         layout->addWidget(button);
     connect(addVoltageButton, &QPushButton::clicked, this, &MainWindow::addVoltageBoundary);
     connect(addGroundButton, &QPushButton::clicked, this, &MainWindow::addGroundBoundary);
-    connect(removeBoundaryButton, &QPushButton::clicked, this, &MainWindow::removeBoundary);
+    connect(removeBoundaryButton_, &QPushButton::clicked, this, &MainWindow::removeBoundary);
+    connect(boundaryList_, &QListWidget::itemSelectionChanged, this, [this]() {
+        const bool hasSelection = boundaryList_ && boundaryList_->currentItem();
+        if (removeBoundaryButton_) removeBoundaryButton_->setEnabled(hasSelection);
+        if (editBoundaryButton_) editBoundaryButton_->setEnabled(hasSelection);
+    });
     connect(editBoundaryButton_, &QPushButton::clicked, this, &MainWindow::editBoundary);
     connect(solveButton, &QPushButton::clicked, this, &MainWindow::solveElectrostatics);
     connect(showPotentialButton, &QPushButton::clicked, this, &MainWindow::showPotentialResult);
@@ -1070,6 +1075,9 @@ void MainWindow::updateElectrostaticPanel()
         item->setData(Qt::UserRole, QString::fromStdString(boundary.id));
         if (!boundary.valid) item->setToolTip(QString::fromStdString(boundary.diagnostic));
     }
+    const bool hasSelection = boundaryList_->currentItem() != nullptr;
+    if (removeBoundaryButton_) removeBoundaryButton_->setEnabled(hasSelection);
+    if (editBoundaryButton_) editBoundaryButton_->setEnabled(hasSelection);
     if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Solving) {
         electrostaticStatisticsLabel_->setText("Solution Status: Solving...");
     } else if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Failed) {
@@ -1134,8 +1142,20 @@ void MainWindow::addGroundBoundary()
 void MainWindow::removeBoundary()
 {
     const auto item = boundaryList_ ? boundaryList_->currentItem() : nullptr;
-    if (!item) return;
-    simulation_.removeBoundary(item->data(Qt::UserRole).toString().toStdString());
+    if (!item) {
+        statusBar()->showMessage("Select a boundary condition first", 3000);
+        return;
+    }
+    const auto id = item->data(Qt::UserRole).toString().toStdString();
+    const bool removed = simulation_.removeBoundary(id);
+    if (!removed) {
+        statusBar()->showMessage("Selected boundary condition no longer exists", 3000);
+        updateElectrostaticPanel();
+        return;
+    }
+    viewer_->clearCaeResultPresentation();
+    viewer_->showMesh(simulation_.study().mesh);
+    statusBar()->showMessage(QString("Boundary removed: %1").arg(QString::fromStdString(id)), 3000);
     updateElectrostaticPanel();
 }
 
@@ -1235,7 +1255,7 @@ void MainWindow::generateMesh()
     const cad::cae::MeshSettings settings{
         meshMinimumSize_->value(), meshMaximumSize_->value()};
     meshSourceFeatureId_ = QString::fromStdString(ids.front());
-    meshGenerationRevision_ = modeling_.body().geometryRevision();
+    meshGenerationRevision_ = feature->geometryRevision();
     meshCancelRequested_ = std::make_shared<std::atomic_bool>(false);
     meshGenerating_ = true;
     simulation_.beginMeshGeneration(meshSourceFeatureId_.toStdString(), meshGenerationRevision_);
@@ -1338,11 +1358,11 @@ void MainWindow::commitVisibilityConfiguration(
 
 void MainWindow::refreshModelView(const bool fitView)
 {
-    const auto previousGeometryRevision = modeling_.body().geometryRevision();
     const auto result = presenter_->refreshModel();
     if (!meshSourceFeatureId_.isEmpty()) {
-        const auto currentGeometryRevision = modeling_.body().geometryRevision();
-        if (currentGeometryRevision != previousGeometryRevision)
+        const auto currentGeometryRevision = modeling_.body().featureGeometryRevision(
+            meshSourceFeatureId_.toStdString());
+        if (currentGeometryRevision != simulation_.study().geometryRevision)
             simulation_.markGeometryChanged(
                 meshSourceFeatureId_.toStdString(), currentGeometryRevision);
         if (simulation_.study().status == cad::application::SimulationStatus::Outdated) {

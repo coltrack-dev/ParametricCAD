@@ -379,6 +379,7 @@ private:
     QDoubleSpinBox* relativePermittivity_{nullptr};
     QDoubleSpinBox* chargeDensity_{nullptr};
     QLabel* electrostaticStatisticsLabel_{nullptr};
+    QPushButton* removeBoundaryButton_{nullptr};
     QPushButton* editBoundaryButton_{nullptr};
     QPushButton* meshGenerateButton_{nullptr};
     QPushButton* meshCancelButton_{nullptr};

@@ -1,4 +1,5 @@
 #include "application/ElectrostaticBoundaryCondition.h"
+#include "application/SimulationController.h"
 
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -34,6 +35,7 @@ int main()
              static_cast<std::size_t>((id - 1) * 3 + 2)}, id});
     }
     int regionId = 0;
+    std::vector<cad::topology::TopologicalReference> references;
     for (TopExp_Explorer explorer(transformed, TopAbs_FACE); explorer.More(); explorer.Next()) {
         const auto face = explorer.Current();
         const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
@@ -50,7 +52,34 @@ int main()
         const auto mapping = cad::application::mapFaceToMeshRegion(reference, mesh);
         assert(mapping.valid);
         assert(mapping.boundaryId == region.boundaryId);
+        references.push_back(reference);
     }
     assert(regionId == 6);
+
+    cad::application::SimulationController controller;
+    cad::cae::MeshGenerationResult generated;
+    generated.success = true;
+    generated.mesh = mesh;
+    controller.beginMeshGeneration("box", 1);
+    const auto meshAccepted = controller.acceptMeshResult(generated, 1);
+    assert(meshAccepted);
+    std::string diagnostic;
+    const auto firstAdded = controller.addVoltageBoundary(
+        "A", 100.0, {references[0]}, diagnostic);
+    assert(firstAdded);
+    const auto secondAdded = controller.addVoltageBoundary(
+        "B", 0.0, {references[1]}, diagnostic);
+    assert(secondAdded);
+    assert(controller.study().boundaryConditions.size() == 2);
+    const auto firstId = controller.study().boundaryConditions.front().id;
+    const auto removed = controller.removeBoundary(firstId);
+    assert(removed);
+    assert(controller.study().boundaryConditions.size() == 1);
+    assert(controller.study().boundaryConditions.front().name == "B");
+    assert(controller.study().status == cad::application::SimulationStatus::Ready);
+    assert(controller.study().solutionStatus
+        == cad::application::ElectrostaticSolutionStatus::Outdated);
+    const auto removedAgain = controller.removeBoundary(firstId);
+    assert(!removedAgain);
     return 0;
 }

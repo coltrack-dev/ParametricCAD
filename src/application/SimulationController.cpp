@@ -12,7 +12,8 @@ namespace {
 
 bool simulationTraceEnabled()
 {
-    return std::getenv("PARAMETRICCAD_TRACE_SIMULATION") != nullptr;
+    return std::getenv("PARAMETRIC_CAD_CAE_TRACE") != nullptr
+        || std::getenv("PARAMETRICCAD_TRACE_SIMULATION") != nullptr;
 }
 
 const char* meshStatusName(const SimulationStatus status)
@@ -223,9 +224,17 @@ bool SimulationController::removeBoundary(const std::string& id)
     study_.boundaryConditions.erase(std::remove_if(study_.boundaryConditions.begin(),
         study_.boundaryConditions.end(), [&id](const auto& boundary) { return boundary.id == id; }),
         study_.boundaryConditions.end());
-    if (study_.boundaryConditions.size() == oldSize) return false;
+    if (study_.boundaryConditions.size() == oldSize) {
+        if (simulationTraceEnabled())
+            std::fprintf(stderr, "[SIM] boundary-remove id=%s success=0 count=%zu\n",
+                id.c_str(), oldSize);
+        return false;
+    }
     setMesh(study_.mesh);
     study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+    if (simulationTraceEnabled())
+        std::fprintf(stderr, "[SIM] boundary-remove id=%s success=1 count=%zu->%zu\n",
+            id.c_str(), oldSize, study_.boundaryConditions.size());
     return true;
 }
 

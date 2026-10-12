@@ -35,6 +35,7 @@ public:
 
     const std::string& lastError() const noexcept;
     std::uint64_t geometryRevision() const noexcept { return geometryRevision_; }
+    std::uint64_t featureGeometryRevision(const std::string& featureId) const noexcept;
 
 private:
     std::vector<FeaturePtr> features_;

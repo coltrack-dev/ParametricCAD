@@ -174,4 +174,10 @@ const std::string& Body::lastError() const noexcept
     return lastError_;
 }
 
+std::uint64_t Body::featureGeometryRevision(const std::string& featureId) const noexcept
+{
+    const auto feature = findFeature(featureId);
+    return feature ? feature->geometryRevision() : 0;
+}
+
 } // namespace cad::parametric

@@ -5,6 +5,7 @@
 #include <QJsonObject>
 
 #include <functional>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -62,6 +63,7 @@ public:
     FeatureState state() const noexcept;
     bool isDirty() const noexcept;
     const std::string& error() const noexcept;
+    std::uint64_t geometryRevision() const noexcept { return geometryRevision_; }
 
     virtual const char* typeId() const noexcept;
     virtual FeatureRole role() const noexcept;
@@ -99,6 +101,7 @@ private:
     bool userVisible_{true};
     FeatureState state_{FeatureState::Dirty};
     std::string error_;
+    std::uint64_t geometryRevision_{0};
     std::vector<std::weak_ptr<ParametricFeature>> dependencies_;
 };
 
