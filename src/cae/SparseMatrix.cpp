@@ -115,19 +115,22 @@ ConjugateGradientResult solveConjugateGradient(
         result.diagnostic = "CG input contains NaN or Inf";
         return result;
     }
-    std::vector<double> diagonal(matrix.rows());
-    for (std::size_t i = 0; i < matrix.rows(); ++i) {
-        diagonal[i] = matrix.diagonal(i);
-        if (!std::isfinite(diagonal[i])) {
-            result.status = ConjugateGradientStatus::NonFinite;
-            result.diagnostic = "CG diagonal contains NaN or Inf";
-            return result;
-        }
-        if (diagonal[i] <= 0.0) {
-            result.status = diagonal[i] == 0.0 ? ConjugateGradientStatus::ZeroDiagonal
-                                               : ConjugateGradientStatus::NonPositiveDefinite;
-            result.diagnostic = "CG Jacobi preconditioner requires a positive diagonal";
-            return result;
+    std::vector<double> diagonal;
+    if (parameters.preconditioner == ConjugateGradientPreconditioner::Jacobi) {
+        diagonal.resize(matrix.rows());
+        for (std::size_t i = 0; i < matrix.rows(); ++i) {
+            diagonal[i] = matrix.diagonal(i);
+            if (!std::isfinite(diagonal[i])) {
+                result.status = ConjugateGradientStatus::NonFinite;
+                result.diagnostic = "CG diagonal contains NaN or Inf";
+                return result;
+            }
+            if (diagonal[i] <= 0.0) {
+                result.status = diagonal[i] == 0.0 ? ConjugateGradientStatus::ZeroDiagonal
+                                                   : ConjugateGradientStatus::NonPositiveDefinite;
+                result.diagnostic = "CG Jacobi preconditioner requires a positive diagonal";
+                return result;
+            }
         }
     }
     const auto rhsNorm = vectorNorm(rightHandSide);
@@ -142,7 +145,9 @@ ConjugateGradientResult solveConjugateGradient(
         return result;
     }
     std::vector<double> preconditioned(residual.size());
-    for (std::size_t i = 0; i < residual.size(); ++i) preconditioned[i] = residual[i] / diagonal[i];
+    for (std::size_t i = 0; i < residual.size(); ++i)
+        preconditioned[i] = parameters.preconditioner == ConjugateGradientPreconditioner::Jacobi
+            ? residual[i] / diagonal[i] : residual[i];
     auto direction = preconditioned;
     auto rz = dotProduct(residual, preconditioned);
     if (!std::isfinite(rz) || rz <= 0.0) {
@@ -182,7 +187,9 @@ ConjugateGradientResult solveConjugateGradient(
             result.diagnostic = "CG converged";
             return result;
         }
-        for (std::size_t i = 0; i < residual.size(); ++i) preconditioned[i] = residual[i] / diagonal[i];
+        for (std::size_t i = 0; i < residual.size(); ++i)
+            preconditioned[i] = parameters.preconditioner == ConjugateGradientPreconditioner::Jacobi
+                ? residual[i] / diagonal[i] : residual[i];
         const auto newRz = dotProduct(residual, preconditioned);
         if (!std::isfinite(newRz) || newRz <= 0.0) {
             result.status = ConjugateGradientStatus::NonPositiveDefinite;

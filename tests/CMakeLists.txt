@@ -29,6 +29,12 @@ target_include_directories(cae_fem_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(cae_fem_tests PRIVATE ParametricCAD::CAECore)
 add_test(NAME cae_fem_tests COMMAND cae_fem_tests)
 
+if(PARAMETRIC_CAD_BUILD_BENCHMARKS)
+    add_test(NAME cae_benchmarks_smoke
+        COMMAND cae_benchmarks --case smoke --repetitions 1
+            --output "${CMAKE_CURRENT_BINARY_DIR}/cae_benchmarks_smoke.csv")
+endif()
+
 find_program(PARAMETRIC_CAD_GMSH_EXECUTABLE gmsh)
 if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
     add_executable(gmsh_mesh_tests

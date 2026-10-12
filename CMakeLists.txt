@@ -16,6 +16,8 @@ option(PARAMETRIC_CAD_BUILD_TESTS "Build unit tests" ON)
 option(PARAMETRIC_CAD_ENABLE_IFC "Enable the IfcOpenShell 0.9 adapter" ON)
 option(PARAMETRIC_CAD_BUILD_IFC_PROBE
     "Build the standalone IfcOpenShell iterator probe" OFF)
+option(PARAMETRIC_CAD_BUILD_BENCHMARKS
+    "Build non-GUI CAE performance benchmarks" ON)
 
 set(PARAMETRIC_CAD_IFCOPENSHELL_ROOT "" CACHE PATH
     "Prefix or build tree of an IfcOpenShell 0.9.x installation")
@@ -72,6 +74,22 @@ add_library(parametriccae_core STATIC
     src/cae/ElectrostaticSolver.h)
 target_include_directories(parametriccae_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(ParametricCAD::CAECore ALIAS parametriccae_core)
+
+if(PARAMETRIC_CAD_BUILD_BENCHMARKS)
+    add_executable(cae_benchmarks benchmarks/cae_benchmarks.cpp)
+    target_link_libraries(cae_benchmarks PRIVATE ParametricCAD::CAECore)
+    if(MSVC)
+        target_compile_options(cae_benchmarks PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(cae_benchmarks PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    set(PARAMETRIC_CAD_BENCHMARK_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+    if(NOT PARAMETRIC_CAD_BENCHMARK_BUILD_TYPE)
+        set(PARAMETRIC_CAD_BENCHMARK_BUILD_TYPE "unknown")
+    endif()
+    target_compile_definitions(cae_benchmarks PRIVATE
+        PARAMETRIC_CAD_BENCHMARK_BUILD_TYPE="${PARAMETRIC_CAD_BENCHMARK_BUILD_TYPE}")
+endif()
 
 # Prefer the package target supplied by vcpkg (and other CONFIG packages). It
 # carries both the minizip include directory and its transitive dependencies.

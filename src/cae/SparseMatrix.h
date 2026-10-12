@@ -68,10 +68,18 @@ enum class ConjugateGradientStatus
     NotConverged
 };
 
+enum class ConjugateGradientPreconditioner
+{
+    None,
+    Jacobi
+};
+
 struct ConjugateGradientParameters
 {
     double tolerance{1.0e-10};
     std::size_t maxIterations{1000};
+    ConjugateGradientPreconditioner preconditioner{
+        ConjugateGradientPreconditioner::Jacobi};
 };
 
 struct ConjugateGradientResult
