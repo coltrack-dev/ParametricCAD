@@ -263,6 +263,7 @@ bool SimulationController::remapBoundaries(
     const TopoDS_Shape& currentShape, std::string& diagnostic)
 {
     diagnostic.clear();
+    const auto previousSolutionStatus = study_.solutionStatus;
     study_.electrostaticProblem.mesh = study_.mesh;
     study_.electrostaticProblem.dirichletBoundaries.clear();
 
@@ -359,7 +360,8 @@ bool SimulationController::remapBoundaries(
         if (boundary.valid) study_.electrostaticProblem.dirichletBoundaries.push_back({
             boundary.name, boundary.meshNodes, boundary.potential});
     }
-    study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+    if (previousSolutionStatus != ElectrostaticSolutionStatus::NotSolved)
+        study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
     study_.solvedMeshRevision = 0;
     if (simulationTraceEnabled()) {
         std::fprintf(stderr, "[SIM] boundary-remap studyId=%s success=%d diagnostic=%s\n",

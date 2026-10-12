@@ -1025,6 +1025,9 @@ void MainWindow::createSimulationPanel()
         updateMeshInspector();
     });
     connect(meshDeleteButton_, &QPushButton::clicked, this, [this]() {
+        traceCae("mesh-delete-button", QString("clicked studyId=%1 feature=%2")
+            .arg(QString::fromStdString(simulation_.study().studyId))
+            .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
         if (meshGenerating_) cancelMeshGeneration();
         simulation_.deleteMesh();
         viewer_->deleteMeshPresentation();
@@ -1315,6 +1318,10 @@ void MainWindow::clearElectrostaticResult()
 void MainWindow::generateMesh()
 {
     const auto ids = selectedIds();
+    traceCae("mesh-generate-request", QString("selectionCount=%1 studyId=%2 studyFeature=%3")
+        .arg(ids.size())
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
     if (ids.size() != 1) {
         statusBar()->showMessage("Select one closed solid first", 3000);
         return;
