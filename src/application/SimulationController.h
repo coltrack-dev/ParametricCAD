@@ -16,6 +16,7 @@ enum class ElectrostaticSolutionStatus { NotSolved, Solving, Ready, Outdated, Fa
 
 struct SimulationStudy
 {
+    std::string studyId{"simulation-study-1"};
     std::string sourceFeatureId;
     cad::cae::MeshSettings settings;
     SimulationStatus status{SimulationStatus::NotGenerated};
@@ -25,6 +26,7 @@ struct SimulationStudy
     std::uint64_t geometryRevision{0};
     std::uint64_t meshRevision{0};
     std::uint64_t pendingMeshRevision{0};
+    std::uint64_t pendingMeshGenerationId{0};
     cad::cae::ElectrostaticProblem electrostaticProblem;
     std::vector<ElectrostaticBoundaryCondition> boundaryConditions;
     cad::cae::ElectrostaticResult electrostaticResult;
@@ -40,7 +42,8 @@ struct SimulationStudy
 class SimulationController final
 {
 public:
-    SimulationController();
+    explicit SimulationController(
+        std::unique_ptr<cad::cae::IMeshGenerator> generator = nullptr);
     SimulationStudy& study() noexcept { return study_; }
     const SimulationStudy& study() const noexcept { return study_; }
 
@@ -49,9 +52,14 @@ public:
                                              const cad::cae::MeshSettings& settings,
                                              const std::atomic_bool* cancel = nullptr);
     void deleteMesh();
-    void beginMeshGeneration(const std::string& featureId, std::uint64_t geometryRevision);
+    std::uint64_t beginMeshGeneration(const std::string& featureId,
+                                      std::uint64_t geometryRevision);
     bool acceptMeshResult(const cad::cae::MeshGenerationResult& result,
                           std::uint64_t geometryRevision);
+    bool acceptMeshResult(const cad::cae::MeshGenerationResult& result,
+                          std::uint64_t geometryRevision,
+                          std::uint64_t generationId);
+    bool meshGenerationActive() const noexcept;
     void markGeometryChanged(const std::string& featureId,
                              std::uint64_t geometryRevision = 0);
     void setMesh(const cad::cae::VolumeMesh& mesh,
@@ -73,6 +81,7 @@ private:
     SimulationStudy study_;
     std::unique_ptr<cad::cae::IMeshGenerator> generator_;
     std::size_t boundarySequence_{0};
+    std::uint64_t meshGenerationSequence_{0};
 };
 
 } // namespace cad::application

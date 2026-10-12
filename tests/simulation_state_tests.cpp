@@ -1,11 +1,37 @@
 #include "application/SimulationController.h"
+#include "cae/MeshGenerator.h"
 #include "model/Body.h"
 #include "operations/ParametricFeatures.h"
 
 #include <cassert>
 #include <memory>
+#include <vector>
 
 namespace {
+
+class FakeMeshGenerator final : public cad::cae::IMeshGenerator
+{
+public:
+    FakeMeshGenerator(std::size_t& calls,
+                      std::vector<cad::cae::MeshGenerationResult> results)
+        : calls_(calls), results_(std::move(results))
+    {}
+
+    cad::cae::MeshGenerationResult generate(
+        const TopoDS_Shape&, const cad::cae::MeshSettings&,
+        const std::atomic_bool*) override
+    {
+        ++calls_;
+        if (results_.empty()) return {false, {}, {}, "No fake result"};
+        auto result = results_.front();
+        results_.erase(results_.begin());
+        return result;
+    }
+
+private:
+    std::size_t& calls_;
+    std::vector<cad::cae::MeshGenerationResult> results_;
+};
 
 cad::cae::MeshGenerationResult successfulMesh()
 {
@@ -21,6 +47,15 @@ cad::cae::ElectrostaticResult successfulSolution()
     cad::cae::ElectrostaticResult result;
     result.convergenceStatus = cad::cae::ElectrostaticConvergenceStatus::Converged;
     result.relativeResidual = 1.0e-12;
+    return result;
+}
+
+cad::cae::MeshGenerationResult fakeMeshResult(const std::size_t nodeCount)
+{
+    cad::cae::MeshGenerationResult result;
+    result.success = true;
+    for (std::size_t node = 0; node < nodeCount; ++node)
+        result.mesh.nodes.push_back({node, static_cast<double>(node), 0.0, 0.0});
     return result;
 }
 
@@ -40,6 +75,49 @@ void assertSolutionReady(const cad::application::SimulationController& controlle
 
 int main()
 {
+    std::size_t fakeCalls = 0;
+    cad::application::SimulationController fakeController(
+        std::make_unique<FakeMeshGenerator>(fakeCalls, std::vector{
+            fakeMeshResult(4), fakeMeshResult(8),
+            cad::cae::MeshGenerationResult{false, {}, {}, "fake gmsh failure"}}));
+    const auto studyId = fakeController.study().studyId;
+    const auto firstGeneration = fakeController.generate(
+        TopoDS_Shape{}, "box", {}, nullptr);
+    assert(firstGeneration.success);
+    assert(fakeCalls == 1);
+    assert(fakeController.study().status == cad::application::SimulationStatus::Ready);
+    assert(fakeController.study().studyId == studyId);
+    const auto secondGeneration = fakeController.generate(
+        TopoDS_Shape{}, "box", {}, nullptr);
+    assert(secondGeneration.success);
+    assert(fakeCalls == 2);
+    assert(fakeController.study().status == cad::application::SimulationStatus::Ready);
+    assert(fakeController.study().statistics.nodeCount == 8);
+    const auto failedGeneration = fakeController.generate(
+        TopoDS_Shape{}, "box", {}, nullptr);
+    assert(!failedGeneration.success);
+    assert(fakeCalls == 3);
+    assert(fakeController.study().status == cad::application::SimulationStatus::Failed);
+    assert(fakeController.study().statistics.nodeCount == 8);
+
+    const auto activeGeneration = fakeController.beginMeshGeneration("box", 1);
+    assert(activeGeneration != 0);
+    assert(fakeController.beginMeshGeneration("box", 1) == 0);
+    assert(!fakeController.acceptMeshResult(
+        fakeMeshResult(12), 1, activeGeneration - 1));
+    assert(fakeController.meshGenerationActive());
+    fakeController.deleteMesh();
+    assert(!fakeController.acceptMeshResult(fakeMeshResult(16), 1, activeGeneration));
+    assert(fakeController.study().status == cad::application::SimulationStatus::NotGenerated);
+
+    fakeController.deleteMesh();
+    assert(fakeController.study().status == cad::application::SimulationStatus::NotGenerated);
+    assert(fakeController.study().studyId == studyId);
+    const auto regenerated = fakeController.generate(
+        TopoDS_Shape{}, "box", {}, nullptr);
+    assert(!regenerated.success);
+    assert(fakeCalls == 4);
+
     cad::application::SimulationController controller;
 
     controller.beginMeshGeneration("box", 1);

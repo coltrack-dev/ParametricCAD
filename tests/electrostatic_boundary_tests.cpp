@@ -71,6 +71,16 @@ int main()
         "B", 0.0, {references[1]}, diagnostic);
     assert(secondAdded);
     assert(controller.study().boundaryConditions.size() == 2);
+    controller.deleteMesh();
+    assert(controller.study().status == cad::application::SimulationStatus::NotGenerated);
+    assert(controller.study().sourceFeatureId == "box");
+    assert(controller.study().boundaryConditions.size() == 2);
+    assert(!controller.study().boundaryConditions[0].valid);
+    controller.beginMeshGeneration("box", 1);
+    const auto remeshAccepted = controller.acceptMeshResult(generated, 1);
+    assert(remeshAccepted);
+    assert(controller.study().boundaryConditions[0].valid);
+    assert(controller.study().boundaryConditions[1].valid);
     const auto firstId = controller.study().boundaryConditions.front().id;
     const auto removed = controller.removeBoundary(firstId);
     assert(removed);

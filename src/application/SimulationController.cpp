@@ -57,41 +57,66 @@ void traceTransition(const SimulationStudy& study, const char* reason,
 
 }
 
-SimulationController::SimulationController()
-    : generator_(std::make_unique<cad::cae::GmshMeshGenerator>())
+SimulationController::SimulationController(std::unique_ptr<cad::cae::IMeshGenerator> generator)
+    : generator_(generator ? std::move(generator)
+                           : std::make_unique<cad::cae::GmshMeshGenerator>())
 {}
 
-void SimulationController::beginMeshGeneration(
+std::uint64_t SimulationController::beginMeshGeneration(
     const std::string& featureId, const std::uint64_t geometryRevision)
 {
+    if (meshGenerationActive()) return 0;
     const auto oldMesh = meshStatusName(study_.status);
     const auto oldSolution = solutionStatusName(study_.solutionStatus);
     study_.sourceFeatureId = featureId;
     study_.geometryRevision = geometryRevision;
     study_.pendingMeshRevision = geometryRevision;
+    study_.pendingMeshGenerationId = ++meshGenerationSequence_;
     study_.status = SimulationStatus::Generating;
+    if (study_.solutionStatus == ElectrostaticSolutionStatus::Ready
+        || study_.solutionStatus == ElectrostaticSolutionStatus::Solving)
+        study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+    if (study_.solutionStatus != ElectrostaticSolutionStatus::NotSolved)
+        study_.electrostaticResult = {};
+    study_.solutionDiagnostic.clear();
     traceTransition(study_, "mesh generation started", oldMesh, oldSolution);
+    return study_.pendingMeshGenerationId;
 }
 
 bool SimulationController::acceptMeshResult(
     const cad::cae::MeshGenerationResult& result, const std::uint64_t geometryRevision)
 {
+    return acceptMeshResult(result, geometryRevision, study_.pendingMeshGenerationId);
+}
+
+bool SimulationController::acceptMeshResult(
+    const cad::cae::MeshGenerationResult& result,
+    const std::uint64_t geometryRevision,
+    const std::uint64_t generationId)
+{
     const auto oldMesh = meshStatusName(study_.status);
     const auto oldSolution = solutionStatusName(study_.solutionStatus);
+    if (generationId == 0 || generationId != study_.pendingMeshGenerationId) {
+        traceTransition(study_, "stale mesh generation request ignored", oldMesh, oldSolution);
+        return false;
+    }
+    if (geometryRevision != study_.geometryRevision
+        || geometryRevision != study_.pendingMeshRevision) {
+        study_.pendingMeshGenerationId = 0;
+        study_.diagnostic = "Mesh generation result belongs to an older geometry revision";
+        study_.status = SimulationStatus::Outdated;
+        traceTransition(study_, "stale mesh generation result rejected", oldMesh, oldSolution);
+        return false;
+    }
     if (!result.success) {
+        study_.pendingMeshGenerationId = 0;
         study_.diagnostic = result.diagnostic;
         study_.status = result.diagnostic == "Mesh generation cancelled"
             ? SimulationStatus::NotGenerated : SimulationStatus::Failed;
         traceTransition(study_, "mesh generation failed", oldMesh, oldSolution);
         return false;
     }
-    if (geometryRevision != study_.geometryRevision
-        || geometryRevision != study_.pendingMeshRevision) {
-        study_.diagnostic = "Mesh generation result belongs to an older geometry revision";
-        study_.status = SimulationStatus::Outdated;
-        traceTransition(study_, "stale mesh generation result rejected", oldMesh, oldSolution);
-        return false;
-    }
+    study_.pendingMeshGenerationId = 0;
     study_.mesh = result.mesh;
     study_.statistics = result.statistics;
     study_.diagnostic.clear();
@@ -108,23 +133,43 @@ cad::cae::MeshGenerationResult SimulationController::generate(
 {
     study_.sourceFeatureId = featureId;
     study_.settings = settings;
-    beginMeshGeneration(featureId, study_.geometryRevision);
+    const auto generationId = beginMeshGeneration(featureId, study_.geometryRevision);
+    if (generationId == 0) {
+        return {false, {}, {}, "Mesh generation is already active for this study"};
+    }
     const auto result = generator_->generate(shape, settings, cancel);
-    acceptMeshResult(result, study_.geometryRevision);
+    acceptMeshResult(result, study_.geometryRevision, generationId);
     return result;
 }
 
 void SimulationController::deleteMesh()
 {
+    const auto oldMesh = meshStatusName(study_.status);
+    const auto oldSolution = solutionStatusName(study_.solutionStatus);
+    ++meshGenerationSequence_;
+    study_.pendingMeshGenerationId = 0;
     study_.mesh = {};
     study_.statistics = {};
     study_.diagnostic.clear();
     study_.status = SimulationStatus::NotGenerated;
     study_.meshRevision = 0;
     study_.pendingMeshRevision = 0;
-    study_.electrostaticProblem = {};
-    study_.boundaryConditions.clear();
+    study_.electrostaticProblem.mesh = {};
+    study_.electrostaticProblem.dirichletBoundaries.clear();
+    for (auto& boundary : study_.boundaryConditions) {
+        boundary.meshBoundaryIds.clear();
+        boundary.meshNodes.clear();
+        boundary.valid = false;
+        boundary.diagnostic = "Mesh has not been generated";
+    }
     clearElectrostaticResult();
+    traceTransition(study_, "mesh deleted", oldMesh, oldSolution);
+}
+
+bool SimulationController::meshGenerationActive() const noexcept
+{
+    return study_.status == SimulationStatus::Generating
+        && study_.pendingMeshGenerationId != 0;
 }
 
 void SimulationController::markGeometryChanged(

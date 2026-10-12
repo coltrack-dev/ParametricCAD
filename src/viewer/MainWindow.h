@@ -391,6 +391,7 @@ private:
     std::shared_ptr<std::atomic_bool> meshCancelRequested_;
     QString meshSourceFeatureId_;
     std::uint64_t meshGenerationRevision_{0};
+    std::uint64_t meshGenerationId_{0};
     bool meshGenerating_{false};
     QFutureWatcher<std::shared_ptr<cad::cae::ElectrostaticResult>> electrostaticWatcher_;
     std::uint64_t electrostaticSolveRevision_{0};

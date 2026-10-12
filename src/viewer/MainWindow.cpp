@@ -1014,9 +1014,12 @@ void MainWindow::createSimulationPanel()
         updateMeshInspector();
     });
     connect(meshDeleteButton_, &QPushButton::clicked, this, [this]() {
+        if (meshGenerating_) cancelMeshGeneration();
         simulation_.deleteMesh();
         viewer_->deleteMeshPresentation();
+        viewer_->clearCaeResultPresentation();
         updateMeshInspector();
+        updateElectrostaticPanel();
     });
     updateMeshInspector();
     updateElectrostaticPanel();
@@ -1038,7 +1041,10 @@ void MainWindow::updateMeshInspector()
         meshStatisticsLabel_->setText("Mesh Status: Generating...");
     } else if (study.status == cad::application::SimulationStatus::Failed) {
         meshStatisticsLabel_->setText("Mesh Status: Failed\n"
-            + QString::fromStdString(study.diagnostic));
+            + QString::fromStdString(study.diagnostic)
+            + (study.mesh.tetrahedra.empty()
+                ? QString()
+                : QString("\nPrevious mesh retained; regenerate to replace it")));
     } else if (study.status == cad::application::SimulationStatus::Outdated) {
         meshStatisticsLabel_->setText("Mesh Status: Outdated\n"
             "Regenerate after geometry changes");
@@ -1254,11 +1260,18 @@ void MainWindow::generateMesh()
     }
     const cad::cae::MeshSettings settings{
         meshMinimumSize_->value(), meshMaximumSize_->value()};
-    meshSourceFeatureId_ = QString::fromStdString(ids.front());
-    meshGenerationRevision_ = feature->geometryRevision();
+    const auto featureId = ids.front();
+    const auto geometryRevision = feature->geometryRevision();
+    meshGenerationId_ = simulation_.beginMeshGeneration(
+        featureId, geometryRevision);
+    if (meshGenerationId_ == 0) {
+        statusBar()->showMessage("Mesh generation is already active", 3000);
+        return;
+    }
+    meshSourceFeatureId_ = QString::fromStdString(featureId);
+    meshGenerationRevision_ = geometryRevision;
     meshCancelRequested_ = std::make_shared<std::atomic_bool>(false);
     meshGenerating_ = true;
-    simulation_.beginMeshGeneration(meshSourceFeatureId_.toStdString(), meshGenerationRevision_);
     updateMeshInspector();
     const auto shape = feature->shape();
     const auto cancel = meshCancelRequested_;
@@ -1280,7 +1293,8 @@ void MainWindow::finishMeshGeneration()
     const auto result = meshWatcher_.result();
     auto& study = simulation_.study();
     study.settings = {meshMinimumSize_->value(), meshMaximumSize_->value()};
-    if (result && simulation_.acceptMeshResult(*result, meshGenerationRevision_)) {
+    if (result && simulation_.acceptMeshResult(
+            *result, meshGenerationRevision_, meshGenerationId_)) {
         viewer_->showMesh(simulation_.study().mesh);
         statusBar()->showMessage("Mesh generated", 3000);
     } else {
