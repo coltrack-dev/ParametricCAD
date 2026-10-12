@@ -5,6 +5,12 @@
 #include <QTemporaryDir>
 
 #include <fstream>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <map>
+#include <set>
 #include <unordered_map>
 #include <utility>
 
@@ -80,11 +86,61 @@ MeshGenerationResult readMsh41(const QString& path)
                             if (found == tags.end()) return fail("MSH references an unknown node tag");
                             nodes[n] = found->second;
                         }
-                        mesh.surfaceTriangles.push_back({nodes, entity});
+                        mesh.surfaceTriangles.push_back({nodes, entity,
+                            std::numeric_limits<std::size_t>::max()});
                     }
                 }
             }
         }
+    }
+    for (auto& triangle : mesh.surfaceTriangles) {
+        const std::set<std::size_t> triangleNodes(
+            triangle.nodes.begin(), triangle.nodes.end());
+        for (std::size_t element = 0; element < mesh.tetrahedra.size(); ++element) {
+            const auto& tetraNodes = mesh.tetrahedra[element].nodes;
+            const std::set<std::size_t> tetraSet(tetraNodes.begin(), tetraNodes.end());
+            if (std::includes(tetraSet.begin(), tetraSet.end(),
+                              triangleNodes.begin(), triangleNodes.end())) {
+                triangle.elementIndex = element;
+                break;
+            }
+        }
+    }
+    std::map<int, SurfaceRegion> regions;
+    for (const auto& triangle : mesh.surfaceTriangles) {
+        const auto& a = mesh.nodes[triangle.nodes[0]];
+        const auto& b = mesh.nodes[triangle.nodes[1]];
+        const auto& c = mesh.nodes[triangle.nodes[2]];
+        const std::array<double, 3> ab{b.x - a.x, b.y - a.y, b.z - a.z};
+        const std::array<double, 3> ac{c.x - a.x, c.y - a.y, c.z - a.z};
+        const std::array<double, 3> cross{
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0]};
+        const double crossLength = std::sqrt(
+            cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]);
+        const double area = crossLength / 2.0;
+        auto& region = regions[triangle.boundaryId];
+        region.boundaryId = triangle.boundaryId;
+        region.area += area;
+        region.centroid[0] += area * (a.x + b.x + c.x) / 3.0;
+        region.centroid[1] += area * (a.y + b.y + c.y) / 3.0;
+        region.centroid[2] += area * (a.z + b.z + c.z) / 3.0;
+        const double sign = region.normal[0] * cross[0]
+            + region.normal[1] * cross[1] + region.normal[2] * cross[2] < 0.0 ? -1.0 : 1.0;
+        region.normal[0] += sign * cross[0];
+        region.normal[1] += sign * cross[1];
+        region.normal[2] += sign * cross[2];
+    }
+    for (auto& [id, region] : regions) {
+        if (region.area > 0.0) {
+            for (auto& coordinate : region.centroid) coordinate /= region.area;
+        }
+        const auto length = std::sqrt(region.normal[0] * region.normal[0]
+            + region.normal[1] * region.normal[1] + region.normal[2] * region.normal[2]);
+        if (length > 0.0)
+            for (auto& coordinate : region.normal) coordinate /= length;
+        mesh.surfaceRegions.push_back(region);
     }
     const auto validation = validateMesh(mesh);
     if (!validation.valid) return fail(validation.error);

@@ -30,6 +30,7 @@
 #include <QFormLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QListWidget>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -63,6 +64,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <type_traits>
 
 namespace
@@ -547,6 +549,9 @@ MainWindow::MainWindow(QWidget* parent)
         this, &MainWindow::finishProjectLoad);
     connect(&meshWatcher_, &QFutureWatcher<std::shared_ptr<cad::cae::MeshGenerationResult>>::finished,
         this, &MainWindow::finishMeshGeneration);
+    connect(&electrostaticWatcher_,
+        &QFutureWatcher<std::shared_ptr<cad::cae::ElectrostaticResult>>::finished,
+        this, &MainWindow::finishElectrostaticSolve);
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     connect(&ifcImportProgressTimer_, &QTimer::timeout,
         this, &MainWindow::updateIfcImportProgress);
@@ -563,6 +568,7 @@ MainWindow::~MainWindow()
         meshCancelRequested_->store(true, std::memory_order_relaxed);
         meshWatcher_.future().waitForFinished();
     }
+    if (electrostaticSolving_) electrostaticWatcher_.future().waitForFinished();
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     if (ifcImporting_ && ifcImportCancelRequested_) {
         ifcImportCancelRequested_->store(true, std::memory_order_relaxed);
@@ -944,6 +950,45 @@ void MainWindow::createSimulationPanel()
     meshDeleteButton_ = new QPushButton("Delete Mesh", panel);
     for (auto* button : {meshGenerateButton_, meshCancelButton_, meshShowButton_,
                          meshHideButton_, meshDeleteButton_}) layout->addWidget(button);
+    auto* boundaryTitle = new QLabel("Electrostatic boundaries", panel);
+    layout->addWidget(boundaryTitle);
+    boundaryList_ = new QListWidget(panel);
+    boundaryList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    layout->addWidget(boundaryList_);
+    auto* electrostaticForm = new QFormLayout();
+    relativePermittivity_ = new QDoubleSpinBox(panel);
+    relativePermittivity_->setRange(1.0e-6, 1.0e6);
+    relativePermittivity_->setValue(1.0);
+    relativePermittivity_->setDecimals(6);
+    chargeDensity_ = new QDoubleSpinBox(panel);
+    chargeDensity_->setRange(-1.0e12, 1.0e12);
+    chargeDensity_->setDecimals(6);
+    electrostaticForm->addRow("Relative permittivity", relativePermittivity_);
+    electrostaticForm->addRow("Charge density C/m3", chargeDensity_);
+    layout->addLayout(electrostaticForm);
+    electrostaticStatisticsLabel_ = new QLabel("Electrostatics not solved", panel);
+    electrostaticStatisticsLabel_->setWordWrap(true);
+    layout->addWidget(electrostaticStatisticsLabel_);
+    auto* addVoltageButton = new QPushButton("Add Voltage Boundary", panel);
+    auto* addGroundButton = new QPushButton("Add Ground Boundary", panel);
+    auto* removeBoundaryButton = new QPushButton("Remove Boundary", panel);
+    editBoundaryButton_ = new QPushButton("Edit Boundary", panel);
+    auto* solveButton = new QPushButton("Solve Electrostatics", panel);
+    auto* showPotentialButton = new QPushButton("Show Potential", panel);
+    auto* showFieldButton = new QPushButton("Show Electric Field", panel);
+    auto* clearResultButton = new QPushButton("Clear Results", panel);
+    for (auto* button : {addVoltageButton, addGroundButton, removeBoundaryButton,
+                         editBoundaryButton_,
+                         solveButton, showPotentialButton, showFieldButton, clearResultButton})
+        layout->addWidget(button);
+    connect(addVoltageButton, &QPushButton::clicked, this, &MainWindow::addVoltageBoundary);
+    connect(addGroundButton, &QPushButton::clicked, this, &MainWindow::addGroundBoundary);
+    connect(removeBoundaryButton, &QPushButton::clicked, this, &MainWindow::removeBoundary);
+    connect(editBoundaryButton_, &QPushButton::clicked, this, &MainWindow::editBoundary);
+    connect(solveButton, &QPushButton::clicked, this, &MainWindow::solveElectrostatics);
+    connect(showPotentialButton, &QPushButton::clicked, this, &MainWindow::showPotentialResult);
+    connect(showFieldButton, &QPushButton::clicked, this, &MainWindow::showElectricFieldResult);
+    connect(clearResultButton, &QPushButton::clicked, this, &MainWindow::clearElectrostaticResult);
     layout->addStretch();
     meshInspectorDock_->setWidget(panel);
     addDockWidget(Qt::RightDockWidgetArea, meshInspectorDock_);
@@ -969,6 +1014,7 @@ void MainWindow::createSimulationPanel()
         updateMeshInspector();
     });
     updateMeshInspector();
+    updateElectrostaticPanel();
     for (auto* action : menuBar()->actions()) {
         auto* menu = action->menu();
         if (menu && menu->title() == QStringLiteral("&View")) {
@@ -1004,6 +1050,164 @@ void MainWindow::updateMeshInspector()
     if (meshShowButton_) meshShowButton_->setEnabled(!study.mesh.tetrahedra.empty());
     if (meshHideButton_) meshHideButton_->setEnabled(viewer_ && viewer_->meshVisible());
     if (meshDeleteButton_) meshDeleteButton_->setEnabled(!study.mesh.tetrahedra.empty());
+}
+
+void MainWindow::updateElectrostaticPanel()
+{
+    if (!boundaryList_) return;
+    boundaryList_->clear();
+    const auto& study = simulation_.study();
+    for (const auto& boundary : study.boundaryConditions) {
+        auto* item = new QListWidgetItem(
+            QString::fromStdString(boundary.name)
+            + QString(" = %1 V (%2 faces, %3 nodes)%4")
+                .arg(boundary.potential, 0, 'g', 8)
+                .arg(static_cast<qulonglong>(boundary.faces.size()))
+                .arg(static_cast<qulonglong>(boundary.meshNodes.size()))
+                .arg(boundary.valid ? QString() : " [invalid]"), boundaryList_);
+        item->setData(Qt::UserRole, QString::fromStdString(boundary.id));
+        if (!boundary.valid) item->setToolTip(QString::fromStdString(boundary.diagnostic));
+    }
+    if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Solving) {
+        electrostaticStatisticsLabel_->setText("Solving electrostatics...");
+    } else if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Failed) {
+        electrostaticStatisticsLabel_->setText(QString::fromStdString(study.solutionDiagnostic));
+    } else if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Outdated) {
+        electrostaticStatisticsLabel_->setText("Electrostatic result outdated");
+    } else if (study.solutionStatus != cad::application::ElectrostaticSolutionStatus::Ready) {
+        electrostaticStatisticsLabel_->setText("Electrostatics not solved");
+    } else {
+        const auto& result = study.electrostaticResult;
+        const auto potentialRange = std::minmax_element(
+            result.nodalPotential.begin(), result.nodalPotential.end());
+        double minimumField = 0.0;
+        double maximumField = 0.0;
+        if (!result.elementElectricField.empty()) {
+            minimumField = std::numeric_limits<double>::max();
+            for (const auto& field : result.elementElectricField) {
+                const auto magnitude = std::sqrt(field[0] * field[0]
+                    + field[1] * field[1] + field[2] * field[2]);
+                minimumField = std::min(minimumField, magnitude);
+                maximumField = std::max(maximumField, magnitude);
+            }
+        }
+        electrostaticStatisticsLabel_->setText(QString("Status: converged\nCG iterations: %1\nResidual: %2\nPotential: %3 .. %4 V\nField: %5 .. %6 V/m")
+            .arg(static_cast<qulonglong>(result.iterations))
+            .arg(result.relativeResidual, 0, 'e', 3)
+            .arg(potentialRange.first == result.nodalPotential.end() ? 0.0 : *potentialRange.first, 0, 'g', 8)
+            .arg(potentialRange.first == result.nodalPotential.end() ? 0.0 : *potentialRange.second, 0, 'g', 8)
+            .arg(minimumField, 0, 'g', 8).arg(maximumField, 0, 'g', 8));
+    }
+}
+
+void MainWindow::addVoltageBoundary()
+{
+    bool accepted = false;
+    const auto potential = QInputDialog::getDouble(this, "Voltage Boundary",
+        "Potential (V):", 100.0, -1.0e12, 1.0e12, 6, &accepted);
+    if (!accepted) return;
+    const auto faces = viewer_->captureTopologySelection(modeling_.body());
+    std::vector<cad::topology::TopologicalReference> faceReferences;
+    for (const auto& face : faces)
+        if (face.kind == cad::topology::TopologicalKind::Face) faceReferences.push_back(face);
+    std::string diagnostic;
+    if (!simulation_.addVoltageBoundary("Voltage Boundary", potential, faceReferences, diagnostic))
+        statusBar()->showMessage(QString::fromStdString(diagnostic), 5000);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::addGroundBoundary()
+{
+    const auto faces = viewer_->captureTopologySelection(modeling_.body());
+    std::vector<cad::topology::TopologicalReference> faceReferences;
+    for (const auto& face : faces)
+        if (face.kind == cad::topology::TopologicalKind::Face) faceReferences.push_back(face);
+    std::string diagnostic;
+    if (!simulation_.addVoltageBoundary("Ground Boundary", 0.0, faceReferences, diagnostic))
+        statusBar()->showMessage(QString::fromStdString(diagnostic), 5000);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::removeBoundary()
+{
+    const auto item = boundaryList_ ? boundaryList_->currentItem() : nullptr;
+    if (!item) return;
+    simulation_.removeBoundary(item->data(Qt::UserRole).toString().toStdString());
+    updateElectrostaticPanel();
+}
+
+void MainWindow::editBoundary()
+{
+    const auto item = boundaryList_ ? boundaryList_->currentItem() : nullptr;
+    if (!item) return;
+    const auto id = item->data(Qt::UserRole).toString().toStdString();
+    bool accepted = false;
+    const auto potential = QInputDialog::getDouble(this, "Edit Boundary",
+        "Potential (V):", 0.0, -1.0e12, 1.0e12, 6, &accepted);
+    if (!accepted) return;
+    if (!simulation_.updateBoundary(id, "Electrostatic Boundary", potential))
+        statusBar()->showMessage("Boundary could not be updated", 5000);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::solveElectrostatics()
+{
+    const auto& study = simulation_.study();
+    if (study.status != cad::application::SimulationStatus::Ready) {
+        statusBar()->showMessage("Generate a valid mesh first", 4000);
+        return;
+    }
+    for (const auto& boundary : study.boundaryConditions) {
+        if (!boundary.valid) {
+            statusBar()->showMessage(QString::fromStdString(boundary.diagnostic), 5000);
+            return;
+        }
+    }
+    simulation_.setMaterial({relativePermittivity_->value(), chargeDensity_->value()});
+    simulation_.clearElectrostaticResult();
+    simulation_.study().solutionStatus = cad::application::ElectrostaticSolutionStatus::Solving;
+    electrostaticSolving_ = true;
+    updateElectrostaticPanel();
+    const auto problem = simulation_.study().electrostaticProblem;
+    electrostaticWatcher_.setFuture(QtConcurrent::run([problem]() {
+        return std::make_shared<cad::cae::ElectrostaticResult>(
+            cad::cae::solveElectrostatic(problem));
+    }));
+}
+
+void MainWindow::finishElectrostaticSolve()
+{
+    electrostaticSolving_ = false;
+    const auto result = electrostaticWatcher_.result();
+    if (result) simulation_.adoptElectrostaticResult(*result);
+    updateElectrostaticPanel();
+    if (!result || result->convergenceStatus != cad::cae::ElectrostaticConvergenceStatus::Converged) {
+        statusBar()->showMessage(result ? QString::fromStdString(result->diagnostic)
+                                        : "Electrostatic solve failed", 5000);
+        return;
+    }
+    statusBar()->showMessage("Electrostatics solved", 3000);
+}
+
+void MainWindow::showPotentialResult()
+{
+    const auto& study = simulation_.study();
+    if (study.solutionStatus != cad::application::ElectrostaticSolutionStatus::Ready) return;
+    viewer_->showPotential(study.mesh, study.electrostaticResult.nodalPotential);
+}
+
+void MainWindow::showElectricFieldResult()
+{
+    const auto& study = simulation_.study();
+    if (study.solutionStatus != cad::application::ElectrostaticSolutionStatus::Ready) return;
+    viewer_->showElectricField(study.mesh, study.electrostaticResult.elementElectricField);
+}
+
+void MainWindow::clearElectrostaticResult()
+{
+    simulation_.clearElectrostaticResult();
+    viewer_->showMesh(simulation_.study().mesh);
+    updateElectrostaticPanel();
 }
 
 void MainWindow::generateMesh()
@@ -1052,6 +1256,7 @@ void MainWindow::finishMeshGeneration()
         study.statistics = result->statistics;
         study.diagnostic.clear();
         study.status = cad::application::SimulationStatus::Ready;
+        simulation_.setMesh(study.mesh);
         viewer_->showMesh(study.mesh);
         statusBar()->showMessage("Mesh generated", 3000);
     } else {
@@ -1062,6 +1267,7 @@ void MainWindow::finishMeshGeneration()
         statusBar()->showMessage(QString::fromStdString(study.diagnostic), 4000);
     }
     updateMeshInspector();
+    updateElectrostaticPanel();
 }
 
 void MainWindow::refreshBimNavigation()
@@ -1131,8 +1337,11 @@ void MainWindow::refreshModelView(const bool fitView)
     if (!meshSourceFeatureId_.isEmpty()
         && simulation_.study().status == cad::application::SimulationStatus::Ready) {
         simulation_.markGeometryChanged(meshSourceFeatureId_.toStdString());
-        if (simulation_.study().status == cad::application::SimulationStatus::Outdated)
+        if (simulation_.study().status == cad::application::SimulationStatus::Outdated) {
             viewer_->deleteMeshPresentation();
+            updateMeshInspector();
+            updateElectrostaticPanel();
+        }
     }
     const auto result = presenter_->refreshModel();
     featureEditorPanel_->setFeatures(modeling_.features());
@@ -1771,6 +1980,18 @@ void MainWindow::createActions()
     auto* viewMenu = menuBar()->addMenu("&View");
     generateMeshAction_ = simulationMenu->addAction("Generate Mesh");
     connect(generateMeshAction_, &QAction::triggered, this, &MainWindow::generateMesh);
+    addVoltageBoundaryAction_ = simulationMenu->addAction("Add Voltage Boundary");
+    connect(addVoltageBoundaryAction_, &QAction::triggered, this, &MainWindow::addVoltageBoundary);
+    addGroundBoundaryAction_ = simulationMenu->addAction("Add Ground Boundary");
+    connect(addGroundBoundaryAction_, &QAction::triggered, this, &MainWindow::addGroundBoundary);
+    solveElectrostaticsAction_ = simulationMenu->addAction("Solve Electrostatics");
+    connect(solveElectrostaticsAction_, &QAction::triggered, this, &MainWindow::solveElectrostatics);
+    showPotentialAction_ = simulationMenu->addAction("Show Potential");
+    connect(showPotentialAction_, &QAction::triggered, this, &MainWindow::showPotentialResult);
+    showElectricFieldAction_ = simulationMenu->addAction("Show Electric Field");
+    connect(showElectricFieldAction_, &QAction::triggered, this, &MainWindow::showElectricFieldResult);
+    clearElectrostaticResultAction_ = simulationMenu->addAction("Clear Results");
+    connect(clearElectrostaticResultAction_, &QAction::triggered, this, &MainWindow::clearElectrostaticResult);
 
     auto* spatialHiddenAction = viewMenu->addAction("Activate Spatial Visibility");
     connect(spatialHiddenAction, &QAction::triggered, this,

@@ -57,6 +57,7 @@
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TColStd_ListOfInteger.hxx>
+#include <TColStd_HArray1OfInteger.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <gp_Dir.hxx>
@@ -2818,6 +2819,91 @@ void CadViewer::showMesh(const cad::cae::VolumeMesh& mesh)
     context_->Display(meshObject_, Standard_False);
     meshVisible_ = true;
     context_->UpdateCurrentViewer();
+}
+
+void CadViewer::showMeshScalar(
+    const cad::cae::VolumeMesh& mesh, const std::vector<double>& values)
+{
+    if (mesh.nodes.empty() || mesh.surfaceTriangles.empty()
+        || values.size() != mesh.nodes.size()) {
+        deleteMeshPresentation();
+        return;
+    }
+    initializeOcc();
+    double minimum = values.front();
+    double maximum = values.front();
+    for (const auto value : values) {
+        minimum = std::min(minimum, value);
+        maximum = std::max(maximum, value);
+    }
+    const auto range = maximum - minimum;
+    TColgp_Array1OfPnt nodes(1, static_cast<Standard_Integer>(mesh.nodes.size()));
+    for (Standard_Integer index = 1; index <= nodes.Upper(); ++index) {
+        const auto& node = mesh.nodes[static_cast<std::size_t>(index - 1)];
+        nodes.SetValue(index, gp_Pnt(node.x, node.y, node.z));
+    }
+    Poly_Array1OfTriangle triangles(
+        1, static_cast<Standard_Integer>(mesh.surfaceTriangles.size()));
+    for (Standard_Integer index = 1; index <= triangles.Upper(); ++index) {
+        const auto& triangle = mesh.surfaceTriangles[static_cast<std::size_t>(index - 1)];
+        triangles.SetValue(index, Poly_Triangle(
+            static_cast<Standard_Integer>(triangle.nodes[0] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[1] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[2] + 1)));
+    }
+    if (!meshObject_.IsNull()) context_->Remove(meshObject_, Standard_False);
+    meshObject_ = new AIS_Triangulation(new Poly_Triangulation(nodes, triangles));
+    const Handle(TColStd_HArray1OfInteger) colors = new TColStd_HArray1OfInteger(
+        1, static_cast<Standard_Integer>(mesh.nodes.size()));
+    for (Standard_Integer index = 1; index <= colors->Upper(); ++index) {
+        const auto normalized = range > 0.0
+            ? std::clamp((values[static_cast<std::size_t>(index - 1)] - minimum) / range, 0.0, 1.0)
+            : 0.5;
+        const auto red = static_cast<int>(255.0 * normalized);
+        const auto green = static_cast<int>(255.0 * (1.0 - std::abs(2.0 * normalized - 1.0)));
+        const auto blue = static_cast<int>(255.0 * (1.0 - normalized));
+        colors->SetValue(index, (255 << 24) | (blue << 16) | (green << 8) | red);
+    }
+    meshObject_->SetColors(colors);
+    meshObject_->SetTransparency(0.15);
+    context_->Display(meshObject_, Standard_False);
+    meshVisible_ = true;
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::showPotential(
+    const cad::cae::VolumeMesh& mesh, const std::vector<double>& nodalPotential)
+{
+    showMeshScalar(mesh, nodalPotential);
+}
+
+void CadViewer::showElectricField(
+    const cad::cae::VolumeMesh& mesh,
+    const std::vector<std::array<double, 3>>& elementField)
+{
+    if (elementField.size() != mesh.tetrahedra.size()) {
+        deleteMeshPresentation();
+        return;
+    }
+    std::vector<double> nodalMagnitude(mesh.nodes.size(), 0.0);
+    std::vector<std::size_t> counts(mesh.nodes.size(), 0);
+    for (std::size_t element = 0; element < mesh.tetrahedra.size(); ++element) {
+        const auto& field = elementField[element];
+        const auto magnitude = std::sqrt(field[0] * field[0]
+            + field[1] * field[1] + field[2] * field[2]);
+        for (const auto node : mesh.tetrahedra[element].nodes) {
+            nodalMagnitude[node] += magnitude;
+            ++counts[node];
+        }
+    }
+    for (std::size_t node = 0; node < nodalMagnitude.size(); ++node)
+        if (counts[node] != 0) nodalMagnitude[node] /= static_cast<double>(counts[node]);
+    showMeshScalar(mesh, nodalMagnitude);
+}
+
+void CadViewer::clearCaeResultPresentation()
+{
+    deleteMeshPresentation();
 }
 
 void CadViewer::hideMesh()

@@ -21,6 +21,9 @@ int main(int argc, char** argv)
     assert(result.success);
     assert(result.mesh.nodes.size() > 0);
     assert(result.mesh.tetrahedra.size() > 0);
+    assert(result.mesh.surfaceRegions.size() > 0);
+    for (const auto& triangle : result.mesh.surfaceTriangles)
+        assert(triangle.elementIndex < result.mesh.tetrahedra.size());
     assert(std::abs(result.statistics.volume - 150000.0) < 150000.0 * 0.05);
     return 0;
 }

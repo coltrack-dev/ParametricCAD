@@ -160,6 +160,10 @@ public:
     void hideMesh();
     void deleteMeshPresentation();
     bool meshVisible() const noexcept;
+    void showPotential(const cad::cae::VolumeMesh&, const std::vector<double>& nodalPotential);
+    void showElectricField(
+        const cad::cae::VolumeMesh&, const std::vector<std::array<double, 3>>& elementField);
+    void clearCaeResultPresentation();
     void setMeshDisplayMode(MeshDisplayMode mode);
     MeshDisplayMode meshDisplayMode() const noexcept;
     QAction* objectSelectionAction() const noexcept { return selectObjectAction_; }
@@ -369,6 +373,7 @@ private:
     bool meshVisible_{false};
     MeshDisplayMode meshDisplayMode_{MeshDisplayMode::Geometry};
     std::map<QString, bool> geometryVisibilityBeforeMeshOnly_;
+    void showMeshScalar(const cad::cae::VolumeMesh&, const std::vector<double>& values);
     Handle(Graphic3d_ClipPlane) sectionClipPlane_;
     SectionState sectionState_;
     Bnd_Box sectionBounds_;

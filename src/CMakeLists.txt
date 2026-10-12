@@ -15,6 +15,8 @@ set(PARAMETRIC_CAD_SOURCES
     application/IfcImporter.h
     application/SimulationController.cpp
     application/SimulationController.h
+    application/ElectrostaticBoundaryCondition.cpp
+    application/ElectrostaticBoundaryCondition.h
     application/BimNavigationModel.cpp
     application/BimNavigationModel.h
     import/IfcOpenShellAdapter090.cpp

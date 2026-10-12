@@ -9,12 +9,24 @@ namespace cad::cae {
 
 struct MeshNode { std::size_t id{}; double x{}; double y{}; double z{}; };
 struct Tetrahedron { std::size_t id{}; std::array<std::size_t, 4> nodes{}; };
-struct SurfaceTriangle { std::array<std::size_t, 3> nodes{}; int boundaryId{}; };
+struct SurfaceTriangle {
+    std::array<std::size_t, 3> nodes{};
+    int boundaryId{};
+    std::size_t elementIndex{};
+};
+
+struct SurfaceRegion {
+    int boundaryId{};
+    double area{};
+    std::array<double, 3> centroid{};
+    std::array<double, 3> normal{};
+};
 
 struct VolumeMesh {
     std::vector<MeshNode> nodes;
     std::vector<Tetrahedron> tetrahedra;
     std::vector<SurfaceTriangle> surfaceTriangles;
+    std::vector<SurfaceRegion> surfaceRegions;
 };
 
 struct MeshStatistics {

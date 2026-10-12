@@ -86,6 +86,7 @@ add_library(model_test_support STATIC
     ../src/application/ProjectController.cpp
     ../src/application/IfcImporter.cpp
     ../src/application/SimulationController.cpp
+    ../src/application/ElectrostaticBoundaryCondition.cpp
     ../src/application/BimNavigationModel.cpp
     ../src/application/VisibilityManager.cpp
     ../src/model/ProjectFile.cpp
@@ -121,6 +122,13 @@ target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     ParametricCAD::OCCTModeling
     ParametricCAD::OCCTVisualization
     ParametricCAD::CAECore)
+
+add_executable(electrostatic_boundary_tests
+    electrostatic_boundary_tests.cpp
+)
+target_include_directories(electrostatic_boundary_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(electrostatic_boundary_tests PRIVATE model_test_support)
+add_test(NAME electrostatic_boundary_tests COMMAND electrostatic_boundary_tests)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(model_test_support PUBLIC
