@@ -81,6 +81,66 @@ int main()
     assert(remeshAccepted);
     assert(controller.study().boundaryConditions[0].valid);
     assert(controller.study().boundaryConditions[1].valid);
+    controller.beginElectrostaticSolve();
+    cad::cae::ElectrostaticResult firstSolved;
+    firstSolved.convergenceStatus = cad::cae::ElectrostaticConvergenceStatus::Converged;
+    assert(controller.adoptElectrostaticResult(firstSolved, 1));
+    assert(controller.study().solvedMeshRevision == 1);
+
+    // A resized box changes the stored centroid/signature, but the semantic
+    // Box.Face reference must resolve against the current B-Rep and remap to
+    // the new mesh surface region and node set.
+    const auto resized = BRepBuilderAPI_Transform(
+        BRepPrimAPI_MakeBox(140.0, 50.0, 30.0).Shape(), transform, true).Shape();
+    cad::cae::VolumeMesh resizedMesh;
+    for (std::size_t node = 0; node < 18; ++node)
+        resizedMesh.nodes.push_back({node, static_cast<double>(node + 20), 0.0, 0.0});
+    int resizedRegionId = 0;
+    for (TopExp_Explorer explorer(resized, TopAbs_FACE); explorer.More(); explorer.Next()) {
+        const auto face = explorer.Current();
+        const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+            "box", resized, face);
+        const auto* signature = std::get_if<cad::topology::FaceSignature>(
+            &*reference.signature);
+        assert(signature != nullptr);
+        cad::cae::SurfaceRegion region;
+        region.boundaryId = ++resizedRegionId;
+        region.area = signature->area;
+        region.centroid = {signature->centroid.X(), signature->centroid.Y(), signature->centroid.Z()};
+        if (signature->normal) region.normal = {
+            signature->normal->X(), signature->normal->Y(), signature->normal->Z()};
+        resizedMesh.surfaceRegions.push_back(region);
+        resizedMesh.surfaceTriangles.push_back({
+            {static_cast<std::size_t>((resizedRegionId - 1) * 3),
+             static_cast<std::size_t>((resizedRegionId - 1) * 3 + 1),
+             static_cast<std::size_t>((resizedRegionId - 1) * 3 + 2)},
+            resizedRegionId});
+    }
+    cad::cae::MeshGenerationResult resizedGeneration;
+    resizedGeneration.success = true;
+    resizedGeneration.mesh = resizedMesh;
+    controller.beginMeshGeneration("box", 2);
+    assert(controller.acceptMeshResult(resizedGeneration, 2));
+    assert(controller.study().solutionStatus
+        == cad::application::ElectrostaticSolutionStatus::Outdated);
+    assert(controller.remapBoundaries(resized, diagnostic));
+    assert(controller.study().boundaryConditions[0].valid);
+    assert(controller.study().boundaryConditions[1].valid);
+    assert(controller.study().boundaryConditions[0].meshNodes.size() == 3);
+    const auto* remappedSignature = std::get_if<cad::topology::FaceSignature>(
+        &*controller.study().boundaryConditions[0].faces[0].signature);
+    const auto* originalSignature = std::get_if<cad::topology::FaceSignature>(
+        &*references[0].signature);
+    assert(remappedSignature && originalSignature);
+    assert(controller.study().boundaryConditions[0].faces[0].semanticId
+        == references[0].semanticId);
+
+    controller.beginElectrostaticSolve();
+    cad::cae::ElectrostaticResult solved;
+    solved.convergenceStatus = cad::cae::ElectrostaticConvergenceStatus::Converged;
+    assert(controller.adoptElectrostaticResult(solved, controller.study().meshRevision));
+    assert(controller.study().solvedMeshRevision == controller.study().meshRevision);
+
     const auto firstId = controller.study().boundaryConditions.front().id;
     const auto removed = controller.removeBoundary(firstId);
     assert(removed);

@@ -25,6 +25,7 @@ struct SimulationStudy
     std::string diagnostic;
     std::uint64_t geometryRevision{0};
     std::uint64_t meshRevision{0};
+    std::uint64_t solvedMeshRevision{0};
     std::uint64_t pendingMeshRevision{0};
     std::uint64_t pendingMeshGenerationId{0};
     cad::cae::ElectrostaticProblem electrostaticProblem;
@@ -64,6 +65,7 @@ public:
                              std::uint64_t geometryRevision = 0);
     void setMesh(const cad::cae::VolumeMesh& mesh,
                  std::uint64_t geometryRevision = 0);
+    bool remapBoundaries(const TopoDS_Shape& currentShape, std::string& diagnostic);
     bool addVoltageBoundary(
         const std::string& name,
         double potential,

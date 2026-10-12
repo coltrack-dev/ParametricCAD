@@ -1181,9 +1181,20 @@ void MainWindow::editBoundary()
 
 void MainWindow::solveElectrostatics()
 {
+    if (electrostaticSolving_) {
+        statusBar()->showMessage("Another electrostatic solve is running", 4000);
+        return;
+    }
     const auto& study = simulation_.study();
     if (study.status != cad::application::SimulationStatus::Ready) {
-        statusBar()->showMessage("Generate a valid mesh first", 4000);
+        statusBar()->showMessage(
+            study.status == cad::application::SimulationStatus::Outdated
+                ? "Study geometry is outdated; regenerate the mesh first"
+                : "Mesh is not ready; generate a valid mesh first", 4000);
+        return;
+    }
+    if (study.boundaryConditions.empty()) {
+        statusBar()->showMessage("Missing required Dirichlet boundary conditions", 5000);
         return;
     }
     for (const auto& boundary : study.boundaryConditions) {
@@ -1295,8 +1306,18 @@ void MainWindow::finishMeshGeneration()
     study.settings = {meshMinimumSize_->value(), meshMaximumSize_->value()};
     if (result && simulation_.acceptMeshResult(
             *result, meshGenerationRevision_, meshGenerationId_)) {
+        std::string remapDiagnostic;
+        const auto feature = modeling_.body().findFeature(meshSourceFeatureId_.toStdString());
+        const bool remapped = feature
+            && simulation_.remapBoundaries(feature->shape(), remapDiagnostic);
+        if (!feature && remapDiagnostic.empty()) {
+            remapDiagnostic = "Source CAD feature is no longer available";
+        }
         viewer_->showMesh(simulation_.study().mesh);
-        statusBar()->showMessage("Mesh generated", 3000);
+        statusBar()->showMessage(remapped
+            ? "Mesh generated"
+            : QString("Mesh generated; boundary remapping failed: %1")
+                .arg(QString::fromStdString(remapDiagnostic)), 5000);
     } else {
         if (!result) {
             study.diagnostic = "Mesh generation failed";

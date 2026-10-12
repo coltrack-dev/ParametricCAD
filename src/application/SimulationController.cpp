@@ -1,10 +1,13 @@
 #include "application/SimulationController.h"
 
+#include "model/TopologicalReference.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <set>
+#include <map>
 
 namespace cad::application {
 
@@ -122,6 +125,7 @@ bool SimulationController::acceptMeshResult(
     study_.diagnostic.clear();
     study_.status = SimulationStatus::Ready;
     study_.meshRevision = geometryRevision;
+    study_.solvedMeshRevision = 0;
     setMesh(result.mesh, geometryRevision);
     traceTransition(study_, "mesh generation completed", oldMesh, oldSolution);
     return true;
@@ -202,6 +206,7 @@ void SimulationController::setMesh(const cad::cae::VolumeMesh& mesh,
         study_.meshRevision = study_.geometryRevision;
     }
     study_.mesh = mesh;
+    study_.solvedMeshRevision = 0;
     study_.statistics = cad::cae::meshStatistics(mesh);
     study_.electrostaticProblem.mesh = mesh;
     for (auto& boundary : study_.boundaryConditions) {
@@ -234,6 +239,98 @@ void SimulationController::setMesh(const cad::cae::VolumeMesh& mesh,
     }
     if (study_.solutionStatus == ElectrostaticSolutionStatus::Ready)
         study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+}
+
+bool SimulationController::remapBoundaries(
+    const TopoDS_Shape& currentShape, std::string& diagnostic)
+{
+    diagnostic.clear();
+    study_.electrostaticProblem.mesh = study_.mesh;
+    study_.electrostaticProblem.dirichletBoundaries.clear();
+
+    bool allValid = true;
+    std::map<std::size_t, double> prescribed;
+    for (auto& boundary : study_.boundaryConditions) {
+        boundary.meshBoundaryIds.clear();
+        boundary.meshNodes.clear();
+        boundary.valid = true;
+        boundary.diagnostic.clear();
+
+        std::vector<cad::topology::TopologicalReference> refreshedFaces;
+        refreshedFaces.reserve(boundary.faces.size());
+        for (const auto& reference : boundary.faces) {
+            const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+                reference, currentShape);
+            if (resolved.status != cad::topology::ResolveStatus::Resolved
+                || !resolved.shape) {
+                boundary.valid = false;
+                boundary.diagnostic = resolved.error.empty()
+                    ? "Boundary reference unresolved on current CAD geometry"
+                    : resolved.error;
+                break;
+            }
+            try {
+                const auto refreshed = cad::topology::TopologicalSignatureBuilder::createReference(
+                    reference.featureId, currentShape, *resolved.shape);
+                const auto mapping = mapFaceToMeshRegion(refreshed, study_.mesh);
+                if (!mapping.valid) {
+                    boundary.valid = false;
+                    boundary.diagnostic = mapping.diagnostic;
+                    break;
+                }
+                refreshedFaces.push_back(refreshed);
+                boundary.meshBoundaryIds.push_back(mapping.boundaryId);
+                boundary.meshNodes.insert(boundary.meshNodes.end(),
+                    mapping.nodes.begin(), mapping.nodes.end());
+            } catch (const std::exception& error) {
+                boundary.valid = false;
+                boundary.diagnostic = error.what();
+                break;
+            }
+        }
+
+        if (boundary.valid) {
+            boundary.faces = std::move(refreshedFaces);
+            std::sort(boundary.meshBoundaryIds.begin(), boundary.meshBoundaryIds.end());
+            boundary.meshBoundaryIds.erase(std::unique(boundary.meshBoundaryIds.begin(),
+                boundary.meshBoundaryIds.end()), boundary.meshBoundaryIds.end());
+            std::sort(boundary.meshNodes.begin(), boundary.meshNodes.end());
+            boundary.meshNodes.erase(std::unique(boundary.meshNodes.begin(),
+                boundary.meshNodes.end()), boundary.meshNodes.end());
+            if (boundary.meshNodes.empty()) {
+                boundary.valid = false;
+                boundary.diagnostic = "Boundary mapping produced no mesh nodes";
+            }
+        }
+
+        if (!boundary.valid) {
+            boundary.meshBoundaryIds.clear();
+            boundary.meshNodes.clear();
+            allValid = false;
+            if (diagnostic.empty()) diagnostic = boundary.name + ": " + boundary.diagnostic;
+            continue;
+        }
+
+        for (const auto node : boundary.meshNodes) {
+            const auto [it, inserted] = prescribed.emplace(node, boundary.potential);
+            if (!inserted && std::abs(it->second - boundary.potential) > 1.0e-12) {
+                boundary.valid = false;
+                boundary.diagnostic = "Boundary conditions assign conflicting potentials to one mesh node";
+                allValid = false;
+                if (diagnostic.empty()) diagnostic = boundary.name + ": " + boundary.diagnostic;
+                break;
+            }
+        }
+    }
+
+    for (const auto& boundary : study_.boundaryConditions) {
+        if (boundary.valid) study_.electrostaticProblem.dirichletBoundaries.push_back({
+            boundary.name, boundary.meshNodes, boundary.potential});
+    }
+    study_.solutionStatus = ElectrostaticSolutionStatus::Outdated;
+    study_.solvedMeshRevision = 0;
+    if (!allValid && diagnostic.empty()) diagnostic = "One or more boundary references are invalid";
+    return allValid;
 }
 
 bool SimulationController::addVoltageBoundary(
@@ -309,6 +406,7 @@ void SimulationController::beginElectrostaticSolve()
     const auto oldMesh = meshStatusName(study_.status);
     const auto oldSolution = solutionStatusName(study_.solutionStatus);
     study_.solutionStatus = ElectrostaticSolutionStatus::Solving;
+    study_.solvedMeshRevision = 0;
     traceTransition(study_, "electrostatic solve started", oldMesh, oldSolution);
 }
 
@@ -329,6 +427,8 @@ bool SimulationController::adoptElectrostaticResult(
     study_.solutionStatus = result.convergenceStatus
         == cad::cae::ElectrostaticConvergenceStatus::Converged
         ? ElectrostaticSolutionStatus::Ready : ElectrostaticSolutionStatus::Failed;
+    study_.solvedMeshRevision = study_.solutionStatus == ElectrostaticSolutionStatus::Ready
+        ? study_.meshRevision : 0;
     traceTransition(study_, "electrostatic solve completed", oldMesh, oldSolution);
     return true;
 }
@@ -338,6 +438,7 @@ void SimulationController::clearElectrostaticResult()
     study_.electrostaticResult = {};
     study_.solutionDiagnostic.clear();
     study_.solutionStatus = ElectrostaticSolutionStatus::NotSolved;
+    study_.solvedMeshRevision = 0;
 }
 
 } // namespace cad::application
