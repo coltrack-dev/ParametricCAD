@@ -14,6 +14,8 @@ set(CMAKE_AUTORCC ON)
 
 option(PARAMETRIC_CAD_BUILD_TESTS "Build unit tests" ON)
 option(PARAMETRIC_CAD_ENABLE_IFC "Enable the IfcOpenShell 0.9 adapter" ON)
+option(PARAMETRIC_CAD_BUILD_IFC_PROBE
+    "Build the standalone IfcOpenShell iterator probe" OFF)
 
 set(PARAMETRIC_CAD_IFCOPENSHELL_ROOT "" CACHE PATH
     "Prefix or build tree of an IfcOpenShell 0.9.x installation")
@@ -268,6 +270,21 @@ if(PARAMETRIC_CAD_ENABLE_IFC)
 endif()
 
 add_subdirectory(src)
+
+if(PARAMETRIC_CAD_ENABLE_IFC AND PARAMETRIC_CAD_BUILD_IFC_PROBE)
+    add_executable(ifc_iterator_probe tools/ifc_iterator_probe.cpp)
+    target_compile_definitions(ifc_iterator_probe PRIVATE
+        PARAMETRIC_CAD_IFCOPENSHELL_PLUGIN_DIR="${PARAMETRIC_CAD_IFC_PLUGIN_DIR}")
+    target_include_directories(ifc_iterator_probe SYSTEM PRIVATE
+        ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
+    target_link_libraries(ifc_iterator_probe PRIVATE
+        ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_PARSE_LIBRARY}
+        ${PARAMETRIC_CAD_IFC_OCCT_KERNEL_LIBRARY})
+    set_target_properties(ifc_iterator_probe PROPERTIES
+        BUILD_RPATH "${PARAMETRIC_CAD_IFC_LIBRARY_DIR}"
+        INSTALL_RPATH "${PARAMETRIC_CAD_IFC_LIBRARY_DIR}")
+endif()
 
 if(PARAMETRIC_CAD_BUILD_TESTS)
     enable_testing()

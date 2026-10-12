@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -17,6 +18,7 @@
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
 #include <BRepBuilderAPI_Transform.hxx>
 #include <gp_Trsf.hxx>
+#include <ifcgeom/abstract_mapping.h>
 #include <ifcgeom/conversion_settings.h>
 #include <ifcgeom/iterator.h>
 #include <ifcgeom/kernels/opencascade/opencascade_conversion_result.h>
@@ -480,7 +482,9 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
         result.statistics.schema = QString::fromStdString(file->schema()->name());
         result.statistics.parseMilliseconds = parse.elapsed();
 
+        traceStage(QStringLiteral("before geometry settings construction"));
         ifcopenshell::geom::settings settings;
+        traceStage(QStringLiteral("after geometry settings construction"));
         settings.get<ifcopenshell::geom::settings::UseWorldCoords>().value = true;
         settings.get<ifcopenshell::geom::settings::ConvertBackUnits>().value = false;
         settings.get<ifcopenshell::geom::settings::UseElementHierarchy>().value = true;
@@ -492,13 +496,37 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
         traceStage(QStringLiteral("before OpenCASCADE kernel load"));
         auto kernel = ifcopenshell::geom::kernels::construct(file.get(), "opencascade", settings, logger);
         traceStage(QStringLiteral("after OpenCASCADE kernel load"));
-        traceStage(QStringLiteral("before mapping load / iterator construction"));
-        ifcopenshell::geom::iterator iterator(std::move(kernel), settings, file.get(), logger);
-        traceStage(QStringLiteral("after mapping load / iterator construction"));
+        traceStage(QStringLiteral("before mapping factory lookup"));
+        auto& mappingFactory = ifcopenshell::geom::impl::mapping_implementations();
+        Q_UNUSED(mappingFactory);
+        traceStage(QStringLiteral("after mapping factory lookup"));
+        std::allocator<ifcopenshell::geom::iterator> iteratorAllocator;
+        traceStage(QStringLiteral("before iterator object allocation"));
+        auto* iteratorMemory = iteratorAllocator.allocate(1);
+        traceStage(QStringLiteral("after iterator object allocation"));
+        const auto iteratorDeleter = [&iteratorAllocator](ifcopenshell::geom::iterator* object) {
+            if (!object) return;
+            std::destroy_at(object);
+            iteratorAllocator.deallocate(object, 1);
+        };
+        std::unique_ptr<ifcopenshell::geom::iterator, decltype(iteratorDeleter)>
+            iteratorGuard(nullptr, iteratorDeleter);
+        traceStage(QStringLiteral("before iterator constructor / mapping instance creation"));
+        ifcopenshell::geom::iterator* iteratorObject = nullptr;
+        try {
+            iteratorObject = std::construct_at(iteratorMemory,
+                std::move(kernel), settings, file.get(), logger);
+        } catch (...) {
+            iteratorAllocator.deallocate(iteratorMemory, 1);
+            throw;
+        }
+        iteratorGuard.reset(iteratorObject);
+        traceStage(QStringLiteral("after iterator constructor / mapping instance creation"));
+        auto& iterator = *iteratorObject;
         traceStage(QStringLiteral("before iterator initialize"));
         if (!iterator.initialize()) {
             result.diagnostics.push_back({ImportSeverity::Error, {}, {},
-                QStringLiteral("IfcOpenShell 0.9.0 could not initialize the OCCT geometry kernel")});
+                QStringLiteral("IfcOpenShell 0.9.x could not initialize the OCCT geometry kernel")});
             result.fatal = true;
             result.statistics.failedCount = 1;
             return result;
