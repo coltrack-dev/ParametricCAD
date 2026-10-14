@@ -871,11 +871,14 @@ TopoDS_Shape SketchFeature::build() const
             throw std::runtime_error("Sketch support face could not be resolved: " + resolved.error);
         }
         frame = frameForFace(TopoDS::Face(*resolved.shape));
-    } else if (entities_.empty()) {
-        return cad::modeling::BasicFeatures::rectangleWire(width_, height_);
     }
 
     if (entities_.empty()) {
+        if (supportType_ != SketchSupportType::Face
+            && (!std::isfinite(width_) || !std::isfinite(height_)
+                || width_ <= 0.0 || height_ <= 0.0)) {
+            throw std::invalid_argument("Sketch dimensions must be positive and finite");
+        }
         TopoDS_Compound compound;
         BRep_Builder builder;
         builder.MakeCompound(compound);

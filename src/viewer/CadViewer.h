@@ -293,6 +293,7 @@ private:
     void applyDisplayMode(const Handle(AIS_Shape)& object,
                           const TopoDS_Shape& shape) const;
     void applySelectionMode();
+    void removeFeaturePresentation(const QString& featureId);
     void releaseManagedSelection(const QString& featureId);
     void updateManagedShape(const QString& featureId,
                             const Handle(AIS_Shape)& object,

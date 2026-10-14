@@ -383,11 +383,7 @@ SketchProfile buildProfiles(std::vector<ProfileLoop> loops)
 SketchProfile SketchProfileBuilder::build(const cad::parametric::SketchFeature& sketch)
 {
     if (sketch.entities().empty()) {
-        if (sketch.supportType() != cad::parametric::SketchSupportType::Face
-            && sketch.shape().ShapeType() == TopAbs_WIRE) {
-            return makeProfile(TopoDS::Wire(sketch.shape()));
-        }
-        throw std::runtime_error("Sketch profile contains no closed loops");
+        throw std::runtime_error("Sketch profile contains no user geometry");
     }
 
     const auto frame = sketch.currentFrame();

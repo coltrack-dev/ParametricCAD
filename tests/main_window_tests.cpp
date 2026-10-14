@@ -533,6 +533,10 @@ private slots:
         MainWindow window;
         const auto sketch = window.modeling_.createSketch();
         QVERIFY(sketch.success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
         window.applySelection({QString::fromStdString(sketch.id)});
         QVERIFY(window.extrudeAction_->isEnabled());
     }

@@ -57,6 +57,10 @@ private slots:
         ModelingController controller;
         const auto sketch = controller.createSketch();
         QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0, 0}, {10, 0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {10, 0}, {10, 6}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {10, 6}, {0, 6}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0, 6}, {0, 0}).success);
         const auto face = controller.createFace({sketch.id});
         QVERIFY(face.success);
         FeatureEditorPanel panel;

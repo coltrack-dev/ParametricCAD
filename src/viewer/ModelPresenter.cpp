@@ -51,12 +51,14 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
         if (feature->typeId() == std::string("Sweep")) {
             traceSweepFeature("refresh.inspect", *feature);
         }
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
         if (feature->state() != cad::parametric::FeatureState::UpToDate
-            || feature->shape().IsNull()) continue;
+            || feature->shape().IsNull()
+            || (sketch && sketch->entities().empty())) continue;
         result.presentedIds.push_back(feature->id());
         traceSweepFeature("refresh.updateFeature", *feature);
         viewer_.updateFeature(feature->shape(), QString::fromStdString(feature->id()));
-        if (const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature)) {
+        if (sketch) {
             viewer_.updateSketchConstructionGeometry(*sketch,
                 QString::fromStdString(feature->id()));
         }

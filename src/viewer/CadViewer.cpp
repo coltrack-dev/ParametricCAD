@@ -61,6 +61,7 @@
 #include <TColStd_ListOfInteger.hxx>
 #include <TColStd_HArray1OfInteger.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Edge.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
@@ -129,6 +130,13 @@ QString activeSelectionModes(const Handle(AIS_InteractiveContext)& context,
         result.push_back(QString::number(iterator.Value()));
     }
     return result.join(',');
+}
+
+bool isEmptyDisplayShape(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return true;
+    if (shape.ShapeType() != TopAbs_COMPOUND) return false;
+    return !TopoDS_Iterator(shape).More();
 }
 constexpr double Pi = 3.14159265358979323846;
 constexpr double OrbitElevationLimit = 89.0 * Pi / 180.0;
@@ -1942,6 +1950,11 @@ void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, boo
 {
     initializeOcc();
 
+    if (isEmptyDisplayShape(shape)) {
+        removeFeaturePresentation(featureId);
+        return;
+    }
+
     Handle(AIS_Shape) interactiveShape =
         new AIS_Shape(shape);
 
@@ -2086,7 +2099,10 @@ std::int64_t CadViewer::lastSelectionActivationMilliseconds() const noexcept
 
 void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureId)
 {
-    if (shape.IsNull()) return;
+    if (isEmptyDisplayShape(shape)) {
+        removeFeaturePresentation(featureId);
+        return;
+    }
     const auto found = featureObjects_.find(featureId);
     if (found == featureObjects_.end()) {
         display(shape, featureId, false);
@@ -2722,20 +2738,9 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
             ++it;
             continue;
         }
-        cancelPushPull();
-        managedSelectionModes_.erase(it->first);
-        traceSelectionLifecycle(QString("AIS unregister feature=%1 obj=%2 before Remove")
-            .arg(it->first).arg(selectionObjectPointer(it->second)));
-        context_->Remove(it->second, Standard_False);
-        traceSelectionLifecycle(QString("AIS unregister feature=%1 after Remove").arg(it->first));
-        std::erase(displayedShapes_, it->second);
-        const auto construction = sketchConstructionObjects_.find(it->first);
-        if (construction != sketchConstructionObjects_.end()) {
-            context_->Remove(construction->second, Standard_False);
-            sketchConstructionObjects_.erase(construction);
-        }
-        featureVisibility_.erase(it->first);
-        it = featureObjects_.erase(it);
+        const auto featureId = it->first;
+        ++it;
+        removeFeaturePresentation(featureId);
         changed = true;
     }
     if (changed) {
@@ -2745,6 +2750,36 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         selectionState_.hovered.reset();
         if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
         if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
+    }
+}
+
+void CadViewer::removeFeaturePresentation(const QString& featureId)
+{
+    const auto found = featureObjects_.find(featureId);
+    if (found == featureObjects_.end()) return;
+
+    cancelPushPull();
+    if (selectionAdapter_) selectionAdapter_->clearSelectedPresentation(found->second);
+    releaseManagedSelection(featureId);
+    traceSelectionLifecycle(QString("AIS unregister feature=%1 obj=%2 before Remove")
+        .arg(featureId).arg(selectionObjectPointer(found->second)));
+    context_->Remove(found->second, Standard_False);
+    traceSelectionLifecycle(QString("AIS unregister feature=%1 after Remove").arg(featureId));
+    std::erase(displayedShapes_, found->second);
+    const auto construction = sketchConstructionObjects_.find(featureId);
+    if (construction != sketchConstructionObjects_.end()) {
+        context_->Remove(construction->second, Standard_False);
+        sketchConstructionObjects_.erase(construction);
+    }
+    featureVisibility_.erase(featureId);
+    featureObjects_.erase(found);
+    selectionActivationDirty_ = true;
+    invalidateSnapReferenceCache("MODEL_CHANGED: empty feature presentation removed");
+    resetDetectedCycle();
+    selectionState_.hovered.reset();
+    if (bulkUpdateDepth_ == 0) {
+        syncSelectionStateFromOcct();
+        context_->UpdateCurrentViewer();
     }
 }
 
