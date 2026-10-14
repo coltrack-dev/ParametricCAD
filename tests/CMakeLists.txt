@@ -268,6 +268,32 @@ add_executable(controller_tests controller_tests.cpp)
 target_link_libraries(controller_tests PRIVATE model_test_support Qt6::Test)
 add_test(NAME controller_tests COMMAND controller_tests)
 
+add_executable(release_regression_tests release_regression_tests.cpp)
+target_link_libraries(release_regression_tests PRIVATE model_test_support Qt6::Test)
+add_test(NAME release_regression_tests COMMAND release_regression_tests)
+set_tests_properties(release_regression_tests PROPERTIES
+    LABELS "integration;regression"
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
+
 add_executable(sketch_trim_tests sketch_trim_tests.cpp)
 target_link_libraries(sketch_trim_tests PRIVATE model_test_support)
 add_test(NAME sketch_trim_tests COMMAND sketch_trim_tests)
+
+set_tests_properties(
+    geometry_tests cae_mesh_tests cae_fem_tests push_pull_drag_tests
+    interactive_operation_tests selection_tests model_tests bim_navigation_tests
+    sketch_face_tests boolean_cut_tests undo_tests undo_panel_tests
+    main_window_tests controller_tests sketch_trim_tests
+    PROPERTIES LABELS "unit;regression")
+set_tests_properties(
+    project_file_tests project_archive_tests release_regression_tests
+    electrostatic_boundary_tests simulation_state_tests
+    PROPERTIES LABELS "integration;regression")
+if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
+    set_tests_properties(gmsh_mesh_tests cae_resolve_integration_tests
+        PROPERTIES LABELS "integration;regression;slow")
+endif()
+if(PARAMETRIC_CAD_ENABLE_IFC)
+    set_tests_properties(ifc_import_tests ifc_workflow_tests ifc_building_acceptance
+        PROPERTIES LABELS "integration;regression;ifc;slow")
+endif()
