@@ -52,6 +52,34 @@ QJsonArray toolDefinitions()
             {"property", QJsonObject{{"type", "string"}}}, {"value", QJsonObject{}}, {"units", units}}},
         {"required", QJsonArray{"featureId", "property", "value"}}};
     const QJsonObject recompute{{"type", "object"}, {"additionalProperties", false}};
+    const QJsonObject sketchId{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}}}},
+        {"required", QJsonArray{"sketchId"}}};
+    const QJsonObject line{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"x1", QJsonObject{{"type", "number"}}}, {"y1", QJsonObject{{"type", "number"}}},
+            {"x2", QJsonObject{{"type", "number"}}}, {"y2", QJsonObject{{"type", "number"}}},
+            {"construction", QJsonObject{{"type", "boolean"}}}, {"units", units}}},
+        {"required", QJsonArray{"sketchId", "x1", "y1", "x2", "y2", "units"}}};
+    const QJsonObject editLine{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"entityId", QJsonObject{{"type", "string"}}}, {"x1", QJsonObject{{"type", "number"}}},
+            {"y1", QJsonObject{{"type", "number"}}}, {"x2", QJsonObject{{"type", "number"}}},
+            {"y2", QJsonObject{{"type", "number"}}}, {"units", units}}},
+        {"required", QJsonArray{"sketchId", "entityId", "x1", "y1", "x2", "y2", "units"}}};
+    const QJsonObject removeEntity{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"entityId", QJsonObject{{"type", "string"}}}}},
+        {"required", QJsonArray{"sketchId", "entityId"}}};
+    const QJsonObject topology{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}}}},
+        {"required", QJsonArray{"featureId"}}};
+    const QJsonObject chamfer{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"corners", QJsonObject{{"type", "array"}}}, {"featureId", QJsonObject{{"type", "string"}}},
+            {"edgeReferences", QJsonObject{{"type", "array"}}}, {"distance", QJsonObject{{"type", "number"}}},
+            {"units", units}}},
+        {"required", QJsonArray{"distance", "units"}}};
     const QJsonObject tools = QJsonObject{
         {"cad.get_model_tree", QJsonObject{{"description", "Inspect the parametric model tree"}, {"inputSchema", empty}}},
         {"cad.get_feature", QJsonObject{{"description", "Inspect one parametric feature"}, {"inputSchema", feature}}},
@@ -71,7 +99,13 @@ QJsonArray toolDefinitions()
         {"cad.recompute", QJsonObject{{"description", "Recompute the parametric document"}, {"inputSchema", recompute}}},
         {"cad.edit_feature", QJsonObject{{"description", "Edit an existing editable feature property"}, {"inputSchema", edit}}},
         {"cad.undo", QJsonObject{{"description", "Undo the latest modeling command"}, {"inputSchema", empty}}},
-        {"cad.redo", QJsonObject{{"description", "Redo the latest undone modeling command"}, {"inputSchema", empty}}}
+        {"cad.redo", QJsonObject{{"description", "Redo the latest undone modeling command"}, {"inputSchema", empty}}},
+        {"cad.get_sketch_entities", QJsonObject{{"description", "Inspect Sketch entities and constraints"}, {"inputSchema", sketchId}}},
+        {"cad.add_line", QJsonObject{{"description", "Add a parametric Sketch Line"}, {"inputSchema", line}}},
+        {"cad.edit_sketch_entity", QJsonObject{{"description", "Edit a Sketch Line with Undo/Redo"}, {"inputSchema", editLine}}},
+        {"cad.remove_sketch_entity", QJsonObject{{"description", "Remove an unconstrained Sketch entity with Undo/Redo"}, {"inputSchema", removeEntity}}},
+        {"cad.get_topology", QJsonObject{{"description", "Get stable face and edge topology references"}, {"inputSchema", topology}}},
+        {"cad.chamfer", QJsonObject{{"description", "Chamfer Sketch corners or referenced 3D edges"}, {"inputSchema", chamfer}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {

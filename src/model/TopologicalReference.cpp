@@ -18,6 +18,7 @@
 #include <QJsonArray>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -316,19 +317,37 @@ bool isBoxLike(const TopoDS_Shape& owner)
 
 std::optional<std::string> boxFaceSemantic(const TopoDS_Shape& owner, const TopoDS_Face& face)
 {
-    if (!isBoxLike(owner)) return {};
     BRepAdaptor_Surface surface(face, Standard_True);
     if (surface.GetType() != GeomAbs_Plane) return {};
-    gp_Dir normal = surface.Plane().Axis().Direction();
-    if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+
+    // Face orientation is not guaranteed to be preserved when a parametric
+    // box is rebuilt or loaded from a project archive. Use the face centroid
+    // relative to the owner's bounds for primitive naming instead of relying
+    // on that transient orientation.
+    GProp_GProps properties;
+    BRepGProp::SurfaceProperties(face, properties);
+    const auto centroid = properties.CentreOfMass();
+    Bnd_Box bounds;
+    BRepBndLib::Add(owner, bounds);
+    Standard_Real xMin, yMin, zMin, xMax, yMax, zMax;
+    bounds.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+    const std::array<std::pair<double, const char*>, 6> candidates{{
+        {std::abs(centroid.X() - xMin), "-X"}, {std::abs(centroid.X() - xMax), "+X"},
+        {std::abs(centroid.Y() - yMin), "-Y"}, {std::abs(centroid.Y() - yMax), "+Y"},
+        {std::abs(centroid.Z() - zMin), "-Z"}, {std::abs(centroid.Z() - zMax), "+Z"}}};
+    const auto closest = std::min_element(candidates.begin(), candidates.end(),
+        [](const auto& left, const auto& right) { return left.first < right.first; });
+    if (closest == candidates.end()) return {};
+
+    const gp_Dir normal = surface.Plane().Axis().Direction();
     const char* axis = nullptr;
-    double sign = 0.0;
-    if (std::abs(normal.X()) > 0.99) { axis = "X"; sign = normal.X(); }
-    else if (std::abs(normal.Y()) > 0.99) { axis = "Y"; sign = normal.Y(); }
-    else if (std::abs(normal.Z()) > 0.99) { axis = "Z"; sign = normal.Z(); }
+    if (std::abs(normal.X()) > 0.99) axis = "X";
+    else if (std::abs(normal.Y()) > 0.99) axis = "Y";
+    else if (std::abs(normal.Z()) > 0.99) axis = "Z";
     if (!axis) return {};
+    if (closest->second[1] != axis[0]) return {};
     std::ostringstream value;
-    value << "Box.Face:" << (sign >= 0.0 ? "+" : "-") << axis;
+    value << "Box.Face:" << closest->second[0] << axis;
     return value.str();
 }
 
@@ -569,6 +588,34 @@ TopologicalResolveResult TopologicalReferenceResolver::resolveAgainstShape(
             return {ResolveStatus::Ambiguous, std::nullopt, std::nullopt,
                     "Semantic topology reference is ambiguous",
                     static_cast<int>(semanticMatches.size()), 0.0};
+
+        // A primitive box may be rebuilt with a different face orientation,
+        // even though its planar support face is unchanged. Recover only this
+        // narrow, unambiguous case by matching the persisted face geometry.
+        if (reference.semanticId->rfind("Box.Face:", 0) == 0
+            && reference.signature
+            && std::holds_alternative<FaceSignature>(*reference.signature)) {
+            const auto& expected = std::get<FaceSignature>(*reference.signature);
+            TopTools_IndexedMapOfShape faces;
+            TopExp::MapShapes(currentShape, TopAbs_FACE, faces);
+            std::vector<std::pair<int, double>> geometricMatches;
+            for (int index = 1; index <= faces.Extent(); ++index) {
+                const auto candidate = makeSignature(faces(index), currentShape);
+                const auto& actual = std::get<FaceSignature>(candidate);
+                if (actual.surfaceKind != expected.surfaceKind
+                    || actual.boundaryEdgeCount != expected.boundaryEdgeCount
+                    || !closeRelative(actual.area, expected.area, tolerance.relativeArea))
+                    continue;
+                const double distance = actual.centroid.Distance(expected.centroid);
+                if (distance <= tolerance.linear)
+                    geometricMatches.emplace_back(index, distance);
+            }
+            if (geometricMatches.size() == 1) {
+                const int index = geometricMatches.front().first;
+                return {ResolveStatus::Resolved, faces(index), index, {}, 1,
+                        geometricMatches.front().second};
+            }
+        }
     }
     if (matches.empty())
     {

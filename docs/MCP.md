@@ -88,12 +88,27 @@ save_project -> open_project -> edit_feature -> recompute -> undo/redo
 6. Close the GUI, verify a structured disconnect error, restart it with the
    same socket name, and repeat the status call.
 
-## MCP-2B and MCP-3 roadmap
+## MCP-2B editing tools
 
-MCP-2B is reserved for Lines/Arcs, constraints, Revolve, Sweep, Fillet,
-Chamfer, Shell, Boolean, Pattern, and feature deletion. These must continue to
-use controller commands, persistent topology references, recompute, and
-Undo/Redo; direct Body mutation is out of scope.
+MCP-2B adds safe editing of existing Sketches and topology inspection:
+
+```text
+cad.get_sketch_entities  cad.add_line       cad.edit_sketch_entity
+cad.remove_sketch_entity cad.get_topology   cad.chamfer
+```
+
+Sketch corner chamfering accepts line-ID pairs and a distance. Four pairs on a
+rectangle produce an eight-segment closed profile; circles and downstream
+features are retained. The operation is a controller command, participates in
+`QUndoStack`, recomputes dependants, and persists in `.pcad` archives. The
+generic `cad.chamfer` edge form uses serialized `TopologicalReference` values;
+viewport coordinates are not accepted as topology identity.
+
+For primitive box-like supports, topology recovery also tolerates OCCT face
+orientation changes and upstream corner edits by matching the stable planar
+support geometry. Missing or ambiguous references remain structured errors.
+
+## MCP-3 roadmap
 
 MCP-3 is a separate future GUI automation surface. It may expose explicitly
 scoped menus, panels, or pointer/keyboard actions, but must not be used for

@@ -163,6 +163,51 @@ QJsonObject featureJson(const cad::parametric::ParametricFeature& feature,
     return result;
 }
 
+QJsonObject sketchEntityJson(const cad::parametric::SketchEntity& entity)
+{
+    return std::visit([](const auto& value) {
+        using Entity = std::decay_t<decltype(value)>;
+        QJsonObject result{{"id", QString::fromStdString(value.id)},
+            {"construction", value.construction}};
+        if constexpr (std::is_same_v<Entity, cad::parametric::SketchLine>) {
+            result.insert("type", "Line");
+            result.insert("start", QJsonArray{value.start.X(), value.start.Y()});
+            result.insert("end", QJsonArray{value.end.X(), value.end.Y()});
+        } else if constexpr (std::is_same_v<Entity, cad::parametric::SketchCircle>) {
+            result.insert("type", "Circle");
+            result.insert("center", QJsonArray{value.center.X(), value.center.Y()});
+            result.insert("radius", value.radius);
+        } else {
+            result.insert("type", "Arc");
+            result.insert("center", QJsonArray{value.center.X(), value.center.Y()});
+            result.insert("radius", value.radius);
+            result.insert("startAngle", value.startAngle);
+            result.insert("endAngle", value.endAngle);
+            result.insert("clockwise", value.clockwise);
+        }
+        return result;
+    }, entity);
+}
+
+QJsonObject topologyJson(const cad::parametric::ParametricFeature& feature)
+{
+    QJsonArray faces;
+    QJsonArray edges;
+    for (TopExp_Explorer explorer(feature.shape(), TopAbs_FACE);
+         explorer.More(); explorer.Next()) {
+        faces.append(cad::topology::toJson(
+            cad::topology::TopologicalSignatureBuilder::createReference(
+                feature.id(), feature.shape(), TopoDS::Face(explorer.Current()))));
+    }
+    for (TopExp_Explorer explorer(feature.shape(), TopAbs_EDGE);
+         explorer.More(); explorer.Next()) {
+        edges.append(cad::topology::toJson(
+            cad::topology::TopologicalSignatureBuilder::createReference(
+                feature.id(), feature.shape(), TopoDS::Edge(explorer.Current()))));
+    }
+    return QJsonObject{{"faces", faces}, {"edges", edges}};
+}
+
 bool validProjectPath(const QString& path, QString& error)
 {
     const QFileInfo info(path);
@@ -751,7 +796,9 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.get_application_status", "cad.new_project", "cad.open_project",
         "cad.save_project", "cad.create_sketch", "cad.add_rectangle",
         "cad.add_circle", "cad.extrude", "cad.pocket", "cad.recompute",
-        "cad.edit_feature", "cad.undo", "cad.redo"};
+        "cad.edit_feature", "cad.undo", "cad.redo", "cad.get_sketch_entities",
+        "cad.add_line", "cad.edit_sketch_entity", "cad.remove_sketch_entity",
+        "cad.get_topology", "cad.chamfer"};
     if (!tools.contains(tool)) return rpcError(id, -32601, "Unknown tool: " + tool);
 
     const auto hasOnly = [&arguments](const QStringList& names) {
@@ -766,7 +813,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
             || arguments.value("featureId").toString().isEmpty()))
         return rpcError(id, -32602, "featureId must be the only non-empty string argument");
-    const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.extrude", "cad.pocket"};
+    const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.add_line",
+        "cad.extrude", "cad.pocket", "cad.chamfer"};
     if (unitTools.contains(tool)) {
         QString unitsError;
         if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
@@ -1033,6 +1081,115 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         result = QJsonObject{{"success", true}, {"canUndo", modeling_.undoStack().canUndo()},
             {"canRedo", modeling_.undoStack().canRedo()},
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())}};
+    } else if (tool == "cad.get_sketch_entities") {
+        if (!hasOnly({"sketchId"}) || !arguments.value("sketchId").isString()
+            || arguments.value("sketchId").toString().isEmpty())
+            return rpcError(id, -32602, "sketchId must be the only non-empty string argument");
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(arguments.value("sketchId").toString().toStdString()));
+        if (!sketch) return rpcError(id, -32004, "Sketch not found",
+            QJsonObject{{"featureId", arguments.value("sketchId").toString()}});
+        QJsonArray entities;
+        for (const auto& entity : sketch->entities()) entities.append(sketchEntityJson(entity));
+        result = QJsonObject{{"sketchId", arguments.value("sketchId").toString()},
+            {"entityCount", entities.size()}, {"entities", entities},
+            {"constraintCount", static_cast<qint64>(sketch->constraintCount())},
+            {"supportType", sketchSupportName(sketch->supportType())}};
+    } else if (tool == "cad.add_line") {
+        if (!hasOnly({"sketchId", "x1", "y1", "x2", "y2", "construction", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("x1").isDouble() || !arguments.value("y1").isDouble()
+            || !arguments.value("x2").isDouble() || !arguments.value("y2").isDouble()
+            || (arguments.contains("construction") && !arguments.value("construction").isBool()))
+            return rpcError(id, -32602, "add_line requires sketchId, x1/y1/x2/y2, units and optional construction");
+        const gp_Pnt2d start(arguments.value("x1").toDouble(), arguments.value("y1").toDouble());
+        const gp_Pnt2d end(arguments.value("x2").toDouble(), arguments.value("y2").toDouble());
+        if (!std::isfinite(start.X()) || !std::isfinite(start.Y())
+            || !std::isfinite(end.X()) || !std::isfinite(end.Y())
+            || start.Distance(end) <= 1.0e-9)
+            return rpcError(id, -32602, "Sketch Line endpoints must be finite and distinct");
+        const auto operation = modeling_.addSketchLine(
+            arguments.value("sketchId").toString().toStdString(), start, end,
+            arguments.value("construction").toBool(false));
+        if (!operation.success) return finishModeling(operation, "add_line");
+        refreshModelView();
+        return finishModeling(operation, "add_line");
+    } else if (tool == "cad.edit_sketch_entity") {
+        if (!hasOnly({"sketchId", "entityId", "x1", "y1", "x2", "y2", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("entityId").isString()
+            || !arguments.value("x1").isDouble() || !arguments.value("y1").isDouble()
+            || !arguments.value("x2").isDouble() || !arguments.value("y2").isDouble())
+            return rpcError(id, -32602, "edit_sketch_entity currently edits Lines with x1/y1/x2/y2");
+        const auto operation = modeling_.editSketchLine(
+            arguments.value("sketchId").toString().toStdString(),
+            arguments.value("entityId").toString().toStdString(),
+            {arguments.value("x1").toDouble(), arguments.value("y1").toDouble()},
+            {arguments.value("x2").toDouble(), arguments.value("y2").toDouble()});
+        if (!operation.success) return finishModeling(operation, "edit_sketch_entity");
+        refreshModelView();
+        return finishModeling(operation, "edit_sketch_entity");
+    } else if (tool == "cad.remove_sketch_entity") {
+        if (!hasOnly({"sketchId", "entityId"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("entityId").isString())
+            return rpcError(id, -32602, "remove_sketch_entity requires sketchId and entityId");
+        const auto operation = modeling_.removeSketchEntity(
+            arguments.value("sketchId").toString().toStdString(),
+            arguments.value("entityId").toString().toStdString());
+        if (!operation.success) return finishModeling(operation, "remove_sketch_entity");
+        refreshModelView();
+        return finishModeling(operation, "remove_sketch_entity");
+    } else if (tool == "cad.get_topology") {
+        if (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty())
+            return rpcError(id, -32602, "featureId must be the only non-empty string argument");
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found",
+            QJsonObject{{"featureId", arguments.value("featureId").toString()}});
+        result = topologyJson(*feature);
+        result.insert("featureId", arguments.value("featureId").toString());
+    } else if (tool == "cad.chamfer") {
+        if (!hasOnly({"sketchId", "corners", "featureId", "edgeReferences", "distance", "units"})
+            || !arguments.value("distance").isDouble())
+            return rpcError(id, -32602, "chamfer requires distance and either sketch corners or edgeReferences");
+        const double distance = arguments.value("distance").toDouble();
+        if (!std::isfinite(distance) || distance <= 0.0)
+            return rpcError(id, -32602, "Chamfer distance must be positive and finite");
+        cad::application::ModelingResult operation;
+        if (arguments.contains("sketchId")) {
+            if (!arguments.value("sketchId").isString()
+                || !arguments.value("corners").isArray())
+                return rpcError(id, -32602, "Sketch chamfer requires sketchId and corners array");
+            std::vector<cad::application::ModelingController::SketchChamferCorner> corners;
+            for (const auto& value : arguments.value("corners").toArray()) {
+                const auto corner = value.toObject();
+                if (!corner.value("firstLineId").isString()
+                    || !corner.value("secondLineId").isString())
+                    return rpcError(id, -32602, "Each chamfer corner requires two line IDs");
+                corners.emplace_back(corner.value("firstLineId").toString().toStdString(),
+                    corner.value("secondLineId").toString().toStdString());
+            }
+            operation = modeling_.chamferSketchCorners(
+                arguments.value("sketchId").toString().toStdString(), corners,
+                cad::parametric::SketchChamferMode::EqualDistance, distance);
+        } else {
+            if (!arguments.value("featureId").isString()
+                || !arguments.value("edgeReferences").isArray())
+                return rpcError(id, -32602, "3D chamfer requires featureId and edgeReferences array");
+            std::vector<cad::topology::TopologicalReference> references;
+            try {
+                for (const auto& value : arguments.value("edgeReferences").toArray())
+                    references.push_back(cad::topology::topologicalReferenceFromJson(value.toObject()));
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+            operation = modeling_.createChamfer(references, distance);
+        }
+        if (!operation.success) return finishModeling(operation, "chamfer");
+        refreshModelView();
+        return finishModeling(operation, "chamfer");
     }
     return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
 }

@@ -225,6 +225,57 @@ ModelingResult ModelingController::addSketchLine(
     }
 }
 
+ModelingResult ModelingController::editSketchLine(
+    const std::string& sketchId, const std::string& entityId,
+    const gp_Pnt2d& start, const gp_Pnt2d& end)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    auto entities = sketch->entities();
+    auto found = std::find_if(entities.begin(), entities.end(),
+        [&entityId](const auto& entity) {
+            const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+            return line && line->id == entityId;
+        });
+    if (found == entities.end()) return {false, {}, "Sketch Line does not exist"};
+    const auto construction = std::get<cad::parametric::SketchLine>(*found).construction;
+    *found = cad::parametric::SketchLine{start, end, entityId, construction};
+    try {
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(entities),
+            sketch->constraints(), sketch->constraints(), "Edit Sketch Line"));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::removeSketchEntity(
+    const std::string& sketchId, const std::string& entityId)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    if (sketch->hasConstraintsForEntity(entityId))
+        return {false, {}, "Cannot remove a constrained Sketch entity"};
+    auto entities = sketch->entities();
+    const auto before = entities.size();
+    entities.erase(std::remove_if(entities.begin(), entities.end(),
+        [&entityId](const auto& entity) {
+            return std::visit([&entityId](const auto& value) { return value.id == entityId; }, entity);
+        }), entities.end());
+    if (entities.size() == before) return {false, {}, "Sketch entity does not exist"};
+    try {
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(entities),
+            sketch->constraints(), sketch->constraints(), "Remove Sketch Entity"));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::toggleSketchEntityConstruction(
     const std::string& sketchId, const std::string& entityId)
 {
@@ -1455,6 +1506,39 @@ ModelingResult ModelingController::createChamfer(
     try {
         return addFeature(std::make_shared<cad::parametric::ChamferFeature>(
             id("chamfer"), source, input->references, distance));
+    } catch (const std::exception& exception) {
+        return failure(exception);
+    }
+}
+
+ModelingResult ModelingController::createChamfer(
+    const std::vector<cad::topology::TopologicalReference>& references,
+    const double distance)
+{
+    if (references.empty()) return {false, {}, "Chamfer requires at least one edge reference"};
+    if (!std::isfinite(distance) || distance <= 0.0)
+        return {false, {}, "Chamfer distance must be positive and finite"};
+    const auto sourceId = references.front().featureId;
+    const auto source = body_.findFeature(sourceId);
+    if (!source) return {false, {}, "Chamfer source feature does not exist"};
+    std::vector<TopoDS_Edge> edges;
+    cad::topology::TopologicalReferenceResolver resolver(body_);
+    for (const auto& reference : references) {
+        if (reference.featureId != sourceId
+            || reference.kind != cad::topology::TopologicalKind::Edge)
+            return {false, {}, "Chamfer edges must belong to one feature and be Edges"};
+        const auto resolved = resolver.resolve(reference);
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+            || resolved.shape->ShapeType() != TopAbs_EDGE) {
+            return {false, {}, resolved.status == cad::topology::ResolveStatus::Ambiguous
+                ? "Chamfer edge reference is ambiguous"
+                : "Chamfer edge reference could not be resolved"};
+        }
+        edges.push_back(TopoDS::Edge(*resolved.shape));
+    }
+    try {
+        return addFeature(std::make_shared<cad::parametric::ChamferFeature>(
+            id("chamfer"), source, edges, distance));
     } catch (const std::exception& exception) {
         return failure(exception);
     }

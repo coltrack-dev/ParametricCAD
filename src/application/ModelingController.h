@@ -42,6 +42,11 @@ public:
     ModelingResult addSketchLine(
         const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
         bool construction = false);
+    ModelingResult editSketchLine(
+        const std::string& sketchId, const std::string& entityId,
+        const gp_Pnt2d& start, const gp_Pnt2d& end);
+    ModelingResult removeSketchEntity(
+        const std::string& sketchId, const std::string& entityId);
     ModelingResult toggleSketchEntityConstruction(
         const std::string& sketchId, const std::string& entityId);
     ModelingResult addSketchCircle(
@@ -166,6 +171,10 @@ public:
     );
     ModelingResult createChamfer(
         const SelectionSnapshot& selection,
+        double distance = 3.0
+    );
+    ModelingResult createChamfer(
+        const std::vector<cad::topology::TopologicalReference>& references,
         double distance = 3.0
     );
     ModelingResult pushPull(

@@ -16,6 +16,9 @@
 #ifndef PARAMETRICCAD_MCP_PATH
 #error PARAMETRICCAD_MCP_PATH must be defined by CMake
 #endif
+#ifndef PARAMETRICCAD_SOURCE_DIR
+#error PARAMETRICCAD_SOURCE_DIR must be defined by CMake
+#endif
 
 class McpModelingIntegrationTests final : public QObject
 {
@@ -177,6 +180,107 @@ private slots:
         QVERIFY(invalid.value("error").toObject().value("code").toInt() == -32602);
         const auto missing = call("cad.get_feature", QJsonObject{{"featureId", "missing"}});
         QVERIFY(missing.value("error").toObject().value("code").toInt() == -32004);
+    }
+
+    void mountingPlateCornerEditingThroughMcp()
+    {
+        const QString source = QDir(QStringLiteral(PARAMETRICCAD_SOURCE_DIR))
+            .filePath("examples/mcp_mounting_plate.pcad");
+        QVERIFY2(QFileInfo::exists(source), qPrintable(source));
+        QVERIFY(callTool("cad.open_project", QJsonObject{{"path", source}})
+                    .value("success").toBool());
+
+        const auto tree = callTool("cad.get_model_tree");
+        QCOMPARE(tree.value("featureCount").toInt(), 4);
+        const auto features = tree.value("features").toArray();
+        QVERIFY(features.size() == 4);
+        const QString sketchId = features.at(0).toObject().value("id").toString();
+        const QString finalFeatureId = features.at(3).toObject().value("id").toString();
+        QVERIFY(!sketchId.isEmpty());
+        QVERIFY(!finalFeatureId.isEmpty());
+
+        const auto before = callTool("cad.inspect_shape", QJsonObject{{"featureId", finalFeatureId}});
+        QVERIFY(before.value("valid").toBool());
+        QCOMPARE(before.value("solidCount").toInt(), 1);
+        const double originalVolume = before.value("volume").toDouble();
+        QVERIFY(std::abs(originalVolume - 33436.460394670736) < 1.0e-3);
+
+        const auto entities = callTool("cad.get_sketch_entities", QJsonObject{{"sketchId", sketchId}});
+        QCOMPARE(entities.value("entityCount").toInt(), 4);
+        const auto entityArray = entities.value("entities").toArray();
+        QVERIFY(entityArray.size() == 4);
+        QJsonArray corners;
+        for (int i = 0; i < entityArray.size(); ++i) {
+            const auto first = entityArray.at(i).toObject();
+            const auto firstStart = first.value("start").toArray();
+            const auto firstEnd = first.value("end").toArray();
+            for (int j = i + 1; j < entityArray.size(); ++j) {
+                const auto second = entityArray.at(j).toObject();
+                const auto secondStart = second.value("start").toArray();
+                const auto secondEnd = second.value("end").toArray();
+                const auto distance = [](const QJsonArray& a, const QJsonArray& b) {
+                    const double dx = a.at(0).toDouble() - b.at(0).toDouble();
+                    const double dy = a.at(1).toDouble() - b.at(1).toDouble();
+                    return std::hypot(dx, dy);
+                };
+                if (distance(firstEnd, secondStart) < 1.0e-6
+                    || distance(firstEnd, secondEnd) < 1.0e-6
+                    || distance(firstStart, secondStart) < 1.0e-6
+                    || distance(firstStart, secondEnd) < 1.0e-6) {
+                    corners.append(QJsonObject{{"firstLineId", first.value("id")},
+                        {"secondLineId", second.value("id")}});
+                }
+            }
+        }
+        QCOMPARE(corners.size(), 4);
+
+        const auto chamfer = callTool("cad.chamfer", QJsonObject{{"sketchId", sketchId},
+            {"corners", corners}, {"distance", 5.0}, {"units", "mm"}});
+        QVERIFY(chamfer.value("success").toBool());
+        const auto editedEntities = callTool("cad.get_sketch_entities",
+            QJsonObject{{"sketchId", sketchId}});
+        QCOMPARE(editedEntities.value("entityCount").toInt(), 8);
+
+        const auto after = callTool("cad.inspect_shape", QJsonObject{{"featureId", finalFeatureId}});
+        QVERIFY(after.value("valid").toBool());
+        QCOMPARE(after.value("solidCount").toInt(), 1);
+        QVERIFY(std::abs(after.value("volume").toDouble()
+                         - (originalVolume - 300.0)) < 1.0e-3);
+        const auto bbox = after.value("boundingBox").toObject();
+        const auto min = bbox.value("min").toArray();
+        const auto max = bbox.value("max").toArray();
+        QVERIFY(std::abs(max.at(0).toDouble() - min.at(0).toDouble() - 100.0) < 0.1);
+        QVERIFY(std::abs(max.at(1).toDouble() - min.at(1).toDouble() - 60.0) < 0.1);
+        QVERIFY(std::abs(max.at(2).toDouble() - min.at(2).toDouble() - 6.0) < 0.1);
+
+        const auto holeSketch = callTool("cad.get_sketch_entities",
+            QJsonObject{{"sketchId", features.at(2).toObject().value("id")}});
+        QCOMPARE(holeSketch.value("entityCount").toInt(), 5);
+        QVERIFY(callTool("cad.recompute").value("success").toBool());
+
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        const auto undone = callTool("cad.inspect_shape", QJsonObject{{"featureId", finalFeatureId}});
+        QVERIFY(std::abs(undone.value("volume").toDouble() - originalVolume) < 1.0e-3);
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        const auto redone = callTool("cad.inspect_shape", QJsonObject{{"featureId", finalFeatureId}});
+        QVERIFY(std::abs(redone.value("volume").toDouble() - (originalVolume - 300.0)) < 1.0e-3);
+
+        const QString saved = temporaryDirectory_.filePath("mounting-plate-chamfered.pcad");
+        QVERIFY(callTool("cad.save_project", QJsonObject{{"path", saved}})
+                    .value("success").toBool());
+        QVERIFY(QFileInfo::exists(saved));
+        QVERIFY(callTool("cad.open_project", QJsonObject{{"path", saved}})
+                    .value("success").toBool());
+        const auto reopenedTree = callTool("cad.get_model_tree");
+        QCOMPARE(reopenedTree.value("featureCount").toInt(), 4);
+        const auto reopenedFinal = reopenedTree.value("features").toArray().at(3)
+            .toObject().value("id").toString();
+        const auto reopenedShape = callTool("cad.inspect_shape",
+            QJsonObject{{"featureId", reopenedFinal}});
+        QVERIFY(reopenedShape.value("valid").toBool());
+        QCOMPARE(reopenedShape.value("solidCount").toInt(), 1);
+        QVERIFY(std::abs(reopenedShape.value("volume").toDouble()
+                         - (originalVolume - 300.0)) < 1.0e-3);
     }
 
     void cleanupTestCase()

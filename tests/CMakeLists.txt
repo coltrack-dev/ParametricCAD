@@ -94,7 +94,8 @@ add_executable(mcp_modeling_integration_tests mcp_modeling_integration_tests.cpp
 target_link_libraries(mcp_modeling_integration_tests PRIVATE Qt6::Test Qt6::Network)
 target_compile_definitions(mcp_modeling_integration_tests PRIVATE
     PARAMETRICCAD_APP_PATH="$<TARGET_FILE:ParametricCAD>"
-    PARAMETRICCAD_MCP_PATH="$<TARGET_FILE:parametriccad-mcp>")
+    PARAMETRICCAD_MCP_PATH="$<TARGET_FILE:parametriccad-mcp>"
+    PARAMETRICCAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 add_dependencies(mcp_modeling_integration_tests ParametricCAD parametriccad-mcp)
 add_test(NAME mcp_modeling_integration_tests COMMAND mcp_modeling_integration_tests)
 
