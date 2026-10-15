@@ -14,6 +14,7 @@
 #include "operations/SketchProfileBuilder.h"
 #include "operations/SketchPathBuilder.h"
 #include "application/SelectionResolver.h"
+#include "automation/CadAutomationService.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -47,6 +48,7 @@
 #include <QStandardPaths>
 #include <QDockWidget>
 #include <QGuiApplication>
+#include <QCoreApplication>
 #include <QScreen>
 #include <QElapsedTimer>
 #include <QProgressDialog>
@@ -62,6 +64,10 @@
 #include <QStyle>
 #include <QIcon>
 #include <QSignalBlocker>
+#include <QBuffer>
+#include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cstdio>
@@ -72,6 +78,79 @@ namespace
 {
 constexpr int ModelPanelWidth = 320;
 constexpr qint64 ProjectLoadTimeBudgetMs = 30;
+
+QJsonObject rpcError(const QJsonValue& id, int code, const QString& message,
+                     const QJsonObject& data = {})
+{
+    QJsonObject error{{"code", code}, {"message", message}};
+    if (!data.isEmpty()) error.insert("data", data);
+    return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"error", error}};
+}
+
+QString featureStateName(cad::parametric::FeatureState state)
+{
+    switch (state) {
+    case cad::parametric::FeatureState::Dirty: return "dirty";
+    case cad::parametric::FeatureState::UpToDate: return "up_to_date";
+    case cad::parametric::FeatureState::Failed: return "failed";
+    }
+    return "unknown";
+}
+
+QJsonObject shapeInspection(const TopoDS_Shape& shape)
+{
+    QJsonObject result{{"valid", false}, {"shapeNull", shape.IsNull()}};
+    if (shape.IsNull()) return result;
+    const BRepCheck_Analyzer analyzer(shape);
+    int solids = 0;
+    int faces = 0;
+    int edges = 0;
+    for (TopExp_Explorer it(shape, TopAbs_SOLID); it.More(); it.Next()) ++solids;
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) ++faces;
+    for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) ++edges;
+    GProp_GProps volumeProperties;
+    BRepGProp::VolumeProperties(shape, volumeProperties);
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    QJsonObject box;
+    if (!bounds.IsVoid()) {
+        Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+        bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        box = QJsonObject{{"min", QJsonArray{xmin, ymin, zmin}},
+                          {"max", QJsonArray{xmax, ymax, zmax}}};
+    }
+    result.insert("valid", analyzer.IsValid());
+    result.insert("solidCount", solids);
+    result.insert("faceCount", faces);
+    result.insert("edgeCount", edges);
+    result.insert("volume", volumeProperties.Mass());
+    result.insert("boundingBox", box);
+    return result;
+}
+
+QJsonObject featureJson(const cad::parametric::ParametricFeature& feature,
+                        bool includeShape)
+{
+    QJsonArray dependencies;
+    for (const auto& weak : feature.dependencies()) {
+        if (const auto dependency = weak.lock())
+            dependencies.append(QString::fromStdString(dependency->id()));
+    }
+    QJsonObject result{
+        {"id", QString::fromStdString(feature.id())},
+        {"name", QString::fromStdString(feature.name())},
+        {"type", QString::fromLatin1(feature.typeId())},
+        {"state", featureStateName(feature.state())},
+        {"recomputeState", featureStateName(feature.state())},
+        {"error", QString::fromStdString(feature.error())},
+        {"dependencies", dependencies},
+        {"geometryRevision", static_cast<qint64>(feature.geometryRevision())},
+        {"visible", feature.userVisible()},
+        {"parameters", feature.serialize()}
+    };
+    if (includeShape) result.insert("shape", shapeInspection(feature.shape()));
+    return result;
+}
 
 void traceActionState(const char* event, const QString& details)
 {
@@ -570,6 +649,19 @@ MainWindow::MainWindow(QWidget* parent)
         this, &MainWindow::finishIfcImport);
 #endif
     statusBar()->showMessage("Ready");
+
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_ENABLE_AUTOMATION")) {
+        automationService_ = std::make_unique<CadAutomationService>(*this, this);
+        QString error;
+        const QString socket = qEnvironmentVariable(
+            "PARAMETRICCAD_AUTOMATION_SOCKET", "parametriccad-automation");
+        if (!automationService_->start(socket, error)) {
+            qWarning() << "Unable to start automation service:" << error;
+            automationService_.reset();
+        } else {
+            qInfo() << "Automation service listening on" << automationService_->socketName();
+        }
+    }
 }
 
 
@@ -588,6 +680,99 @@ MainWindow::~MainWindow()
 #endif
     disconnect(&modeling_.undoStack(), nullptr, this, nullptr);
     featureEditorPanel_->setService(nullptr);
+}
+
+QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
+{
+    const QJsonValue id = request.value("id");
+    if (request.value("jsonrpc").toString() != "2.0")
+        return rpcError(id, -32600, "Request must use JSON-RPC 2.0");
+    if (!request.value("method").isString())
+        return rpcError(id, -32600, "Request method is required");
+    if (request.value("method").toString() != "automation/call")
+        return rpcError(id, -32601, "Unknown automation method");
+
+    const QJsonObject params = request.value("params").toObject();
+    const QString tool = params.value("tool").toString();
+    const QJsonObject arguments = params.value("arguments").toObject();
+    static const QStringList tools{
+        "cad.get_model_tree", "cad.get_feature", "cad.inspect_shape",
+        "cad.get_selection", "cad.get_view_state", "cad.screenshot",
+        "cad.get_application_status"};
+    if (!tools.contains(tool)) return rpcError(id, -32601, "Unknown tool: " + tool);
+
+    const auto hasOnly = [&arguments](const QStringList& names) {
+        for (const QString& key : arguments.keys()) if (!names.contains(key)) return false;
+        return true;
+    };
+    if ((tool == "cad.get_model_tree" || tool == "cad.get_selection"
+         || tool == "cad.get_view_state" || tool == "cad.screenshot"
+         || tool == "cad.get_application_status") && !arguments.isEmpty())
+        return rpcError(id, -32602, "This tool does not accept arguments");
+    if ((tool == "cad.get_feature" || tool == "cad.inspect_shape")
+        && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty()))
+        return rpcError(id, -32602, "featureId must be the only non-empty string argument");
+
+    QJsonObject result;
+    if (tool == "cad.get_model_tree") {
+        QJsonArray features;
+        for (const auto& feature : modeling_.body().features())
+            features.append(featureJson(*feature, false));
+        result = QJsonObject{{"features", features},
+            {"featureCount", features.size()},
+            {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.get_feature" || tool == "cad.inspect_shape") {
+        const QString featureId = arguments.value("featureId").toString();
+        if (featureId.isEmpty()) return rpcError(id, -32602, "featureId is required");
+        const auto feature = modeling_.body().findFeature(featureId.toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found", {{"featureId", featureId}});
+        if (tool == "cad.inspect_shape") result = shapeInspection(feature->shape());
+        else result = featureJson(*feature, true);
+    } else if (tool == "cad.get_selection") {
+        QJsonArray items;
+        for (const auto& item : viewer_->selectionSnapshot().items) {
+            QString kind = "unknown";
+            switch (item.kind) {
+            case cad::application::SelectionKind::Object: kind = "object"; break;
+            case cad::application::SelectionKind::Face: kind = "face"; break;
+            case cad::application::SelectionKind::Edge: kind = "edge"; break;
+            case cad::application::SelectionKind::Vertex: kind = "vertex"; break;
+            default: break;
+            }
+            QJsonObject value{{"featureId", QString::fromStdString(item.featureId)}, {"kind", kind}};
+            if (item.subshapeIndex) value.insert("subshapeIndex", *item.subshapeIndex);
+            items.append(value);
+        }
+        result = QJsonObject{{"items", items}};
+    } else if (tool == "cad.get_view_state") {
+        const auto camera = viewer_->cameraState();
+        result = QJsonObject{{"valid", camera.valid}, {"selectionMode", static_cast<int>(viewer_->selectionMode())},
+            {"displayMode", static_cast<int>(viewer_->displayMode())}, {"orbitMode", static_cast<int>(viewer_->orbitMode())},
+            {"width", viewer_->width()}, {"height", viewer_->height()}};
+        if (camera.valid) {
+            result.insert("eye", QJsonArray{camera.eye.X(), camera.eye.Y(), camera.eye.Z()});
+            result.insert("center", QJsonArray{camera.center.X(), camera.center.Y(), camera.center.Z()});
+            result.insert("up", QJsonArray{camera.up.X(), camera.up.Y(), camera.up.Z()});
+            result.insert("scale", camera.scale);
+        }
+    } else if (tool == "cad.screenshot") {
+        const QImage image = viewer_->grab().toImage();
+        if (image.isNull()) return rpcError(id, -32010, "Screenshot is unavailable");
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        buffer.open(QIODevice::WriteOnly);
+        image.save(&buffer, "PNG");
+        result = QJsonObject{{"mimeType", "image/png"}, {"width", image.width()},
+            {"height", image.height()}, {"data", QString::fromLatin1(bytes.toBase64())}};
+    } else if (tool == "cad.get_application_status") {
+        result = QJsonObject{{"application", "ParametricCAD"}, {"version", QCoreApplication::applicationVersion()},
+            {"pid", static_cast<qint64>(QCoreApplication::applicationPid())},
+            {"thread", QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()), 16)},
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())}, {"dirty", project_.isDirty()},
+            {"automationEnabled", automationService_ != nullptr}};
+    }
+    return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
 }
 
 void MainWindow::createParametricPanel()

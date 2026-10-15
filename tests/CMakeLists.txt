@@ -86,6 +86,10 @@ add_test(NAME selection_tests COMMAND selection_tests)
 
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+add_executable(mcp_protocol_tests mcp_protocol_tests.cpp)
+target_link_libraries(mcp_protocol_tests PRIVATE Qt6::Test)
+add_test(NAME mcp_protocol_tests COMMAND mcp_protocol_tests)
+
 add_library(model_test_support STATIC
     ../src/application/ModelingController.cpp
     ../src/application/SelectionResolver.cpp
@@ -238,6 +242,8 @@ set(_main_window_test_support_sources
     "${PROJECT_SOURCE_DIR}/src/resources/toolbar_icons.qrc"
     "${PROJECT_SOURCE_DIR}/src/viewer/MainWindow.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/MainWindow.h"
+    "${PROJECT_SOURCE_DIR}/src/automation/CadAutomationService.cpp"
+    "${PROJECT_SOURCE_DIR}/src/automation/CadAutomationService.h"
     "${PROJECT_SOURCE_DIR}/src/viewer/ModelPresenter.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/PushPullDrag.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/TransformMath.cpp"
@@ -256,7 +262,7 @@ unset(_main_window_test_support_sources)
 target_include_directories(main_window_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(main_window_test_support PUBLIC
     model_test_support Qt6::Test Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets
-    Qt6::Concurrent ParametricCAD::OCCTVisualization)
+    Qt6::Concurrent Qt6::Network ParametricCAD::OCCTVisualization)
 
 add_executable(main_window_tests main_window_tests.cpp)
 target_link_libraries(main_window_tests PRIVATE main_window_test_support)

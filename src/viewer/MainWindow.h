@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QProgressDialog>
 #include <QTimer>
+#include <QJsonObject>
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
 #include "application/VisibilityManager.h"
@@ -45,6 +46,8 @@ class MainWindow final : public QMainWindow
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    QJsonObject handleAutomationRequest(const QJsonObject& request);
 
 private:
     friend class MainWindowTests;
@@ -354,6 +357,7 @@ private:
     QStringList selectedObjectIds_;
     cad::application::SelectionSnapshot currentSelection_;
     CadViewer* viewer_{nullptr};
+    std::unique_ptr<class CadAutomationService> automationService_;
     FeatureEditorPanel* featureEditorPanel_{nullptr};
     QDockWidget* sketchChamferDock_{nullptr};
     bool sketchChamferFloatingFallback_{false};

@@ -24,7 +24,7 @@ set(PARAMETRIC_CAD_IFCOPENSHELL_ROOT "" CACHE PATH
 set(PARAMETRIC_CAD_IFCOPENSHELL_SOURCE_DIR "" CACHE PATH
     "Optional IfcOpenShell 0.9.x source tree for development headers")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Concurrent Network)
 
 # Open CASCADE package naming differs between distributions.
 # The official/config package normally exposes OpenCASCADE_* variables.

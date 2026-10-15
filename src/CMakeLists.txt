@@ -1,6 +1,8 @@
 set(PARAMETRIC_CAD_SOURCES
     resources/toolbar_icons.qrc
     app/main.cpp
+    automation/CadAutomationService.cpp
+    automation/CadAutomationService.h
     application/ModelingController.cpp
     application/ModelingController.h
     application/Selection.h
@@ -106,6 +108,14 @@ set(PARAMETRIC_CAD_SOURCES
 
 add_executable(ParametricCAD ${PARAMETRIC_CAD_SOURCES})
 
+add_executable(parametriccad-mcp mcp/main.cpp)
+target_link_libraries(parametriccad-mcp PRIVATE Qt6::Core Qt6::Network)
+if(MSVC)
+    target_compile_options(parametriccad-mcp PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(parametriccad-mcp PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(APPLE)
     set_target_properties(ParametricCAD PROPERTIES
         MACOSX_BUNDLE TRUE
@@ -141,6 +151,7 @@ target_link_libraries(ParametricCAD
         Qt6::OpenGL
         Qt6::OpenGLWidgets
         Qt6::Concurrent
+        Qt6::Network
         ${PARAMETRIC_CAD_MINIZIP_TARGET}
         ParametricCAD::OCCTModeling
         ParametricCAD::OCCTVisualization
