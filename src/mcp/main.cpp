@@ -233,7 +233,14 @@ QJsonObject handle(const QJsonObject& request, const QString& socketName)
     for (const auto& value : toolDefinitions()) if (value.toObject().value("name").toString() == tool) known = true;
     if (!known) return errorResponse(id, -32601, "Unknown tool: " + tool);
     const QJsonObject appResponse = callApplication(socketName, tool, params.value("arguments").toObject(), id);
-    if (appResponse.contains("error")) return appResponse;
+    if (appResponse.contains("error")) {
+        const auto error = appResponse.value("error").toObject();
+        const auto structured = QJsonObject{{"error", error}};
+        const auto text = QString::fromUtf8(QJsonDocument(structured).toJson(QJsonDocument::Compact));
+        return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", QJsonObject{
+            {"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", text}}}},
+            {"structuredContent", structured}, {"isError", true}}}};
+    }
     const QJsonValue value = appResponse.value("result");
     QJsonObject content;
     if (value.toObject().value("mimeType").toString() == "image/png") {
