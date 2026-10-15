@@ -164,7 +164,15 @@ public:
         const std::string& featureId,
         cad::parametric::RevolveAxisDefinition axis);
     ModelingResult createLinearPattern(const std::vector<std::string>& selection);
+    ModelingResult createLinearPattern(const std::vector<std::string>& selection,
+                                       gp_Vec direction, double spacing, int count,
+                                       bool includeSource);
     ModelingResult createPathPattern(const std::vector<std::string>& selection);
+    ModelingResult createPathPattern(const std::vector<std::string>& selection,
+                                     double spacing, int count,
+                                     cad::parametric::PathPatternDistribution distribution,
+                                     cad::parametric::PathPatternOrientation orientation,
+                                     double startOffset, double endOffset, bool includeSource);
     ModelingResult createFillet(
         const SelectionSnapshot& selection,
         double radius = 3.0

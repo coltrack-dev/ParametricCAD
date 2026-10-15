@@ -182,6 +182,84 @@ private slots:
         QVERIFY(missing.value("error").toObject().value("code").toInt() == -32004);
     }
 
+    void stage1SolidOperationsThroughMcp()
+    {
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto plateSketch = callTool("cad.create_sketch", QJsonObject{{"support", "XY"}})
+            .value("featureId").toString();
+        QVERIFY(!plateSketch.isEmpty());
+        callTool("cad.add_rectangle", QJsonObject{{"sketchId", plateSketch}, {"x", 0.0},
+            {"y", 0.0}, {"width", 100.0}, {"height", 60.0}, {"units", "mm"}});
+        const auto plate = callTool("cad.extrude", QJsonObject{{"sketchId", plateSketch},
+            {"distance", 6.0}, {"units", "mm"}}).value("featureId").toString();
+        QVERIFY(!plate.isEmpty());
+
+        const auto plateFeature = callTool("cad.get_feature", QJsonObject{{"featureId", plate}});
+        QJsonObject topFace;
+        for (const auto& value : plateFeature.value("topology").toObject().value("faces").toArray()) {
+            if (value.toObject().value("semanticId").toString() == "Box.Face:+Z") {
+                topFace = value.toObject();
+                break;
+            }
+        }
+        QVERIFY(!topFace.isEmpty());
+        const auto pipeSketch = callTool("cad.create_sketch",
+            QJsonObject{{"faceReference", topFace}}).value("featureId").toString();
+        QVERIFY(!pipeSketch.isEmpty());
+        callTool("cad.add_circle", QJsonObject{{"sketchId", pipeSketch}, {"x", 0.0},
+            {"y", 0.0}, {"radius", 16.0}, {"units", "mm"}});
+        callTool("cad.add_circle", QJsonObject{{"sketchId", pipeSketch}, {"x", 0.0},
+            {"y", 0.0}, {"radius", 12.0}, {"units", "mm"}});
+        const auto pipe = callTool("cad.extrude", QJsonObject{{"sketchId", pipeSketch},
+            {"distance", 20.0}, {"units", "mm"}}).value("featureId").toString();
+        QVERIFY(!pipe.isEmpty());
+
+        const auto fused = callTool("cad.boolean", QJsonObject{{"leftFeatureId", plate},
+            {"rightFeatureId", pipe}, {"operation", "Fuse"}});
+        QVERIFY(fused.value("success").toBool());
+        const auto fusedId = fused.value("featureId").toString();
+        QVERIFY(!fusedId.isEmpty());
+        const auto fusedShape = callTool("cad.inspect_shape", QJsonObject{{"featureId", fusedId}});
+        QVERIFY(fusedShape.value("valid").toBool());
+        QCOMPARE(fusedShape.value("solidCount").toInt(), 1);
+        const auto fusedBox = fusedShape.value("boundingBox").toObject();
+        const auto fusedMin = fusedBox.value("min").toArray();
+        const auto fusedMax = fusedBox.value("max").toArray();
+        QVERIFY(std::abs(fusedMax.at(0).toDouble() - fusedMin.at(0).toDouble() - 100.0) < 0.2);
+        QVERIFY(std::abs(fusedMax.at(1).toDouble() - fusedMin.at(1).toDouble() - 60.0) < 0.2);
+        QVERIFY(std::abs(fusedMax.at(2).toDouble() - fusedMin.at(2).toDouble() - 26.0) < 0.2);
+
+        const auto tree = callTool("cad.get_model_tree");
+        const auto booleanFeature = tree.value("features").toArray().last().toObject();
+        const auto dependencies = booleanFeature.value("dependencies").toArray();
+        QVERIFY(dependencies.contains(plate));
+        QVERIFY(dependencies.contains(pipe));
+
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", fusedId}})
+                    .value("valid").toBool());
+
+        const QString saved = temporaryDirectory_.filePath("stage1-fused.pcad");
+        QVERIFY(callTool("cad.save_project", QJsonObject{{"path", saved}})
+                    .value("success").toBool());
+        QVERIFY(callTool("cad.open_project", QJsonObject{{"path", saved}})
+                    .value("success").toBool());
+        QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", fusedId}})
+                    .value("solidCount").toInt() == 1);
+
+        QVERIFY(callTool("cad.edit_feature", QJsonObject{{"featureId", plate},
+            {"property", "distance"}, {"value", 7.0}, {"units", "mm"}})
+                    .value("success").toBool());
+        QVERIFY(callTool("cad.recompute").value("success").toBool());
+        const auto resized = callTool("cad.inspect_shape", QJsonObject{{"featureId", fusedId}});
+        QVERIFY(resized.value("valid").toBool());
+        QCOMPARE(resized.value("solidCount").toInt(), 1);
+        QVERIFY(std::abs(resized.value("boundingBox").toObject().value("max").toArray().at(2).toDouble()
+                         - resized.value("boundingBox").toObject().value("min").toArray().at(2).toDouble()
+                         - 27.0) < 0.2);
+    }
+
     void mountingPlateCornerEditingThroughMcp()
     {
         const QString source = QDir(QStringLiteral(PARAMETRICCAD_SOURCE_DIR))

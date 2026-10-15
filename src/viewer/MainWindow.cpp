@@ -798,7 +798,11 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.add_circle", "cad.extrude", "cad.pocket", "cad.recompute",
         "cad.edit_feature", "cad.undo", "cad.redo", "cad.get_sketch_entities",
         "cad.add_line", "cad.edit_sketch_entity", "cad.remove_sketch_entity",
-        "cad.get_topology", "cad.chamfer"};
+        "cad.get_topology", "cad.chamfer", "cad.boolean", "cad.fillet",
+        "cad.shell", "cad.revolve", "cad.sweep", "cad.delete_feature",
+        "cad.add_arc", "cad.add_constraint", "cad.edit_constraint",
+        "cad.remove_constraint", "cad.get_constraints", "cad.linear_pattern",
+        "cad.path_pattern", "cad.get_feature_dependencies"};
     if (!tools.contains(tool)) return rpcError(id, -32601, "Unknown tool: " + tool);
 
     const auto hasOnly = [&arguments](const QStringList& names) {
@@ -814,7 +818,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             || arguments.value("featureId").toString().isEmpty()))
         return rpcError(id, -32602, "featureId must be the only non-empty string argument");
     const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.add_line",
-        "cad.extrude", "cad.pocket", "cad.chamfer"};
+        "cad.extrude", "cad.pocket", "cad.chamfer", "cad.fillet", "cad.shell",
+        "cad.add_arc", "cad.linear_pattern", "cad.path_pattern"};
     if (unitTools.contains(tool)) {
         QString unitsError;
         if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
@@ -832,6 +837,23 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
                 value.insert("feature", featureJson(*feature, false));
         }
         return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", value}};
+    };
+    const auto finishSolidModeling = [this, &id, &finishModeling](
+        const cad::application::ModelingResult& operation, const QString& name) {
+        if (!operation.success) return finishModeling(operation, name);
+        const auto feature = modeling_.body().findFeature(operation.id);
+        if (!feature) return rpcError(id, -32020, name + " failed",
+            QJsonObject{{"operation", name}, {"message", "Created feature is missing"}});
+        const auto inspection = shapeInspection(feature->shape());
+        if (!inspection.value("valid").toBool()
+            || inspection.value("solidCount").toInt() != 1) {
+            modeling_.undo();
+            return rpcError(id, -32020, name + " failed",
+                QJsonObject{{"operation", name},
+                    {"message", "Result must be one valid solid"}, {"inspection", inspection}});
+        }
+        refreshModelView();
+        return finishModeling(operation, name);
     };
 
     QJsonObject result;
@@ -1190,6 +1212,284 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!operation.success) return finishModeling(operation, "chamfer");
         refreshModelView();
         return finishModeling(operation, "chamfer");
+    } else if (tool == "cad.boolean") {
+        if (!hasOnly({"leftFeatureId", "rightFeatureId", "operation"})
+            || !arguments.value("leftFeatureId").isString()
+            || !arguments.value("rightFeatureId").isString()
+            || !arguments.value("operation").isString())
+            return rpcError(id, -32602, "boolean requires leftFeatureId, rightFeatureId and operation");
+        const QString leftId = arguments.value("leftFeatureId").toString();
+        const QString rightId = arguments.value("rightFeatureId").toString();
+        const QString operationName = arguments.value("operation").toString();
+        if (leftId.isEmpty() || rightId.isEmpty() || leftId == rightId
+            || (operationName != "Fuse" && operationName != "Cut" && operationName != "Common"))
+            return rpcError(id, -32602, "Boolean operands and operation are invalid");
+        const auto left = modeling_.body().findFeature(leftId.toStdString());
+        const auto right = modeling_.body().findFeature(rightId.toStdString());
+        if (!left || !right) return rpcError(id, -32004, "Boolean operand feature not found");
+        const auto leftInspection = shapeInspection(left->shape());
+        const auto rightInspection = shapeInspection(right->shape());
+        if (!leftInspection.value("valid").toBool() || !rightInspection.value("valid").toBool()
+            || leftInspection.value("solidCount").toInt() != 1
+            || rightInspection.value("solidCount").toInt() != 1)
+            return rpcError(id, -32602, "Boolean operands must each be one valid solid",
+                QJsonObject{{"left", leftInspection}, {"right", rightInspection}});
+        const auto kind = operationName == "Fuse" ? cad::application::BooleanKind::Fuse
+            : operationName == "Cut" ? cad::application::BooleanKind::Cut
+            : cad::application::BooleanKind::Common;
+        return finishSolidModeling(modeling_.createBoolean(
+            kind, {leftId.toStdString(), rightId.toStdString()}), "boolean");
+    } else if (tool == "cad.fillet" || tool == "cad.shell") {
+        const bool fillet = tool == "cad.fillet";
+        const QStringList allowed = fillet
+            ? QStringList{"featureId", "edgeReferences", "radius", "units"}
+            : QStringList{"featureId", "openingFaces", "thickness", "units"};
+        if (!hasOnly(allowed) || !arguments.value("featureId").isString())
+            return rpcError(id, -32602, tool + " requires featureId and topology references");
+        const QString sourceId = arguments.value("featureId").toString();
+        const QString refsKey = fillet ? "edgeReferences" : "openingFaces";
+        const QString valueKey = fillet ? "radius" : "thickness";
+        if (!arguments.value(refsKey).isArray() || arguments.value(refsKey).toArray().isEmpty()
+            || !arguments.value(valueKey).isDouble())
+            return rpcError(id, -32602, tool + " requires non-empty topology references and a value");
+        const double value = arguments.value(valueKey).toDouble();
+        if (!std::isfinite(value) || value <= 0.0)
+            return rpcError(id, -32602, "Modeling distance must be positive and finite");
+        cad::application::SelectionSnapshot selection;
+        if (!fillet) selection.items.push_back({sourceId.toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt});
+        try {
+            for (const auto& raw : arguments.value(refsKey).toArray()) {
+                const auto reference = cad::topology::topologicalReferenceFromJson(raw.toObject());
+                if (reference.featureId != sourceId.toStdString()
+                    || reference.kind != (fillet ? cad::topology::TopologicalKind::Edge
+                        : cad::topology::TopologicalKind::Face)
+                    || !reference.transientIndex || *reference.transientIndex <= 0)
+                    return rpcError(id, -32602, "Topology reference has the wrong feature, kind, or index");
+                selection.items.push_back({sourceId.toStdString(),
+                    fillet ? cad::application::SelectionKind::Edge
+                           : cad::application::SelectionKind::Face,
+                    reference.transientIndex});
+            }
+        } catch (const std::exception& error) {
+            return rpcError(id, -32602, QString::fromUtf8(error.what()));
+        }
+        const auto operation = fillet
+            ? modeling_.createFillet(selection, value)
+            : modeling_.createShell(selection, value);
+        return finishSolidModeling(operation, tool.mid(4));
+    } else if (tool == "cad.revolve") {
+        if (!hasOnly({"sketchId", "axis", "angleDegrees"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("axis").isObject()
+            || !arguments.value("angleDegrees").isDouble())
+            return rpcError(id, -32602, "revolve requires sketchId, axis and angleDegrees");
+        const auto axisJson = arguments.value("axis").toObject();
+        const QString axisType = axisJson.value("type").toString();
+        cad::parametric::RevolveAxisDefinition axis;
+        if (axisType == "GlobalX") axis.type = cad::parametric::RevolveAxisType::GlobalX;
+        else if (axisType == "GlobalY") axis.type = cad::parametric::RevolveAxisType::GlobalY;
+        else if (axisType == "GlobalZ") axis.type = cad::parametric::RevolveAxisType::GlobalZ;
+        else if (axisType == "SketchLine") {
+            if (!axisJson.value("lineId").isString())
+                return rpcError(id, -32602, "SketchLine axis requires lineId");
+            axis.type = cad::parametric::RevolveAxisType::SketchLine;
+            axis.sketchFeatureId = arguments.value("sketchId").toString().toStdString();
+            axis.sketchLineId = axisJson.value("lineId").toString().toStdString();
+        } else if (axisType == "ModelEdge") {
+            if (!axisJson.value("edgeReference").isObject())
+                return rpcError(id, -32602, "ModelEdge axis requires edgeReference");
+            try {
+                axis.edgeReference = cad::topology::topologicalReferenceFromJson(
+                    axisJson.value("edgeReference").toObject());
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+            axis.type = cad::parametric::RevolveAxisType::ModelEdge;
+            axis.edgeFeatureId = axis.edgeReference->featureId;
+        } else return rpcError(id, -32602, "Unsupported revolve axis type");
+        const double angle = arguments.value("angleDegrees").toDouble();
+        if (!std::isfinite(angle) || std::abs(angle) <= 1.0e-9 || std::abs(angle) > 360.0)
+            return rpcError(id, -32602, "Revolve angle must be between -360 and 360 degrees");
+        const cad::application::SelectionSnapshot selection{{{
+            arguments.value("sketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        return finishSolidModeling(modeling_.createRevolve(selection, axis, angle), "revolve");
+    } else if (tool == "cad.sweep") {
+        if (!hasOnly({"profileSketchId", "pathSketchId", "pathReference"})
+            || !arguments.value("profileSketchId").isString())
+            return rpcError(id, -32602, "sweep requires profileSketchId and a path");
+        cad::application::SelectionSnapshot path;
+        if (arguments.value("pathSketchId").isString()) {
+            path.items.push_back({arguments.value("pathSketchId").toString().toStdString(),
+                cad::application::SelectionKind::Object, std::nullopt});
+        } else if (arguments.value("pathReference").isObject()) {
+            try {
+                const auto reference = cad::topology::topologicalReferenceFromJson(
+                    arguments.value("pathReference").toObject());
+                if (reference.kind != cad::topology::TopologicalKind::Edge
+                    || !reference.transientIndex)
+                    return rpcError(id, -32602, "Sweep pathReference must be an Edge with transientIndex");
+                path.items.push_back({reference.featureId, cad::application::SelectionKind::Edge,
+                    reference.transientIndex});
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+        } else return rpcError(id, -32602, "Sweep requires pathSketchId or pathReference");
+        const cad::application::SelectionSnapshot profile{{{
+            arguments.value("profileSketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        return finishSolidModeling(modeling_.createSweep(profile, path), "sweep");
+    } else if (tool == "cad.delete_feature") {
+        if (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty())
+            return rpcError(id, -32602, "delete_feature requires featureId");
+        const auto operation = modeling_.deleteFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!operation.success) return finishModeling(operation, "delete_feature");
+        refreshModelView();
+        return finishModeling(operation, "delete_feature");
+    } else if (tool == "cad.add_arc") {
+        if (!hasOnly({"sketchId", "center", "start", "end", "units"})
+            || !arguments.value("sketchId").isString())
+            return rpcError(id, -32602, "add_arc requires sketchId, center, start, end and units");
+        const auto center = arguments.value("center").toArray();
+        const auto start = arguments.value("start").toArray();
+        const auto end = arguments.value("end").toArray();
+        if (center.size() != 2 || start.size() != 2 || end.size() != 2)
+            return rpcError(id, -32602, "Arc points must be [x,y] arrays");
+        const auto operation = modeling_.addSketchArc(arguments.value("sketchId").toString().toStdString(),
+            {center.at(0).toDouble(), center.at(1).toDouble()},
+            {start.at(0).toDouble(), start.at(1).toDouble()},
+            {end.at(0).toDouble(), end.at(1).toDouble()});
+        if (!operation.success) return finishModeling(operation, "add_arc");
+        refreshModelView();
+        return finishModeling(operation, "add_arc");
+    } else if (tool == "cad.get_constraints") {
+        if (!hasOnly({"sketchId"}) || !arguments.value("sketchId").isString())
+            return rpcError(id, -32602, "get_constraints requires sketchId");
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(arguments.value("sketchId").toString().toStdString()));
+        if (!sketch) return rpcError(id, -32004, "Sketch not found");
+        const auto serialized = sketch->serialize();
+        result = QJsonObject{{"sketchId", arguments.value("sketchId").toString()},
+            {"constraintCount", static_cast<qint64>(sketch->constraints().size())},
+            {"constraints", serialized.value("constraints")}};
+    } else if (tool == "cad.get_feature_dependencies") {
+        if (!hasOnly({"featureId"}) || !arguments.value("featureId").isString())
+            return rpcError(id, -32602, "get_feature_dependencies requires featureId");
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found");
+        QJsonArray dependencies;
+        for (const auto& weak : feature->dependencies())
+            if (const auto dependency = weak.lock()) dependencies.append(QString::fromStdString(dependency->id()));
+        result = QJsonObject{{"featureId", arguments.value("featureId").toString()},
+            {"dependencies", dependencies}};
+    } else if (tool == "cad.add_constraint") {
+        if (!arguments.value("sketchId").isString() || !arguments.value("type").isString())
+            return rpcError(id, -32602, "add_constraint requires sketchId and type");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const QString type = arguments.value("type").toString();
+        const bool anchor = arguments.value("anchorStart").toBool(true);
+        const auto text = [&arguments](const char* key) { return arguments.value(key).toString().toStdString(); };
+        cad::application::ModelingResult operation;
+        if (type == "Horizontal") operation = modeling_.addSketchHorizontal(sketchId.toStdString(), text("entityId"), anchor);
+        else if (type == "Vertical") operation = modeling_.addSketchVertical(sketchId.toStdString(), text("entityId"), anchor);
+        else if (type == "Distance") operation = modeling_.addSketchDistance(sketchId.toStdString(), text("entityId"), arguments.value("value").toDouble(), anchor);
+        else if (type == "Radius") operation = modeling_.addSketchRadius(sketchId.toStdString(), text("entityId"), arguments.value("value").toDouble());
+        else if (type == "Parallel") operation = modeling_.addSketchParallel(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"), anchor);
+        else if (type == "Perpendicular") operation = modeling_.addSketchPerpendicular(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"), anchor);
+        else if (type == "Tangent") operation = modeling_.addSketchTangent(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"));
+        else if (type == "Equal") operation = modeling_.addSketchEqual(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"));
+        else if (type == "Angle") operation = modeling_.addSketchAngle(sketchId.toStdString(), text("entityId"), arguments.value("radians").toDouble(), anchor);
+        else if (type == "AngleBetweenLines") operation = modeling_.addSketchAngleBetweenLines(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"), arguments.value("radians").toDouble(), anchor);
+        else if (type == "HorizontalDistance" || type == "VerticalDistance") {
+            const auto parsePoint = [](const QJsonObject& object) {
+                const auto role = object.value("role").toString();
+                const auto mapped = role == "LineEnd" ? cad::parametric::SketchPointRole::LineEnd
+                    : role == "ArcStart" ? cad::parametric::SketchPointRole::ArcStart
+                    : role == "ArcEnd" ? cad::parametric::SketchPointRole::ArcEnd
+                    : role == "CircleCenter" ? cad::parametric::SketchPointRole::CircleCenter
+                    : role == "ArcCenter" ? cad::parametric::SketchPointRole::ArcCenter
+                    : cad::parametric::SketchPointRole::LineStart;
+                return cad::parametric::SketchPointRef{object.value("entityId").toString().toStdString(), mapped};
+            };
+            if (!arguments.value("first").isObject() || !arguments.value("second").isObject())
+                return rpcError(id, -32602, "Point distance requires first and second point references");
+            const auto first = parsePoint(arguments.value("first").toObject());
+            const auto second = parsePoint(arguments.value("second").toObject());
+            operation = type == "HorizontalDistance"
+                ? modeling_.addSketchHorizontalDistance(sketchId.toStdString(), first, second, arguments.value("value").toDouble())
+                : modeling_.addSketchVerticalDistance(sketchId.toStdString(), first, second, arguments.value("value").toDouble());
+        } else return rpcError(id, -32602, "Unsupported Sketch constraint type");
+        if (!operation.success) return finishModeling(operation, "add_constraint");
+        refreshModelView();
+        return finishModeling(operation, "add_constraint");
+    } else if (tool == "cad.edit_constraint") {
+        if (!arguments.value("sketchId").isString() || !arguments.value("constraintId").isString()
+            || !arguments.value("type").isString())
+            return rpcError(id, -32602, "edit_constraint requires sketchId, constraintId and type");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const auto cid = arguments.value("constraintId").toString().toStdString();
+        const QString type = arguments.value("type").toString();
+        const double value = arguments.value("value").toDouble();
+        cad::application::ModelingResult operation;
+        if (type == "Distance") operation = modeling_.updateSketchDistance(sketchId.toStdString(), cid, value);
+        else if (type == "Radius") operation = modeling_.updateSketchRadius(sketchId.toStdString(), cid, value);
+        else if (type == "HorizontalDistance") operation = modeling_.updateSketchHorizontalDistance(sketchId.toStdString(), cid, value);
+        else if (type == "VerticalDistance") operation = modeling_.updateSketchVerticalDistance(sketchId.toStdString(), cid, value);
+        else if (type == "Angle") operation = modeling_.updateSketchAngle(sketchId.toStdString(), cid, arguments.value("radians").toDouble());
+        else if (type == "AngleBetweenLines") operation = modeling_.updateSketchAngleBetweenLines(sketchId.toStdString(), cid, arguments.value("radians").toDouble());
+        else if (type == "Chamfer") operation = modeling_.updateSketchChamfer(sketchId.toStdString(), cid,
+            arguments.value("firstDistance").toDouble(), arguments.value("secondDistance").toDouble(), arguments.value("angleRadians").toDouble());
+        else return rpcError(id, -32602, "Unsupported editable constraint type");
+        if (!operation.success) return finishModeling(operation, "edit_constraint");
+        refreshModelView();
+        return finishModeling(operation, "edit_constraint");
+    } else if (tool == "cad.remove_constraint") {
+        if (!hasOnly({"sketchId", "constraintId"}) || !arguments.value("sketchId").isString()
+            || !arguments.value("constraintId").isString())
+            return rpcError(id, -32602, "remove_constraint requires sketchId and constraintId");
+        const auto operation = modeling_.removeSketchConstraint(
+            arguments.value("sketchId").toString().toStdString(),
+            arguments.value("constraintId").toString().toStdString());
+        if (!operation.success) return finishModeling(operation, "remove_constraint");
+        refreshModelView();
+        return finishModeling(operation, "remove_constraint");
+    } else if (tool == "cad.linear_pattern") {
+        if (!hasOnly({"featureId", "direction", "spacing", "count", "includeSource", "units"})
+            || !arguments.value("featureId").isString() || !arguments.value("direction").isArray()
+            || !arguments.value("spacing").isDouble() || !arguments.value("count").isDouble())
+            return rpcError(id, -32602, "linear_pattern arguments are invalid");
+        const auto direction = arguments.value("direction").toArray();
+        if (direction.size() != 3 || arguments.value("spacing").toDouble() <= 0.0
+            || arguments.value("count").toInt() < 1)
+            return rpcError(id, -32602, "linear_pattern direction, spacing or count is invalid");
+        const auto operation = modeling_.createLinearPattern({arguments.value("featureId").toString().toStdString()},
+            {direction.at(0).toDouble(), direction.at(1).toDouble(), direction.at(2).toDouble()},
+            arguments.value("spacing").toDouble(), arguments.value("count").toInt(),
+            arguments.value("includeSource").toBool(true));
+        if (!operation.success) return finishModeling(operation, "linear_pattern");
+        refreshModelView();
+        return finishModeling(operation, "linear_pattern");
+    } else if (tool == "cad.path_pattern") {
+        if (!hasOnly({"featureId", "pathFeatureId", "spacing", "count", "distribution", "orientation", "startOffset", "endOffset", "includeSource", "units"})
+            || !arguments.value("featureId").isString() || !arguments.value("pathFeatureId").isString()
+            || !arguments.value("spacing").isDouble() || !arguments.value("count").isDouble())
+            return rpcError(id, -32602, "path_pattern arguments are invalid");
+        const auto distribution = arguments.value("distribution").toString("FitCount") == "FixedSpacing"
+            ? cad::parametric::PathPatternDistribution::FixedSpacing : cad::parametric::PathPatternDistribution::FitCount;
+        const auto orientation = arguments.value("orientation").toString("Fixed") == "Tangent"
+            ? cad::parametric::PathPatternOrientation::Tangent : cad::parametric::PathPatternOrientation::Fixed;
+        const auto operation = modeling_.createPathPattern(
+            {arguments.value("featureId").toString().toStdString(), arguments.value("pathFeatureId").toString().toStdString()},
+            arguments.value("spacing").toDouble(), arguments.value("count").toInt(), distribution, orientation,
+            arguments.value("startOffset").toDouble(0.0), arguments.value("endOffset").toDouble(0.0),
+            arguments.value("includeSource").toBool(true));
+        if (!operation.success) return finishModeling(operation, "path_pattern");
+        refreshModelView();
+        return finishModeling(operation, "path_pattern");
     }
     return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
 }

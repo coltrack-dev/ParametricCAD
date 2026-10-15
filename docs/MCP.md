@@ -108,6 +108,37 @@ For primitive box-like supports, topology recovery also tolerates OCCT face
 orientation changes and upstream corner edits by matching the stable planar
 support geometry. Missing or ambiguous references remain structured errors.
 
+## MCP-2C extended modeling tools
+
+MCP-2C exposes the existing solid operations and Sketch editing services
+through the same controller and local IPC path. The current tool surface is:
+
+```text
+cad.boolean              cad.fillet              cad.shell
+cad.revolve              cad.delete_feature      cad.sweep
+cad.linear_pattern       cad.path_pattern        cad.add_arc
+cad.add_constraint       cad.edit_constraint     cad.remove_constraint
+cad.get_constraints      cad.get_feature_dependencies
+```
+
+Boolean operands are explicit feature IDs and `Cut` preserves the order
+`leftFeatureId - rightFeatureId`. Fillet and shell selections use serialized
+topology references from `cad.get_topology`; no viewport coordinates are
+accepted. Solid-producing operations validate the recomputed OCCT result and
+reject null, invalid, or multi-solid results. Feature deletion is dependency
+aware and uses the existing document command/undo path.
+
+Pattern, sweep, revolve, and constraint tools use the existing feature
+implementations. They return structured controller errors when the selected
+profile, path, topology reference, or constraint is not valid. MCP does not
+modify a Body or Sketch data structure directly.
+
+The real MCP integration regression currently covers Fuse, dependency
+inspection, recompute, Undo/Redo, persistence, and one-solid OCCT validation.
+The remaining extended operations have protocol handlers and schemas but need
+operation-specific live fixtures before they should be treated as production
+validated.
+
 ## MCP-3 roadmap
 
 MCP-3 is a separate future GUI automation surface. It may expose explicitly

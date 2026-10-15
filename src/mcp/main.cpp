@@ -80,6 +80,62 @@ QJsonArray toolDefinitions()
             {"edgeReferences", QJsonObject{{"type", "array"}}}, {"distance", QJsonObject{{"type", "number"}}},
             {"units", units}}},
         {"required", QJsonArray{"distance", "units"}}};
+    const QJsonObject boolean{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"leftFeatureId", QJsonObject{{"type", "string"}}},
+            {"rightFeatureId", QJsonObject{{"type", "string"}}},
+            {"operation", QJsonObject{{"type", "string"},
+                {"enum", QJsonArray{"Fuse", "Cut", "Common"}}}}}},
+        {"required", QJsonArray{"leftFeatureId", "rightFeatureId", "operation"}}};
+    const QJsonObject edgeRefs{{"type", "array"}, {"items", QJsonObject{{"type", "object"}}}};
+    const QJsonObject fillet{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}},
+            {"edgeReferences", edgeRefs}, {"radius", QJsonObject{{"type", "number"}}}, {"units", units}}},
+        {"required", QJsonArray{"featureId", "edgeReferences", "radius", "units"}}};
+    const QJsonObject shell{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}},
+            {"openingFaces", QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "object"}}}}},
+            {"thickness", QJsonObject{{"type", "number"}}}, {"units", units}}},
+        {"required", QJsonArray{"featureId", "openingFaces", "thickness", "units"}}};
+    const QJsonObject revolve{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"axis", QJsonObject{{"type", "object"}}},
+            {"angleDegrees", QJsonObject{{"type", "number"}}}}},
+        {"required", QJsonArray{"sketchId", "axis", "angleDegrees"}}};
+    const QJsonObject sweep{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"profileSketchId", QJsonObject{{"type", "string"}}},
+            {"pathSketchId", QJsonObject{{"type", "string"}}}, {"pathReference", QJsonObject{{"type", "object"}}}}},
+        {"required", QJsonArray{"profileSketchId"}}};
+    const QJsonObject deleteFeature{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}}}},
+        {"required", QJsonArray{"featureId"}}};
+    const QJsonObject arc{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"center", QJsonObject{{"type", "array"}}}, {"start", QJsonObject{{"type", "array"}}},
+            {"end", QJsonObject{{"type", "array"}}}, {"units", units}}},
+        {"required", QJsonArray{"sketchId", "center", "start", "end", "units"}}};
+    const QJsonObject constraint{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"type", QJsonObject{{"type", "string"}}}, {"entityId", QJsonObject{{"type", "string"}}},
+            {"firstEntityId", QJsonObject{{"type", "string"}}}, {"secondEntityId", QJsonObject{{"type", "string"}}},
+            {"first", QJsonObject{{"type", "object"}}}, {"second", QJsonObject{{"type", "object"}}},
+            {"value", QJsonObject{{"type", "number"}}}, {"anchorStart", QJsonObject{{"type", "boolean"}}},
+            {"constraintId", QJsonObject{{"type", "string"}}}, {"radians", QJsonObject{{"type", "number"}}}}},
+        {"required", QJsonArray{"sketchId", "type"}}};
+    const QJsonObject linearPattern{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}},
+            {"direction", QJsonObject{{"type", "array"}}}, {"spacing", QJsonObject{{"type", "number"}}},
+            {"count", QJsonObject{{"type", "integer"}}}, {"includeSource", QJsonObject{{"type", "boolean"}}},
+            {"units", units}}},
+        {"required", QJsonArray{"featureId", "direction", "spacing", "count", "units"}}};
+    const QJsonObject pathPattern{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}},
+            {"pathFeatureId", QJsonObject{{"type", "string"}}}, {"spacing", QJsonObject{{"type", "number"}}},
+            {"count", QJsonObject{{"type", "integer"}}},
+            {"distribution", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"FixedSpacing", "FitCount"}}}},
+            {"orientation", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"Fixed", "Tangent"}}}},
+            {"startOffset", QJsonObject{{"type", "number"}}}, {"endOffset", QJsonObject{{"type", "number"}}},
+            {"includeSource", QJsonObject{{"type", "boolean"}}}, {"units", units}}},
+        {"required", QJsonArray{"featureId", "pathFeatureId", "spacing", "count", "units"}}};
     const QJsonObject tools = QJsonObject{
         {"cad.get_model_tree", QJsonObject{{"description", "Inspect the parametric model tree"}, {"inputSchema", empty}}},
         {"cad.get_feature", QJsonObject{{"description", "Inspect one parametric feature"}, {"inputSchema", feature}}},
@@ -105,7 +161,21 @@ QJsonArray toolDefinitions()
         {"cad.edit_sketch_entity", QJsonObject{{"description", "Edit a Sketch Line with Undo/Redo"}, {"inputSchema", editLine}}},
         {"cad.remove_sketch_entity", QJsonObject{{"description", "Remove an unconstrained Sketch entity with Undo/Redo"}, {"inputSchema", removeEntity}}},
         {"cad.get_topology", QJsonObject{{"description", "Get stable face and edge topology references"}, {"inputSchema", topology}}},
-        {"cad.chamfer", QJsonObject{{"description", "Chamfer Sketch corners or referenced 3D edges"}, {"inputSchema", chamfer}}}
+        {"cad.chamfer", QJsonObject{{"description", "Chamfer Sketch corners or referenced 3D edges"}, {"inputSchema", chamfer}}},
+        {"cad.boolean", QJsonObject{{"description", "Fuse, Cut, or Common two feature solids"}, {"inputSchema", boolean}}},
+        {"cad.fillet", QJsonObject{{"description", "Fillet referenced 3D edges"}, {"inputSchema", fillet}}},
+        {"cad.shell", QJsonObject{{"description", "Create a shell with referenced opening faces"}, {"inputSchema", shell}}},
+        {"cad.revolve", QJsonObject{{"description", "Revolve a Sketch around a global, Sketch, or model axis"}, {"inputSchema", revolve}}},
+        {"cad.sweep", QJsonObject{{"description", "Sweep a Sketch profile along a Sketch or model edge"}, {"inputSchema", sweep}}},
+        {"cad.delete_feature", QJsonObject{{"description", "Delete a feature and its dependent history when allowed"}, {"inputSchema", deleteFeature}}}
+        ,{"cad.add_arc", QJsonObject{{"description", "Add a parametric Sketch Arc"}, {"inputSchema", arc}}}
+        ,{"cad.add_constraint", QJsonObject{{"description", "Add a Sketch constraint"}, {"inputSchema", constraint}}}
+        ,{"cad.edit_constraint", QJsonObject{{"description", "Edit a dimensional Sketch constraint"}, {"inputSchema", constraint}}}
+        ,{"cad.remove_constraint", QJsonObject{{"description", "Remove a Sketch constraint"}, {"inputSchema", constraint}}}
+        ,{"cad.get_constraints", QJsonObject{{"description", "Inspect Sketch constraints"}, {"inputSchema", sketchId}}}
+        ,{"cad.linear_pattern", QJsonObject{{"description", "Create a parametric linear pattern"}, {"inputSchema", linearPattern}}}
+        ,{"cad.path_pattern", QJsonObject{{"description", "Create a parametric path pattern"}, {"inputSchema", pathPattern}}}
+        ,{"cad.get_feature_dependencies", QJsonObject{{"description", "Inspect direct feature dependencies"}, {"inputSchema", feature}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {
