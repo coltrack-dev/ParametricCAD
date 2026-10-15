@@ -15,6 +15,43 @@ QJsonArray toolDefinitions()
     const QJsonObject feature{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}}}},
         {"required", QJsonArray{"featureId"}}};
+    const QJsonObject units{{"type", "string"}, {"enum", QJsonArray{"mm"}},
+        {"description", "Model length unit; ParametricCAD uses millimeters"}};
+    const QJsonObject newProject{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"units", units}}}};
+    const QJsonObject project{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"path", QJsonObject{{"type", "string"}}}}},
+        {"required", QJsonArray{"path"}}};
+    const QJsonObject sketch{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"support", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"XY", "XZ", "YZ"}}}},
+            {"faceReference", QJsonObject{{"type", "object"}, {"description", "Serialized TopologicalReference for a planar face"}}},
+            {"units", units}}}};
+    const QJsonObject rectangle{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"sketchId", QJsonObject{{"type", "string"}}}, {"x", QJsonObject{{"type", "number"}}},
+            {"y", QJsonObject{{"type", "number"}}}, {"width", QJsonObject{{"type", "number"}}},
+            {"height", QJsonObject{{"type", "number"}}}, {"units", units}}},
+        {"required", QJsonArray{"sketchId", "x", "y", "width", "height", "units"}}};
+    const QJsonObject circle{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"sketchId", QJsonObject{{"type", "string"}}}, {"x", QJsonObject{{"type", "number"}}},
+            {"y", QJsonObject{{"type", "number"}}}, {"radius", QJsonObject{{"type", "number"}}},
+            {"units", units}}},
+        {"required", QJsonArray{"sketchId", "x", "y", "radius", "units"}}};
+    const QJsonObject extrude{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"distance", QJsonObject{{"type", "number"}}}, {"reversed", QJsonObject{{"type", "boolean"}}}, {"units", units}}},
+        {"required", QJsonArray{"sketchId", "distance", "units"}}};
+    const QJsonObject pocket{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"depth", QJsonObject{{"type", "number"}}}, {"units", units}}},
+        {"required", QJsonArray{"sketchId", "depth", "units"}}};
+    const QJsonObject edit{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}},
+            {"property", QJsonObject{{"type", "string"}}}, {"value", QJsonObject{}}, {"units", units}}},
+        {"required", QJsonArray{"featureId", "property", "value"}}};
+    const QJsonObject recompute{{"type", "object"}, {"additionalProperties", false}};
     const QJsonObject tools = QJsonObject{
         {"cad.get_model_tree", QJsonObject{{"description", "Inspect the parametric model tree"}, {"inputSchema", empty}}},
         {"cad.get_feature", QJsonObject{{"description", "Inspect one parametric feature"}, {"inputSchema", feature}}},
@@ -22,7 +59,19 @@ QJsonArray toolDefinitions()
         {"cad.get_selection", QJsonObject{{"description", "Read the current viewer selection"}, {"inputSchema", empty}}},
         {"cad.get_view_state", QJsonObject{{"description", "Read viewer camera and display state"}, {"inputSchema", empty}}},
         {"cad.screenshot", QJsonObject{{"description", "Capture the current viewer as PNG"}, {"inputSchema", empty}}},
-        {"cad.get_application_status", QJsonObject{{"description", "Read application and automation status"}, {"inputSchema", empty}}}
+        {"cad.get_application_status", QJsonObject{{"description", "Read application and automation status"}, {"inputSchema", empty}}},
+        {"cad.new_project", QJsonObject{{"description", "Create an empty parametric project"}, {"inputSchema", newProject}}},
+        {"cad.open_project", QJsonObject{{"description", "Open a .pcad project"}, {"inputSchema", project}}},
+        {"cad.save_project", QJsonObject{{"description", "Save the current parametric project as .pcad"}, {"inputSchema", project}}},
+        {"cad.create_sketch", QJsonObject{{"description", "Create a global or planar-face-attached Sketch"}, {"inputSchema", sketch}}},
+        {"cad.add_rectangle", QJsonObject{{"description", "Add four parametric line entities to a Sketch"}, {"inputSchema", rectangle}}},
+        {"cad.add_circle", QJsonObject{{"description", "Add a parametric circle entity to a Sketch"}, {"inputSchema", circle}}},
+        {"cad.extrude", QJsonObject{{"description", "Create an Extrude from a Sketch"}, {"inputSchema", extrude}}},
+        {"cad.pocket", QJsonObject{{"description", "Create a Pocket from a face-attached Sketch"}, {"inputSchema", pocket}}},
+        {"cad.recompute", QJsonObject{{"description", "Recompute the parametric document"}, {"inputSchema", recompute}}},
+        {"cad.edit_feature", QJsonObject{{"description", "Edit an existing editable feature property"}, {"inputSchema", edit}}},
+        {"cad.undo", QJsonObject{{"description", "Undo the latest modeling command"}, {"inputSchema", empty}}},
+        {"cad.redo", QJsonObject{{"description", "Redo the latest undone modeling command"}, {"inputSchema", empty}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {

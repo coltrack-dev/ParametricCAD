@@ -38,6 +38,45 @@ counts, volume, and bounds. `cad.get_selection`, `cad.get_view_state`,
 `cad.screenshot`, and `cad.get_application_status` expose current GUI state.
 There are no modeling mutation tools in MCP-1.
 
+## MCP-2A modeling tools
+
+MCP-2A adds modeling commands without GUI automation. Every command is
+forwarded to the GUI thread and uses the existing `ModelingController`,
+`ProjectController`, feature dependency graph, and `QUndoStack`:
+
+```text
+cad.new_project       cad.open_project       cad.save_project
+cad.create_sketch     cad.add_rectangle      cad.add_circle
+cad.extrude           cad.pocket              cad.recompute
+cad.edit_feature      cad.undo                cad.redo
+```
+
+Length arguments require `"units": "mm"`; the native ParametricCAD model
+unit is millimeters. Project paths must be absolute `.pcad` paths. Creation
+commands return stable feature IDs and structured errors on invalid input or
+failed recompute.
+
+`cad.create_sketch` accepts `support: XY`, `XZ`, or `YZ`, or a serialized
+`TopologicalReference` for a planar face returned in `cad.get_feature` as
+`topology.faces`. Face references are resolved semantically/signature-based;
+ambiguous or missing references are rejected. No viewport coordinates are
+used by MCP-2A modeling commands.
+
+Example MCP-2A workflow:
+
+```text
+new_project
+create_sketch(support=XY)
+add_rectangle(120 x 80 mm)
+extrude(30 mm)
+get_feature(extrude) -> topology.faces
+create_sketch(faceReference=<one planar face>)
+add_rectangle(116 x 76 mm at 2,2 mm)
+pocket(28 mm)
+inspect_shape -> valid solid
+save_project -> open_project -> edit_feature -> recompute -> undo/redo
+```
+
 ## Example agent scenario
 
 1. Initialize the MCP server and call `tools/list`.
@@ -49,11 +88,16 @@ There are no modeling mutation tools in MCP-1.
 6. Close the GUI, verify a structured disconnect error, restart it with the
    same socket name, and repeat the status call.
 
-## Future phases
+## MCP-2B and MCP-3 roadmap
 
-MCP-2 may add modeling commands only through `ModelingController` and its
-`QUndoStack` command paths; direct Body mutation is out of scope. MCP-3 may
-add GUI automation through a separate, explicitly enabled command surface for
-menus, panels, and pointer/keyboard events. Both phases must retain GUI-thread
-execution, argument validation, local access restrictions, and clean
-disconnect behavior.
+MCP-2B is reserved for Lines/Arcs, constraints, Revolve, Sweep, Fillet,
+Chamfer, Shell, Boolean, Pattern, and feature deletion. These must continue to
+use controller commands, persistent topology references, recompute, and
+Undo/Redo; direct Body mutation is out of scope.
+
+MCP-3 is a separate future GUI automation surface. It may expose explicitly
+scoped menus, panels, or pointer/keyboard actions, but must not be used for
+modeling entity identity and must retain GUI-thread execution, argument
+validation, local access restrictions, and clean disconnect behavior. MCP-2A
+does not implement mouse clicking, keyboard simulation, widget trees, or
+screenshot-based control.

@@ -176,6 +176,39 @@ ModelingResult ModelingController::createSketchOnFace(
     }
 }
 
+ModelingResult ModelingController::createSketchOnFace(
+    const cad::topology::TopologicalReference& faceReference)
+{
+    if (faceReference.kind != cad::topology::TopologicalKind::Face
+        || faceReference.featureId.empty()) {
+        return {false, {}, "Face reference must identify a feature Face"};
+    }
+    const auto source = body_.findFeature(faceReference.featureId);
+    if (!source) return {false, {}, "Sketch support feature does not exist"};
+    const cad::topology::TopologicalReferenceResolver resolver(body_);
+    const auto resolved = resolver.resolve(faceReference, source->shape());
+    if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape) {
+        const auto message = resolved.status == cad::topology::ResolveStatus::Ambiguous
+            ? "Face reference is ambiguous"
+            : resolved.status == cad::topology::ResolveStatus::Missing
+                ? "Face reference could not be resolved"
+                : "Face reference does not match the support feature";
+        return {false, {}, std::string(message)};
+    }
+    if (resolved.shape->ShapeType() != TopAbs_FACE
+        || !cad::parametric::SketchFeature::isPlanarFace(*resolved.shape)) {
+        return {false, {}, "Sketch on Face currently supports planar faces only"};
+    }
+    try {
+        const auto stableReference = cad::topology::TopologicalSignatureBuilder::createReference(
+            source->id(), source->shape(), *resolved.shape);
+        return addFeature(std::make_shared<cad::parametric::SketchFeature>(
+            id("sketch"), source, stableReference));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::addSketchLine(
     const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
     const bool construction)

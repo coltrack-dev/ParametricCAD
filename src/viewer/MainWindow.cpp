@@ -22,6 +22,7 @@
 #include <QDialog>
 #include <QEvent>
 #include <QDir>
+#include <QFileInfo>
 #include <QFileDialog>
 #include <QKeySequence>
 #include <QMessageBox>
@@ -148,8 +149,57 @@ QJsonObject featureJson(const cad::parametric::ParametricFeature& feature,
         {"visible", feature.userVisible()},
         {"parameters", feature.serialize()}
     };
-    if (includeShape) result.insert("shape", shapeInspection(feature.shape()));
+    if (includeShape) {
+        result.insert("shape", shapeInspection(feature.shape()));
+        QJsonArray faces;
+        for (TopExp_Explorer explorer(feature.shape(), TopAbs_FACE);
+             explorer.More(); explorer.Next()) {
+            faces.append(cad::topology::toJson(
+                cad::topology::TopologicalSignatureBuilder::createReference(
+                    feature.id(), feature.shape(), TopoDS::Face(explorer.Current()))));
+        }
+        result.insert("topology", QJsonObject{{"faces", faces}});
+    }
     return result;
+}
+
+bool validProjectPath(const QString& path, QString& error)
+{
+    const QFileInfo info(path);
+    if (path.isEmpty() || !info.isAbsolute()) {
+        error = "Project path must be an absolute path";
+        return false;
+    }
+    if (info.suffix().compare("pcad", Qt::CaseInsensitive) != 0) {
+        error = "Project path must use the .pcad extension";
+        return false;
+    }
+    if (info.exists() && !info.isFile()) {
+        error = "Project path is not a regular file";
+        return false;
+    }
+    return true;
+}
+
+bool validUnits(const QJsonObject& arguments, QString& error, bool required = true)
+{
+    if (!arguments.contains("units")) {
+        if (required) error = "units must be explicitly set to 'mm'";
+        return !required;
+    }
+    if (!arguments.value("units").isString()
+        || arguments.value("units").toString() != "mm") {
+        error = "Only millimeter units ('mm') are supported";
+        return false;
+    }
+    return true;
+}
+
+QJsonObject modelingResultJson(const cad::application::ModelingResult& result)
+{
+    return QJsonObject{{"success", result.success},
+        {"featureId", QString::fromStdString(result.id)},
+        {"error", QString::fromStdString(result.error)}};
 }
 
 void traceActionState(const char* event, const QString& details)
@@ -698,7 +748,10 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     static const QStringList tools{
         "cad.get_model_tree", "cad.get_feature", "cad.inspect_shape",
         "cad.get_selection", "cad.get_view_state", "cad.screenshot",
-        "cad.get_application_status"};
+        "cad.get_application_status", "cad.new_project", "cad.open_project",
+        "cad.save_project", "cad.create_sketch", "cad.add_rectangle",
+        "cad.add_circle", "cad.extrude", "cad.pocket", "cad.recompute",
+        "cad.edit_feature", "cad.undo", "cad.redo"};
     if (!tools.contains(tool)) return rpcError(id, -32601, "Unknown tool: " + tool);
 
     const auto hasOnly = [&arguments](const QStringList& names) {
@@ -713,6 +766,25 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
             || arguments.value("featureId").toString().isEmpty()))
         return rpcError(id, -32602, "featureId must be the only non-empty string argument");
+    const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.extrude", "cad.pocket"};
+    if (unitTools.contains(tool)) {
+        QString unitsError;
+        if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
+    }
+
+    const auto finishModeling = [this, &id](const cad::application::ModelingResult& operation,
+                                             const QString& name) {
+        if (!operation.success) {
+            return rpcError(id, -32020, name + " failed",
+                QJsonObject{{"operation", name}, {"message", QString::fromStdString(operation.error)}});
+        }
+        QJsonObject value = modelingResultJson(operation);
+        if (!operation.id.empty()) {
+            if (const auto feature = modeling_.body().findFeature(operation.id))
+                value.insert("feature", featureJson(*feature, false));
+        }
+        return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", value}};
+    };
 
     QJsonObject result;
     if (tool == "cad.get_model_tree") {
@@ -771,6 +843,196 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             {"thread", QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()), 16)},
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())}, {"dirty", project_.isDirty()},
             {"automationEnabled", automationService_ != nullptr}};
+    } else if (tool == "cad.new_project") {
+        QString unitsError;
+        if (!validUnits(arguments, unitsError, false)) return rpcError(id, -32602, unitsError);
+        project_.newProject();
+        refreshModelView();
+        result = QJsonObject{{"success", true}, {"featureCount", 0}, {"geometryRevision", 0}};
+    } else if (tool == "cad.open_project" || tool == "cad.save_project") {
+        if (!hasOnly({"path"}) || !arguments.value("path").isString())
+            return rpcError(id, -32602, "path must be the only string argument");
+        QString pathError;
+        const QString path = arguments.value("path").toString();
+        if (!validProjectPath(path, pathError)) return rpcError(id, -32602, pathError);
+        QString error;
+        const bool success = tool == "cad.open_project"
+            ? project_.open(path, error) : project_.save(path, error);
+        if (!success) return rpcError(id, -32021,
+            tool == "cad.open_project" ? "Project open failed" : "Project save failed",
+            QJsonObject{{"path", path}, {"message", error}});
+        refreshModelView();
+        result = QJsonObject{{"success", true}, {"path", path},
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())},
+            {"dirty", project_.isDirty()}};
+    } else if (tool == "cad.create_sketch") {
+        if (!hasOnly({"support", "faceReference", "units"}))
+            return rpcError(id, -32602, "Unsupported create_sketch argument");
+        QString unitsError;
+        if (!validUnits(arguments, unitsError, false)) return rpcError(id, -32602, unitsError);
+        cad::application::ModelingResult operation;
+        if (arguments.contains("faceReference")) {
+            if (!arguments.value("faceReference").isObject()
+                || arguments.contains("support"))
+                return rpcError(id, -32602, "faceReference must be used without support");
+            try {
+                operation = modeling_.createSketchOnFace(
+                    cad::topology::topologicalReferenceFromJson(
+                        arguments.value("faceReference").toObject()));
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+        } else {
+            const QString support = arguments.value("support").toString("XY");
+            const auto supportType = support == "XZ"
+                ? cad::parametric::SketchSupportType::XZ
+                : support == "YZ"
+                    ? cad::parametric::SketchSupportType::YZ
+                    : support == "XY"
+                        ? cad::parametric::SketchSupportType::XY
+                        : cad::parametric::SketchSupportType::XY;
+            if (support != "XY" && support != "XZ" && support != "YZ")
+                return rpcError(id, -32602, "support must be XY, XZ or YZ");
+            operation = modeling_.createSketch(supportType);
+        }
+        if (!operation.success) return finishModeling(operation, "create_sketch");
+        refreshModelView();
+        return finishModeling(operation, "create_sketch");
+    } else if (tool == "cad.add_rectangle") {
+        if (!hasOnly({"sketchId", "x", "y", "width", "height", "units"}))
+            return rpcError(id, -32602, "Unsupported add_rectangle argument");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const double x = arguments.value("x").toDouble();
+        const double y = arguments.value("y").toDouble();
+        const double width = arguments.value("width").toDouble();
+        const double height = arguments.value("height").toDouble();
+        if (sketchId.isEmpty() || !std::isfinite(x) || !std::isfinite(y)
+            || !std::isfinite(width) || !std::isfinite(height)
+            || width <= 0.0 || height <= 0.0)
+            return rpcError(id, -32602, "Rectangle requires a sketchId and positive finite width/height");
+        if (!std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+                modeling_.body().findFeature(sketchId.toStdString())))
+            return rpcError(id, -32004, "Sketch not found", QJsonObject{{"featureId", sketchId}});
+        const int before = modeling_.undoStack().count();
+        modeling_.undoStack().beginMacro("Add Rectangle");
+        const std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>> lines{
+            {{x, y}, {x + width, y}},
+            {{x + width, y}, {x + width, y + height}},
+            {{x + width, y + height}, {x, y + height}},
+            {{x, y + height}, {x, y}}};
+        cad::application::ModelingResult operation{true, sketchId.toStdString(), {}};
+        for (const auto& line : lines) {
+            operation = modeling_.addSketchLine(sketchId.toStdString(), line.first, line.second);
+            if (!operation.success) break;
+        }
+        modeling_.undoStack().endMacro();
+        if (!operation.success && modeling_.undoStack().count() > before)
+            modeling_.undoStack().undo();
+        if (!operation.success) return finishModeling(operation, "add_rectangle");
+        refreshModelView();
+        return finishModeling(operation, "add_rectangle");
+    } else if (tool == "cad.add_circle") {
+        if (!hasOnly({"sketchId", "x", "y", "radius", "units"}))
+            return rpcError(id, -32602, "Unsupported add_circle argument");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const double radius = arguments.value("radius").toDouble();
+        if (sketchId.isEmpty() || !std::isfinite(radius) || radius <= 0.0
+            || !arguments.value("x").isDouble() || !arguments.value("y").isDouble())
+            return rpcError(id, -32602, "Circle requires finite center coordinates and positive radius");
+        const auto operation = modeling_.addSketchCircle(sketchId.toStdString(),
+            {arguments.value("x").toDouble(), arguments.value("y").toDouble()}, radius);
+        if (!operation.success) return finishModeling(operation, "add_circle");
+        refreshModelView();
+        return finishModeling(operation, "add_circle");
+    } else if (tool == "cad.extrude") {
+        if (!hasOnly({"sketchId", "distance", "reversed", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("distance").isDouble()
+            || (arguments.contains("reversed") && !arguments.value("reversed").isBool()))
+            return rpcError(id, -32602, "extrude requires sketchId, numeric distance, units and optional reversed");
+        const double distance = arguments.value("distance").toDouble();
+        if (!std::isfinite(distance) || distance <= 0.0)
+            return rpcError(id, -32602, "Extrude distance must be positive and finite");
+        const cad::application::SelectionSnapshot selection{{{
+            arguments.value("sketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        const auto operation = modeling_.createExtrudeFromSketch(selection, distance,
+            arguments.value("reversed").toBool(false));
+        if (!operation.success) return finishModeling(operation, "extrude");
+        refreshModelView();
+        return finishModeling(operation, "extrude");
+    } else if (tool == "cad.pocket") {
+        if (!hasOnly({"sketchId", "depth", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("depth").isDouble())
+            return rpcError(id, -32602, "pocket requires sketchId, numeric depth and units");
+        const double depth = arguments.value("depth").toDouble();
+        if (!std::isfinite(depth) || depth <= 0.0)
+            return rpcError(id, -32602, "Pocket depth must be positive and finite");
+        const cad::application::SelectionSnapshot selection{{{
+            arguments.value("sketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        const auto operation = modeling_.createPocketFromSketch(selection, depth);
+        if (!operation.success) return finishModeling(operation, "pocket");
+        refreshModelView();
+        return finishModeling(operation, "pocket");
+    } else if (tool == "cad.recompute") {
+        if (!arguments.isEmpty()) return rpcError(id, -32602, "recompute does not accept arguments");
+        const bool success = modeling_.body().recompute();
+        if (!success) return rpcError(id, -32022, "Recompute failed",
+            QJsonObject{{"message", QString::fromStdString(modeling_.body().lastError())}});
+        refreshModelView();
+        result = QJsonObject{{"success", true},
+            {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.edit_feature") {
+        if (!hasOnly({"featureId", "property", "value", "units"})
+            || !arguments.value("featureId").isString()
+            || !arguments.value("property").isString()
+            || arguments.value("property").toString().isEmpty())
+            return rpcError(id, -32602, "edit_feature requires featureId, property and value");
+        QString unitsError;
+        if (!validUnits(arguments, unitsError, false)) return rpcError(id, -32602, unitsError);
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found",
+            QJsonObject{{"featureId", arguments.value("featureId").toString()}});
+        const QString key = arguments.value("property").toString();
+        const auto properties = feature->properties();
+        const auto property = std::find_if(properties.begin(), properties.end(),
+            [&key](const auto& candidate) { return QString::fromStdString(candidate.key) == key; });
+        if (property == properties.end() || !property->editable)
+            return rpcError(id, -32602, "Property is not editable",
+                QJsonObject{{"property", key}});
+        cad::parametric::PropertyValue value;
+        const auto input = arguments.value("value");
+        if (std::holds_alternative<bool>(property->value)) {
+            if (!input.isBool()) return rpcError(id, -32602, "Property requires a boolean value");
+            value = input.toBool();
+        } else if (std::holds_alternative<double>(property->value)) {
+            if (!input.isDouble() || !std::isfinite(input.toDouble()))
+                return rpcError(id, -32602, "Property requires a finite numeric value");
+            value = input.toDouble();
+        } else if (std::holds_alternative<int>(property->value)) {
+            if (!input.isDouble() || input.toDouble() != std::floor(input.toDouble()))
+                return rpcError(id, -32602, "Property requires an integer value");
+            value = static_cast<int>(input.toDouble());
+        } else {
+            if (!input.isString()) return rpcError(id, -32602, "Property requires a string value");
+            value = input.toString().toStdString();
+        }
+        const auto operation = modeling_.setFeatureProperty(
+            feature->id(), key.toStdString(), value);
+        if (!operation.success) return finishModeling(operation, "edit_feature");
+        refreshModelView();
+        return finishModeling(operation, "edit_feature");
+    } else if (tool == "cad.undo" || tool == "cad.redo") {
+        if (!arguments.isEmpty()) return rpcError(id, -32602, "undo/redo does not accept arguments");
+        if (tool == "cad.undo") modeling_.undo();
+        else modeling_.redo();
+        refreshModelView();
+        result = QJsonObject{{"success", true}, {"canUndo", modeling_.undoStack().canUndo()},
+            {"canRedo", modeling_.undoStack().canRedo()},
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())}};
     }
     return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
 }

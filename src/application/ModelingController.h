@@ -37,6 +37,8 @@ public:
     ModelingResult createSketch(
         cad::parametric::SketchSupportType support = cad::parametric::SketchSupportType::XY);
     ModelingResult createSketchOnFace(const SelectionSnapshot& selection);
+    ModelingResult createSketchOnFace(
+        const cad::topology::TopologicalReference& faceReference);
     ModelingResult addSketchLine(
         const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
         bool construction = false);
