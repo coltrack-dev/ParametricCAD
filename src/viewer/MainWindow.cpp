@@ -1186,7 +1186,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             result.insert("scale", camera.scale);
         }
     } else if (tool == "cad.screenshot") {
-        const QImage image = viewer_->grab().toImage();
+        const QImage image = viewer_->captureImage();
         if (image.isNull()) return rpcError(id, -32010, "Screenshot is unavailable");
         QByteArray bytes;
         QBuffer buffer(&bytes);
@@ -1218,7 +1218,14 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!success) return rpcError(id, -32021,
             tool == "cad.open_project" ? "Project open failed" : "Project save failed",
             QJsonObject{{"path", path}, {"message", error}});
-        refreshModelView();
+        if (tool == "cad.open_project") {
+            // A project loaded through MCP has no user camera interaction to
+            // establish a useful frame. Match the regular project-load path
+            // and fit the first presentation so geometry is immediately visible.
+            refreshModelView(true);
+        } else {
+            refreshModelView();
+        }
         result = QJsonObject{{"success", true}, {"path", path},
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())},
             {"dirty", project_.isDirty()}};

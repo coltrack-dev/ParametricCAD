@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QPointF>
+#include <QImage>
 #include <QStringList>
 #include <array>
 #include <map>
@@ -162,6 +163,7 @@ public:
         const QString& componentId) const noexcept;
     void clear();
     bool hasDisplayedShapes() const;
+    QImage captureImage();
     void fitAll();
     void showMesh(const cad::cae::VolumeMesh& mesh);
     void hideMesh();
@@ -268,6 +270,7 @@ private:
     friend class MainWindowTests;
     void traceSelectionLifecycle(const QString& message) const;
     void initializeOcc();
+    void synchronizeOccViewport(const char* reason);
     void notifyFeatureSelection();
     void setupToolBar();
     void syncToolBarState();
@@ -360,6 +363,9 @@ private:
     double orbitAzimuth_{0.0};
     double orbitElevation_{0.0};
     bool initialized_{false};
+    bool occViewportSynchronized_{false};
+    Standard_Integer lastOccWindowWidth_{0};
+    Standard_Integer lastOccWindowHeight_{0};
     SelectionMode selectionMode_{SelectionMode::Object};
     bool selectionActivationDirty_{true};
     mutable std::uint64_t selectionTraceSequence_{0};

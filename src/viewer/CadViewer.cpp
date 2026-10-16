@@ -51,6 +51,7 @@
 #include <Bnd_Box.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <GProp_GProps.hxx>
+#include <Image_AlienPixMap.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <Prs3d_Drawer.hxx>
 #include <Prs3d_LineAspect.hxx>
@@ -1855,10 +1856,43 @@ void CadViewer::initializeOcc()
     );
 
     view_->MustBeResized();
+    occViewportSynchronized_ = false;
 
     initialized_ = true;
     selectionActivationDirty_ = true;
     if (bulkUpdateDepth_ == 0) applySelectionMode();
+}
+
+void CadViewer::synchronizeOccViewport(const char* reason)
+{
+    if (!initialized_ || view_.IsNull() || view_->Window().IsNull()) return;
+
+    Standard_Integer width = 0;
+    Standard_Integer height = 0;
+    view_->Window()->Size(width, height);
+    const bool sizeChanged = width != lastOccWindowWidth_ || height != lastOccWindowHeight_;
+    if (!occViewportSynchronized_ || sizeChanged) {
+        view_->MustBeResized();
+        view_->Window()->Size(width, height);
+        lastOccWindowWidth_ = width;
+        lastOccWindowHeight_ = height;
+        occViewportSynchronized_ = width > 0 && height > 0;
+    }
+
+    if (performanceDiagnostics_ && (!occViewportSynchronized_ || sizeChanged)) {
+        qInfo().noquote() << QString(
+            "[VIEWPORT] %1 widget=(%2,%3) physical=(%4,%5) dpr=%6 nativeReady=%7 "
+            "occtWindow=(%8,%9) synchronized=%10")
+            .arg(QString::fromLatin1(reason))
+            .arg(width > 0 ? this->width() : 0)
+            .arg(height > 0 ? this->height() : 0)
+            .arg(qRound(this->width() * devicePixelRatioF()))
+            .arg(qRound(this->height() * devicePixelRatioF()))
+            .arg(devicePixelRatioF(), 0, 'f', 3)
+            .arg(windowHandle() && windowHandle()->winId() != 0 ? 1 : 0)
+            .arg(width).arg(height)
+            .arg(occViewportSynchronized_ ? 1 : 0);
+    }
 }
 
 void CadViewer::bindWindow()
@@ -1901,6 +1935,11 @@ void CadViewer::showEvent(QShowEvent* event)
     QWidget::showEvent(event);
 
     initializeOcc();
+    synchronizeOccViewport("showEvent");
+    if (!view_.IsNull() && !context_.IsNull()) {
+        context_->UpdateCurrentViewer();
+        view_->Redraw();
+    }
 }
 
 void CadViewer::paintEvent(QPaintEvent* event)
@@ -1911,6 +1950,7 @@ void CadViewer::paintEvent(QPaintEvent* event)
         initializeOcc();
     }
 
+    synchronizeOccViewport("paintEvent");
     view_->Redraw();
 }
 
@@ -1919,7 +1959,9 @@ void CadViewer::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
 
     if (initialized_) {
-        view_->MustBeResized();
+        synchronizeOccViewport("resizeEvent");
+        if (!context_.IsNull()) context_->UpdateCurrentViewer();
+        view_->Redraw();
         if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
             Standard_Integer windowWidth = 0;
             Standard_Integer windowHeight = 0;
@@ -2065,6 +2107,11 @@ void CadViewer::endBulkUpdate()
         timer.start();
         applySelectionMode();
         lastBulkViewerUpdateMilliseconds_ = timer.elapsed();
+        if (!view_.IsNull() && !view_->Window().IsNull()) {
+            synchronizeOccViewport("endBulkUpdate");
+            context_->UpdateCurrentViewer();
+            view_->Redraw();
+        }
         if (performanceDiagnostics_) {
             std::size_t visible = 0;
             std::size_t selectable = 0;
@@ -2908,6 +2955,36 @@ void CadViewer::clear()
 bool CadViewer::hasDisplayedShapes() const
 {
     return !displayedShapes_.empty();
+}
+
+QImage CadViewer::captureImage()
+{
+    initializeOcc();
+    if (view_.IsNull() || view_->Window().IsNull()) return {};
+
+    synchronizeOccViewport("captureImage");
+    const int imageWidth = std::max(width(), 1);
+    const int imageHeight = std::max(height(), 1);
+    Image_AlienPixMap image;
+    if (!view_->ToPixMap(image, imageWidth, imageHeight,
+                         Graphic3d_BT_RGB, Standard_False)) {
+        return {};
+    }
+
+    QImage result(imageWidth, imageHeight, QImage::Format_RGB888);
+    for (int y = 0; y < imageHeight; ++y) {
+        auto* destination = result.scanLine(y);
+        for (int x = 0; x < imageWidth; ++x) {
+            const auto color = image.PixelColor(x, y);
+            destination[x * 3] = static_cast<uchar>(
+                std::clamp(color.GetRGB().Red(), 0.0, 1.0) * 255.0);
+            destination[x * 3 + 1] = static_cast<uchar>(
+                std::clamp(color.GetRGB().Green(), 0.0, 1.0) * 255.0);
+            destination[x * 3 + 2] = static_cast<uchar>(
+                std::clamp(color.GetRGB().Blue(), 0.0, 1.0) * 255.0);
+        }
+    }
+    return result;
 }
 
 void CadViewer::fitAll()
