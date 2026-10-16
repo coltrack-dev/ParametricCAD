@@ -69,6 +69,7 @@
 #include <QIcon>
 #include <QSignalBlocker>
 #include <QBuffer>
+#include <QUuid>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
@@ -776,6 +777,9 @@ MainWindow::MainWindow(QWidget* parent)
         this, &MainWindow::updateIfcImportProgress);
     connect(&ifcImportWatcher_, &QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>>::finished,
         this, &MainWindow::finishIfcImport);
+    connect(&mcpIfcImportWatcher_,
+        &QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>>::finished,
+        this, &MainWindow::finishMcpIfcImport);
 #endif
     statusBar()->showMessage("Ready");
 
@@ -806,6 +810,7 @@ MainWindow::~MainWindow()
         ifcImportCancelRequested_->store(true, std::memory_order_relaxed);
         ifcImportWatcher_.future().waitForFinished();
     }
+    if (mcpIfcImportWatcher_.isRunning()) mcpIfcImportWatcher_.future().waitForFinished();
 #endif
     disconnect(&modeling_.undoStack(), nullptr, this, nullptr);
     featureEditorPanel_->setService(nullptr);
@@ -827,7 +832,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     static QStringList tools{
         "cad.get_model_tree", "cad.get_feature", "cad.inspect_shape",
         "cad.get_selection", "cad.get_view_state", "cad.screenshot",
-        "cad.get_application_status", "cad.new_project", "cad.open_project",
+        "cad.get_application_status", "cad.get_operation_status", "cad.import_ifc",
+        "cad.new_project", "cad.open_project",
         "cad.save_project", "cad.create_sketch", "cad.add_rectangle",
         "cad.add_circle", "cad.extrude", "cad.pocket", "cad.recompute",
         "cad.edit_feature", "cad.undo", "cad.redo", "cad.get_sketch_entities",
@@ -855,6 +861,21 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
          || tool == "cad.get_application_status" || tool == "cad.inspect_model")
         && !arguments.isEmpty())
         return rpcError(id, -32602, "This tool does not accept arguments");
+    if (tool == "cad.get_operation_status") {
+        if (!hasOnly({"operationId"})
+            || (arguments.contains("operationId")
+                && (!arguments.value("operationId").isString()
+                    || arguments.value("operationId").toString().isEmpty())))
+            return rpcError(id, -32602, "operationId must be the only non-empty string argument");
+    }
+    if (tool == "cad.import_ifc") {
+        if (!hasOnly({"path", "replaceCurrent"})
+            || !arguments.value("path").isString()
+            || arguments.value("path").toString().isEmpty()
+            || (arguments.contains("replaceCurrent")
+                && !arguments.value("replaceCurrent").isBool()))
+            return rpcError(id, -32602, "path is required and replaceCurrent must be boolean");
+    }
     if (tool == "cad.get_components") {
         if (!hasOnly({"featureId"}) && !arguments.isEmpty())
             return rpcError(id, -32602, "get_components accepts only featureId");
@@ -1121,10 +1142,35 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         bool valid = shape.IsNull();
         QJsonObject bounds;
         double volume = 0.0;
+        QJsonArray overlapWarnings;
         if (!shape.IsNull()) {
             BRepCheck_Analyzer analyzer(shape);
             valid = analyzer.IsValid();
+            std::vector<Bnd_Box> solidBounds;
             for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next()) ++solids;
+            if (solids <= 256) {
+                for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next()) {
+                    Bnd_Box solidBox;
+                    BRepBndLib::Add(explorer.Current(), solidBox);
+                    solidBounds.push_back(solidBox);
+                }
+                int intersectingBounds = 0;
+                for (std::size_t first = 0; first < solidBounds.size(); ++first)
+                    for (std::size_t second = first + 1; second < solidBounds.size(); ++second)
+                        if (!solidBounds[first].IsOut(solidBounds[second])) ++intersectingBounds;
+                if (intersectingBounds > 0) {
+                    overlapWarnings.append(QJsonObject{
+                        {"kind", "possible_overlapping_solids"},
+                        {"count", intersectingBounds},
+                        {"message", "Solid bounding boxes intersect; volume is not summed across history"},
+                        {"heuristic", true}});
+                }
+            } else {
+                overlapWarnings.append(QJsonObject{
+                    {"kind", "overlap_analysis_skipped"},
+                    {"message", "Solid count exceeds the bounded pairwise overlap check"},
+                    {"heuristic", true}});
+            }
             for (TopExp_Explorer explorer(shape, TopAbs_COMPSOLID); explorer.More(); explorer.Next()) ++components;
             if (components == 0) {
                 for (TopExp_Explorer explorer(shape, TopAbs_COMPOUND); explorer.More(); explorer.Next()) ++components;
@@ -1142,11 +1188,32 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
                     {"max", QJsonArray{xmax, ymax, zmax}}};
             }
         }
+        qint64 modelComponentCount = static_cast<qint64>(modeling_.body().components().size());
+        if (modelComponentCount == 0) {
+            // Legacy/imported documents may not persist ModelComponent rows.
+            // Count addressable solids from each independent feature without
+            // adding intermediate feature volumes to the physical result.
+            for (const auto& feature : modeling_.body().features()) {
+                if (feature->shape().IsNull()) continue;
+                if (feature->shape().ShapeType() == TopAbs_SOLID) {
+                    ++modelComponentCount;
+                    continue;
+                }
+                for (TopExp_Explorer explorer(feature->shape(), TopAbs_SOLID);
+                     explorer.More(); explorer.Next()) ++modelComponentCount;
+            }
+        }
         result = QJsonObject{
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())},
+            {"modelComponentCount", modelComponentCount},
             {"invalidFeatures", invalidFeatures},
             {"openSketchProfiles", openProfiles},
             {"solidCount", solids}, {"componentCount", components},
+            {"visibleGeometricSolidCount", solids},
+            {"totalVisibleGeometricVolume", volume},
+            {"visibleBoundingBox", bounds},
+            {"volumePolicy", "BRepGProp volume of the final Body result; intermediate feature and component volumes are not summed"},
+            {"overlapWarnings", overlapWarnings},
             {"valid", valid}, {"volume", volume}, {"boundingBox", bounds},
             {"lastError", QString::fromStdString(modeling_.body().lastError())},
             {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
@@ -1200,6 +1267,45 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             {"thread", QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()), 16)},
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())}, {"dirty", project_.isDirty()},
             {"automationEnabled", automationService_ != nullptr}};
+    } else if (tool == "cad.get_operation_status") {
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+        const auto operationId = arguments.value("operationId").toString();
+        if (!operationId.isEmpty() && operationId != mcpIfcOperationId_)
+            return rpcError(id, -32004, "Operation not found", { {"operationId", operationId} });
+        result = mcpIfcOperationResult_;
+        if (result.isEmpty()) {
+            result = QJsonObject{{"operationId", mcpIfcOperationId_},
+                {"state", mcpIfcOperationId_.isEmpty() ? "idle" : mcpIfcState_}};
+        }
+#else
+        return rpcError(id, -32030, "Operation status is unavailable in this build");
+#endif
+    } else if (tool == "cad.import_ifc") {
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+        const QString path = arguments.value("path").toString();
+        const QFileInfo fileInfo(path);
+        if (!fileInfo.isAbsolute() || fileInfo.suffix().compare("ifc", Qt::CaseInsensitive) != 0
+            || !fileInfo.isFile())
+            return rpcError(id, -32602, "path must be an existing absolute .ifc file");
+        if (mcpIfcImportWatcher_.isRunning() || ifcImporting_ || projectLoading_)
+            return rpcError(id, -32030, "Another project or IFC operation is already running");
+        mcpIfcOperationId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        mcpIfcPath_ = path;
+        mcpIfcReplaceCurrent_ = arguments.value("replaceCurrent").toBool(false);
+        mcpIfcState_ = "running";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"operationId", mcpIfcOperationId_}, {"state", mcpIfcState_}, {"path", path}};
+        mcpIfcTimer_.restart();
+        const auto operationId = mcpIfcOperationId_;
+        mcpIfcImportWatcher_.setFuture(QtConcurrent::run([path]() {
+            cad::application::IfcImporter importer;
+            return std::make_shared<cad::import::IfcImportResult>(importer.prepare(path));
+        }));
+        result = QJsonObject{{"accepted", true}, {"operationId", operationId},
+            {"state", mcpIfcState_}, {"path", path}};
+#else
+        return rpcError(id, -32030, "IFC import is unavailable in this build");
+#endif
     } else if (tool == "cad.new_project") {
         QString unitsError;
         if (!validUnits(arguments, unitsError, false)) return rpcError(id, -32602, unitsError);
@@ -6628,6 +6734,78 @@ void MainWindow::finishIfcImport()
     ifcImportTotal_.reset();
     ifcImportStage_.reset();
     ifcImportCancelRequested_.reset();
+}
+
+void MainWindow::finishMcpIfcImport()
+{
+    const auto result = mcpIfcImportWatcher_.result();
+    const auto operationId = mcpIfcOperationId_;
+    const auto path = mcpIfcPath_;
+    const auto importStart = mcpIfcTimer_.isValid() ? mcpIfcTimer_.elapsed() : 0;
+    if (!result || result->cancelled || result->fatal || result->products.empty()) {
+        mcpIfcState_ = "failed";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"success", false}, {"operationId", operationId}, {"state", mcpIfcState_},
+            {"path", path}, {"message", result && result->cancelled
+                ? "IFC import was cancelled"
+                : result && !result->diagnostics.empty()
+                    ? result->diagnostics.front().message
+                    : "IFC import produced no geometry"},
+            {"totalMs", importStart}};
+        return;
+    }
+
+    QElapsedTimer featureTimer;
+    featureTimer.start();
+    cad::application::IfcImporter importer;
+    std::vector<cad::parametric::ParametricFeature::Ptr> features;
+    try {
+        features = importer.makeFeatures(*result, path, modeling_.body());
+    } catch (const std::exception& error) {
+        mcpIfcState_ = "failed";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"success", false}, {"operationId", operationId}, {"state", mcpIfcState_},
+            {"path", path}, {"message", QString::fromUtf8(error.what())},
+            {"totalMs", mcpIfcTimer_.elapsed()}};
+        return;
+    }
+    const auto featureMilliseconds = featureTimer.elapsed();
+
+    if (mcpIfcReplaceCurrent_) project_.newProject();
+    QElapsedTimer insertionTimer;
+    insertionTimer.start();
+    const auto modelingResult = modeling_.importFeatures(std::move(features));
+    const auto insertionMilliseconds = insertionTimer.elapsed();
+    if (!modelingResult.success) {
+        mcpIfcState_ = "failed";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"success", false}, {"operationId", operationId}, {"state", mcpIfcState_},
+            {"path", path}, {"message", QString::fromStdString(modelingResult.error)},
+            {"totalMs", mcpIfcTimer_.elapsed()}};
+        return;
+    }
+
+    QElapsedTimer presentationTimer;
+    presentationTimer.start();
+    refreshModelView(true);
+    const auto presentationMilliseconds = presentationTimer.elapsed();
+    const auto& stats = result->statistics;
+    mcpIfcState_ = "completed";
+    mcpIfcOperationResult_ = QJsonObject{
+        {"success", true}, {"operationId", operationId}, {"state", mcpIfcState_},
+        {"path", path}, {"schema", stats.schema},
+        {"consideredCount", stats.consideredCount},
+        {"productsWithGeometry", stats.productsWithGeometry},
+        {"importedCount", stats.importedCount}, {"skippedCount", stats.skippedCount},
+        {"failedCount", stats.failedCount}, {"featureCount", static_cast<qint64>(
+            modeling_.body().features().size())},
+        {"parseMs", stats.parseMilliseconds}, {"geometryMs", stats.geometryMilliseconds},
+        {"featureConstructionMs", featureMilliseconds},
+        {"bulkInsertionMs", insertionMilliseconds},
+        {"recomputeMs", 0}, {"presentationMs", presentationMilliseconds},
+        {"importerTotalMs", stats.totalMilliseconds},
+        {"totalMs", mcpIfcTimer_.elapsed()},
+        {"recomputeNote", "ImportedFeature geometry is already constructed; no additional Body recompute was required"}};
 }
 
 void MainWindow::abortIfcImport(const QString& error)

@@ -35,6 +35,13 @@ QJsonArray toolDefinitions()
     const QJsonObject project{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"path", QJsonObject{{"type", "string"}}}}},
         {"required", QJsonArray{"path"}}};
+    const QJsonObject importIfc{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"path", QJsonObject{{"type", "string"}}},
+            {"replaceCurrent", QJsonObject{{"type", "boolean"}}}}},
+        {"required", QJsonArray{"path"}}};
+    const QJsonObject operationStatus{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"operationId", QJsonObject{{"type", "string"}}}}}};
     const QJsonObject sketch{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{
             {"support", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"XY", "XZ", "YZ"}}}},
@@ -218,6 +225,8 @@ QJsonArray toolDefinitions()
         {"cad.get_view_state", QJsonObject{{"description", "Read viewer camera and display state"}, {"inputSchema", empty}}},
         {"cad.screenshot", QJsonObject{{"description", "Capture the current viewer as PNG"}, {"inputSchema", empty}}},
         {"cad.get_application_status", QJsonObject{{"description", "Read application and automation status"}, {"inputSchema", empty}}},
+        {"cad.get_operation_status", QJsonObject{{"description", "Read an asynchronous MCP operation status"}, {"inputSchema", operationStatus}}},
+        {"cad.import_ifc", QJsonObject{{"description", "Import an IFC file asynchronously through IfcImporter"}, {"inputSchema", importIfc}}},
         {"cad.new_project", QJsonObject{{"description", "Create an empty parametric project"}, {"inputSchema", newProject}}},
         {"cad.open_project", QJsonObject{{"description", "Open a .pcad project"}, {"inputSchema", project}}},
         {"cad.save_project", QJsonObject{{"description", "Save the current parametric project as .pcad"}, {"inputSchema", project}}},

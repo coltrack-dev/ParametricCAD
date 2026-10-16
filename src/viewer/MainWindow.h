@@ -60,6 +60,7 @@ private:
     void updateIfcImportProgress();
     void finishIfcImport();
     void abortIfcImport(const QString& error = {});
+    void finishMcpIfcImport();
 #endif
     void startProjectLoad(const QString& path);
     void updateProjectLoadProgress();
@@ -424,6 +425,13 @@ private:
     std::shared_ptr<std::atomic_bool> ifcImportCancelRequested_;
     QString pendingIfcPath_;
     bool ifcImporting_{false};
+    QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>> mcpIfcImportWatcher_;
+    QString mcpIfcOperationId_;
+    QString mcpIfcPath_;
+    QString mcpIfcState_;
+    QJsonObject mcpIfcOperationResult_;
+    QElapsedTimer mcpIfcTimer_;
+    bool mcpIfcReplaceCurrent_{false};
 #endif
     int lastUndoStackIndex_{0};
     bool historyRefreshScheduled_{false};
