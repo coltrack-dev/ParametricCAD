@@ -1877,7 +1877,14 @@ ModelingResult ModelingController::splitFeature(
         undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
             body_, {wholeFeatureId}, {whole->userVisible()}, {false},
             QStringLiteral("Hide Original Wall Result")));
-        if (!transaction.commit()) return {false, {}, body_.lastError()};
+        undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+            body_, {negativeId, positiveId, movedId}, {true, true, true},
+            {false, false, false}, QStringLiteral("Hide Split Construction Results")));
+        if (!transaction.commit()) {
+            const auto message = transaction.error().isEmpty()
+                ? QStringLiteral("Split transaction failed") : transaction.error();
+            return {false, {}, message.toStdString()};
+        }
         assembly->setUserVisible(true);
         return {true, assemblyId, {}};
     } catch (const std::exception& error) {

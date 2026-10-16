@@ -356,6 +356,17 @@ private slots:
             QJsonObject{{"featureId", splitId}});
         QVERIFY(splitInspection.value("valid").toBool());
         QCOMPARE(splitInspection.value("solidCount").toInt(), 3);
+        const auto splitFeature = callTool("cad.get_feature",
+            QJsonObject{{"featureId", splitId}});
+        QVERIFY(splitFeature.value("visible").toBool());
+        for (const auto& dependency : splitFeature.value("dependencies").toArray()) {
+            const auto dependencyId = dependency.toString();
+            if (dependencyId.startsWith("split-") || dependencyId.startsWith("transform-")) {
+                if (dependencyId != composite)
+                    QVERIFY(!callTool("cad.get_feature", QJsonObject{{"featureId", dependencyId}})
+                        .value("visible").toBool());
+            }
+        }
         QVERIFY(callTool("cad.undo").value("success").toBool());
         QCOMPARE(callTool("cad.get_model_tree").value("featureCount").toInt(), 5);
         QVERIFY(callTool("cad.redo").value("success").toBool());
