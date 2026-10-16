@@ -51,7 +51,11 @@ public:
         stack_.endMacro();
         while (stack_.index() > stackIndex_) stack_.undo();
         body_.setRecomputeDeferred(false);
-        if (!body_.recompute()) body_.beginIncrementalRecompute();
+        // Body::recompute() always closes its incremental-recompute scope,
+        // including when restoring the pre-transaction state fails.  Do not
+        // start a new scope here: that would leave the body internally active
+        // after rollback.
+        body_.recompute();
         finished_ = true;
     }
 

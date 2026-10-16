@@ -45,6 +45,7 @@ private:
     std::string lastError_;
     std::uint64_t geometryRevision_{0};
     bool recomputeDeferred_{false};
+    bool incrementalRecomputeActive_{false};
 };
 
 } // namespace cad::parametric

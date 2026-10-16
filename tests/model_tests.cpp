@@ -65,12 +65,73 @@ private:
     std::string type_;
     FeatureRole role_;
 };
+
+class RecoverableFailureFixture final : public ParametricFeature
+{
+public:
+    explicit RecoverableFailureFixture(std::string id)
+        : ParametricFeature(std::move(id), "Recoverable failure") {}
+
+    void setFail(const bool fail)
+    {
+        fail_ = fail;
+        markDirty();
+    }
+
+private:
+    TopoDS_Shape build() const override
+    {
+        if (fail_) throw std::runtime_error("intentional recompute failure");
+        return BasicFeatures::box(1, 1, 1);
+    }
+
+    bool fail_{true};
+};
 }
 
 class ModelTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void explicitRecomputeIgnoresDeferredMode()
+    {
+        Body body;
+        auto box = std::make_shared<BoxParametricFeature>("box", 2, 3, 4);
+        body.addFeature(box);
+        body.setRecomputeDeferred(true);
+
+        QVERIFY(body.recompute());
+        QCOMPARE(box->state(), FeatureState::UpToDate);
+        QVERIFY(!body.shape().IsNull());
+
+        body.setRecomputeDeferred(false);
+    }
+
+    void recomputeFailureCanRecoverAfterMiddleFeatureFailure()
+    {
+        Body body;
+        auto first = std::make_shared<BoxParametricFeature>("first", 2, 3, 4);
+        auto failing = std::make_shared<RecoverableFailureFixture>("failing");
+        auto last = std::make_shared<BoxParametricFeature>("last", 5, 6, 7);
+        body.addFeature(first);
+        body.addFeature(failing);
+        body.addFeature(last);
+
+        QVERIFY(!body.recompute());
+        QCOMPARE(failing->state(), FeatureState::Failed);
+        QCOMPARE(last->state(), FeatureState::Dirty);
+        QVERIFY(body.shape().IsNull());
+        QVERIFY(!body.lastError().empty());
+
+        failing->setFail(false);
+        QVERIFY(body.recompute());
+        QCOMPARE(first->state(), FeatureState::UpToDate);
+        QCOMPARE(failing->state(), FeatureState::UpToDate);
+        QCOMPARE(last->state(), FeatureState::UpToDate);
+        QVERIFY(!body.shape().IsNull());
+        QVERIFY(body.lastError().empty());
+    }
+
     void rectangleValidation_data()
     {
         QTest::addColumn<double>("width");

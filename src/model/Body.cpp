@@ -110,10 +110,9 @@ const TopoDS_Shape& Body::shape() const noexcept
 
 bool Body::recompute()
 {
-    if (recomputeDeferred_) return true;
     beginIncrementalRecompute();
     for (std::size_t index = 0; index < features_.size(); ++index) {
-        if (!recomputeFeature(index)) return false;
+        if (!recomputeFeature(index)) return finishIncrementalRecompute();
     }
     return finishIncrementalRecompute();
 }
@@ -122,6 +121,7 @@ void Body::beginIncrementalRecompute()
 {
     lastError_.clear();
     resultShape_.Nullify();
+    incrementalRecomputeActive_ = true;
 }
 
 bool Body::recomputeFeature(const std::size_t index)
@@ -132,6 +132,7 @@ bool Body::recomputeFeature(const std::size_t index)
     if (feature->isDirty()) {
         ++geometryRevision_;
         if (!feature->recompute()) {
+            resultShape_.Nullify();
             lastError_ =
                 "Feature '" + feature->name() + "' failed: " + feature->error();
             return false;
@@ -139,6 +140,7 @@ bool Body::recomputeFeature(const std::size_t index)
     }
 
     if (feature->state() == FeatureState::Failed) {
+        resultShape_.Nullify();
         lastError_ =
             "Feature '" + feature->name() + "' is in failed state: "
             + feature->error();
@@ -153,6 +155,7 @@ bool Body::recomputeFeature(const std::size_t index)
 
 bool Body::finishIncrementalRecompute()
 {
+    incrementalRecomputeActive_ = false;
     return !resultShape_.IsNull() || features_.empty();
 }
 

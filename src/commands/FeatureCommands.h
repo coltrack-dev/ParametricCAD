@@ -418,7 +418,7 @@ private:
         setter_(*feature_, value);
         body_.markDirtyFrom(feature_->id());
         // Invalid edits remain undoable; recompute records their model error state.
-        body_.recompute();
+        if (!body_.recomputeDeferred()) body_.recompute();
     }
     parametric::Body& body_;
     std::shared_ptr<FeatureType> feature_;

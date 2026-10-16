@@ -6469,7 +6469,11 @@ void MainWindow::processProjectLoadRecomputeChunk()
         && (projectLoadRecomputeIndex_ == startIndex
             || chunkTimer.elapsed() < ProjectLoadTimeBudgetMs)) {
         if (!projectLoadResult_->body.recomputeFeature(projectLoadRecomputeIndex_)) {
-            abortProjectLoad(QString::fromStdString(projectLoadResult_->body.lastError()));
+            const auto error = QString::fromStdString(projectLoadResult_->body.lastError());
+            // recomputeFeature() is an incremental primitive.  The failed
+            // load must close that scope before discarding the candidate body.
+            projectLoadResult_->body.finishIncrementalRecompute();
+            abortProjectLoad(error);
             return;
         }
         ++projectLoadRecomputeIndex_;
