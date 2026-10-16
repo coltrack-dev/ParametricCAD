@@ -4,6 +4,8 @@
 
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+#include <QElapsedTimer>
 
 #include <cstdio>
 #include <cstdlib>
@@ -40,6 +42,11 @@ cad::viewer::ModelPresenter::ModelPresenter(
 
 cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
 {
+    QElapsedTimer presentationTimer;
+    presentationTimer.start();
+    qint64 resolverMilliseconds = 0;
+    int resolverCalls = 0;
+    int resolvedComponents = 0;
     const auto selectedTopology = viewer_.captureTopologySelection(body_);
     const auto selection = viewer_.selectionSnapshot();
     std::vector<std::string> selectedObjects = selection.selectedObjectIds();
@@ -60,25 +67,29 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
         if (feature->state() != cad::parametric::FeatureState::UpToDate
             || feature->shape().IsNull()
             || (sketch && sketch->entities().empty())) continue;
-        const auto candidates = cad::parametric::ComponentResolver::enumerate(
-            body_, feature->id());
-        if (candidates.size() > 1) {
+        std::vector<cad::parametric::ComponentResolution> components;
+        if (feature->shape().ShapeType() != TopAbs_SOLID) {
+            QElapsedTimer resolverTimer;
+            resolverTimer.start();
+            components = cad::parametric::ComponentResolver::resolveFeature(
+                body_, feature->id());
+            resolverMilliseconds += resolverTimer.elapsed();
+            ++resolverCalls;
+        }
+        if (components.size() > 1) {
             // A compound is represented by its component AIS objects only;
             // never display the compound and its children simultaneously.
-            for (const auto& candidate : candidates) {
-                std::string error;
-                const auto resolved = cad::parametric::ComponentResolver::resolve(
-                    body_, candidate.id, error);
-                if (!resolved) continue;
-                const auto component = body_.findComponent(candidate.id);
+            resolvedComponents += static_cast<int>(components.size());
+            for (const auto& resolved : components) {
+                const auto component = body_.findComponent(resolved.component.id);
                 const bool visible = !component || component->visible;
-                viewer_.updateComponent(resolved->shape,
-                    QString::fromStdString(candidate.id),
+                viewer_.updateComponent(resolved.shape,
+                    QString::fromStdString(resolved.component.id),
                     QString::fromStdString(feature->id()));
                 if (!visible) viewer_.setComponentVisibility(
-                    QString::fromStdString(candidate.id),
+                    QString::fromStdString(resolved.component.id),
                     cad::application::VisibilityMode::Hidden);
-                presentedComponents.append(QString::fromStdString(candidate.id));
+                presentedComponents.append(QString::fromStdString(resolved.component.id));
             }
             continue;
         }
@@ -100,6 +111,16 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
     applyVisibility();
     viewer_.restoreSelection(body_, selectedTopology, selectedObjects, selectedComponents);
     viewer_.endBulkUpdate();
+    if (qEnvironmentVariableIsSet("PARAMETRIC_CAD_PERF")) {
+        qInfo().noquote() << QString(
+            "[PERF] presentation totalMs=%1 resolverMs=%2 resolverCalls=%3 "
+            "resolvedComponents=%4 features=%5 aisFeatures=%6 aisComponents=%7")
+            .arg(presentationTimer.elapsed()).arg(resolverMilliseconds)
+            .arg(resolverCalls).arg(resolvedComponents)
+            .arg(body_.features().size())
+            .arg(viewer_.featurePresentationCount())
+            .arg(viewer_.componentPresentationCount());
+    }
     return result;
 }
 

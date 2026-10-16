@@ -163,6 +163,8 @@ public:
         const QString& componentId) const noexcept;
     void clear();
     bool hasDisplayedShapes() const;
+    std::size_t featurePresentationCount() const noexcept { return featureObjects_.size(); }
+    std::size_t componentPresentationCount() const noexcept { return componentObjects_.size(); }
     QImage captureImage();
     void fitAll();
     void showMesh(const cad::cae::VolumeMesh& mesh);
@@ -378,6 +380,10 @@ private:
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
     std::map<QString, Handle(AIS_Shape)> componentObjects_;
     std::map<QString, QString> componentFeatures_;
+    std::size_t perfAisCreated_{0};
+    std::size_t perfAisReused_{0};
+    std::size_t perfViewerUpdates_{0};
+    std::size_t perfViewRedraws_{0};
     std::map<QString, Handle(AIS_Shape)> sketchConstructionObjects_;
     std::map<QString, Standard_Integer> managedSelectionModes_;
     bool selectionTraceEnabled_{false};

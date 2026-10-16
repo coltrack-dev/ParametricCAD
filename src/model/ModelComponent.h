@@ -45,6 +45,9 @@ class ComponentResolver final
 public:
     static std::vector<ModelComponent> enumerate(const Body& body,
                                                  const std::string& featureId);
+    static std::vector<ComponentResolution> resolveFeature(
+        const Body& body, const std::string& featureId,
+        double tolerance = 1.0e-6);
     static std::optional<ComponentResolution> resolve(
         const Body& body, const std::string& componentId,
         std::string& error, double tolerance = 1.0e-6);

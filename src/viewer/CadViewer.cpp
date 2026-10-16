@@ -2087,6 +2087,12 @@ CadViewer::DisplayMode CadViewer::displayMode() const noexcept
 
 void CadViewer::beginBulkUpdate()
 {
+    if (bulkUpdateDepth_ == 0 && performanceDiagnostics_) {
+        perfAisCreated_ = 0;
+        perfAisReused_ = 0;
+        perfViewerUpdates_ = 0;
+        perfViewRedraws_ = 0;
+    }
     ++bulkUpdateDepth_;
 }
 
@@ -2110,7 +2116,9 @@ void CadViewer::endBulkUpdate()
         if (!view_.IsNull() && !view_->Window().IsNull()) {
             synchronizeOccViewport("endBulkUpdate");
             context_->UpdateCurrentViewer();
+            if (performanceDiagnostics_) ++perfViewerUpdates_;
             view_->Redraw();
+            if (performanceDiagnostics_) ++perfViewRedraws_;
         }
         if (performanceDiagnostics_) {
             std::size_t visible = 0;
@@ -2124,7 +2132,11 @@ void CadViewer::endBulkUpdate()
                               << "selectable=" << selectable
                               << "selectionMs=" << lastSelectionActivationMilliseconds_
                               << "viewerMs=" << lastViewerUpdateMilliseconds_
-                              << "bulkMs=" << lastBulkViewerUpdateMilliseconds_;
+                              << "bulkMs=" << lastBulkViewerUpdateMilliseconds_
+                              << "AISCreated=" << perfAisCreated_
+                              << "AISReused=" << perfAisReused_
+                              << "viewerUpdates=" << perfViewerUpdates_
+                              << "redraws=" << perfViewRedraws_;
         }
     }
 }
@@ -2152,9 +2164,11 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     }
     const auto found = featureObjects_.find(featureId);
     if (found == featureObjects_.end()) {
+        if (performanceDiagnostics_) ++perfAisCreated_;
         display(shape, featureId, false);
         return;
     }
+    if (performanceDiagnostics_) ++perfAisReused_;
     const auto& object = found->second;
     configureSketchPresentation(object, featureId);
     setFeatureTransparency(featureId, object);
@@ -2207,6 +2221,7 @@ void CadViewer::updateComponent(const TopoDS_Shape& shape,
     }
     const auto found = componentObjects_.find(componentId);
     if (found == componentObjects_.end()) {
+        if (performanceDiagnostics_) ++perfAisCreated_;
         auto object = Handle(AIS_Shape)(new AIS_Shape(shape));
         applyDisplayMode(object, shape);
         context_->Display(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
@@ -2217,6 +2232,7 @@ void CadViewer::updateComponent(const TopoDS_Shape& shape,
         selectionActivationDirty_ = true;
         return;
     }
+    if (performanceDiagnostics_) ++perfAisReused_;
     const auto& object = found->second;
     if (!object->Shape().IsEqual(shape)) {
         object->SetShape(shape);

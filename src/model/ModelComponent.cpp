@@ -10,6 +10,7 @@
 #include <TopoDS.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -93,6 +94,69 @@ std::vector<ModelComponent> ComponentResolver::enumerate(const Body& body,
     return result;
 }
 
+std::vector<ComponentResolution> ComponentResolver::resolveFeature(
+    const Body& body, const std::string& featureId, const double tolerance)
+{
+    const auto feature = body.findFeature(featureId);
+    if (!feature || feature->shape().IsNull()) return {};
+
+    std::vector<TopoDS_Shape> solids;
+    if (feature->shape().ShapeType() == TopAbs_SOLID) {
+        solids.push_back(feature->shape());
+    } else {
+        for (TopExp_Explorer explorer(feature->shape(), TopAbs_SOLID);
+             explorer.More(); explorer.Next()) {
+            solids.push_back(explorer.Current());
+        }
+    }
+
+    struct Candidate {
+        TopoDS_Shape shape;
+        Metrics metrics;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(solids.size());
+    for (const auto& solid : solids) candidates.push_back({solid, metrics(solid)});
+
+    std::vector<ModelComponent> components;
+    for (const auto& component : body.components()) {
+        if (component.sourceFeatureId == featureId) components.push_back(component);
+    }
+    if (components.empty()) {
+        components.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            ModelComponent component;
+            component.id = idFor(featureId, candidate.metrics);
+            component.name = feature->name() + " component";
+            component.sourceFeatureId = featureId;
+            component.minX = candidate.metrics.minX;
+            component.minY = candidate.metrics.minY;
+            component.minZ = candidate.metrics.minZ;
+            component.maxX = candidate.metrics.maxX;
+            component.maxY = candidate.metrics.maxY;
+            component.maxZ = candidate.metrics.maxZ;
+            component.volume = candidate.metrics.volume;
+            components.push_back(std::move(component));
+        }
+    }
+
+    std::vector<ComponentResolution> result;
+    for (const auto& component : components) {
+        const auto match = std::find_if(candidates.begin(), candidates.end(),
+            [&component, tolerance](const Candidate& candidate) {
+                return matches(component, candidate.metrics, tolerance);
+            });
+        if (match == candidates.end()) continue;
+        const auto duplicate = std::find_if(std::next(match), candidates.end(),
+            [&component, tolerance](const Candidate& candidate) {
+                return matches(component, candidate.metrics, tolerance);
+            });
+        if (duplicate != candidates.end()) continue;
+        result.push_back({component, match->shape});
+    }
+    return result;
+}
+
 std::optional<ComponentResolution> ComponentResolver::resolve(
     const Body& body, const std::string& componentId, std::string& error,
     double tolerance)
@@ -100,41 +164,18 @@ std::optional<ComponentResolution> ComponentResolver::resolve(
     error.clear();
     for (const auto& component : body.components()) {
         if (component.id != componentId) continue;
-        const auto feature = body.findFeature(component.sourceFeatureId);
-        if (!feature || feature->shape().IsNull()) {
-            error = "Component source feature is missing or has no shape";
-            return {};
+        const auto resolved = resolveFeature(body, component.sourceFeatureId, tolerance);
+        for (const auto& candidate : resolved) {
+            if (candidate.component.id == componentId) return candidate;
         }
-        std::vector<TopoDS_Shape> candidates;
-        if (feature->shape().ShapeType() == TopAbs_SOLID) candidates.push_back(feature->shape());
-        else for (TopExp_Explorer explorer(feature->shape(), TopAbs_SOLID);
-                  explorer.More(); explorer.Next()) candidates.push_back(explorer.Current());
-        std::vector<TopoDS_Shape> matchesFound;
-        for (const auto& candidate : candidates)
-            if (matches(component, metrics(candidate), tolerance)) matchesFound.push_back(candidate);
-        if (matchesFound.size() != 1) {
-            error = matchesFound.empty()
-                ? "Component geometry could not be resolved"
-                : "Component reference is ambiguous";
-            return {};
-        }
-        return ComponentResolution{component, matchesFound.front()};
+        error = "Component geometry could not be resolved";
+        return {};
     }
     // Legacy projects have no metadata.  Accept the deterministic signature
     // produced by enumerate(), but never silently choose an unrelated solid.
     for (const auto& feature : body.features()) {
-        for (const auto& component : enumerate(body, feature->id())) {
-            if (component.id != componentId) continue;
-            // Legacy projects do not store the component row; resolve the
-            // deterministic signature directly against the current feature.
-            const auto featureShape = feature->shape();
-            if (featureShape.ShapeType() == TopAbs_SOLID
-                && matches(component, metrics(featureShape), tolerance))
-                return ComponentResolution{component, featureShape};
-            for (TopExp_Explorer explorer(featureShape, TopAbs_SOLID);
-                 explorer.More(); explorer.Next())
-                if (matches(component, metrics(explorer.Current()), tolerance))
-                    return ComponentResolution{component, explorer.Current()};
+        for (const auto& component : resolveFeature(body, feature->id(), tolerance)) {
+            if (component.component.id == componentId) return component;
         }
     }
     error = "Component not found";
