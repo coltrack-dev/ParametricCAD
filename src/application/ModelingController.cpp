@@ -54,6 +54,17 @@ bool containsVisibilityCommand(const QUndoCommand* command)
     return false;
 }
 
+void collectFeatureAndDependencies(
+    const cad::parametric::ParametricFeature::Ptr& feature,
+    std::vector<std::string>& ids)
+{
+    if (!feature) return;
+    if (std::find(ids.begin(), ids.end(), feature->id()) != ids.end()) return;
+    ids.push_back(feature->id());
+    for (const auto& weakDependency : feature->dependencies())
+        collectFeatureAndDependencies(weakDependency.lock(), ids);
+}
+
 bool validateSketchProfile(
     const cad::parametric::SketchFeature& sketch,
     std::string& error)
@@ -1754,13 +1765,16 @@ ModelingResult ModelingController::createTransform(
         undoStack_.push(new cad::commands::AddFeatureCommand(
             body_, transform, QStringLiteral("Transform Features")));
         if (resultMode == cad::parametric::TransformResultMode::ReplaceResult) {
+            std::vector<std::string> hiddenIds;
+            for (const auto& source : sources)
+                collectFeatureAndDependencies(source, hiddenIds);
             std::vector<bool> before;
-            before.reserve(uniqueIds.size());
-            for (const auto& featureId : uniqueIds)
+            before.reserve(hiddenIds.size());
+            for (const auto& featureId : hiddenIds)
                 before.push_back(body_.findFeature(featureId)->userVisible());
             undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
-                body_, uniqueIds, before,
-                std::vector<bool>(uniqueIds.size(), false),
+                body_, hiddenIds, before,
+                std::vector<bool>(hiddenIds.size(), false),
                 QStringLiteral("Replace Transformed Result")));
         }
         if (!transaction.commit()) return {false, {}, body_.lastError()};

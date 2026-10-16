@@ -224,6 +224,28 @@ private slots:
         QCOMPARE(combined->sourceIds().size(), std::size_t{2});
     }
 
+    void transformFeatureDoesNotDuplicateSelectedAncestors()
+    {
+        Body body;
+        auto source = std::make_shared<BoxParametricFeature>("source", 2, 3, 4);
+        body.addFeature(source);
+        QVERIFY(body.recompute());
+
+        auto downstream = std::make_shared<TransformFeature>(
+            "downstream", std::vector<ParametricFeature::Ptr>{source},
+            TransformOperation::Translate, TransformResultMode::Copy, gp_Trsf());
+        body.addFeature(downstream);
+        auto selected = std::make_shared<TransformFeature>(
+            "selected", std::vector<ParametricFeature::Ptr>{source, downstream},
+            TransformOperation::Translate, TransformResultMode::Copy, gp_Trsf());
+        body.addFeature(selected);
+
+        QVERIFY(body.recompute());
+        QCOMPARE(selected->effectiveSourceIds(), std::vector<std::string>{"downstream"});
+        QCOMPARE(volume(selected->shape()), 24.0);
+        QVERIFY(BRepCheck_Analyzer(selected->shape()).IsValid());
+    }
+
     void rectangleValidation_data()
     {
         QTest::addColumn<double>("width");

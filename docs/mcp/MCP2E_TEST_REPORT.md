@@ -25,6 +25,9 @@ is documented but not implemented.
 | Save/reopen | PASS | Transform feature and result remain inspectable |
 | OCCT validity | PASS | `BRepCheck_Analyzer` and MCP shape inspection |
 | Invalid vectors/axes/arguments | PASS | MCP validation returns structured errors |
+| Mirror of final Pocket preserves two through-openings | PASS | Live stdio fixture: valid one-solid B-Rep, unchanged volume, empty Common probe before/after Mirror |
+| `replace_result` hides Pocket ancestors | PASS | Live fixture confirms both Pocket and wall Extrude are hidden while Transform result is visible |
+| Upstream Extrude mirror is distinguished | PASS | Negative live case returns full-wall volume (20,000 mm³), unlike Pocket result (17,500 mm³) |
 
 ## Commands and results
 
@@ -45,6 +48,24 @@ ctest --test-dir build --output-on-failure
 ```
 
 PASS: 28/28 tests.
+
+The mirror regression test is part of `mcp_modeling_integration_tests`. It
+uses the real ParametricCAD executable and the real `parametriccad-mcp` stdio
+process over the local automation socket; no mock response or direct project
+file editing is used.
+
+## Root cause and fix
+
+The regression had two cooperating causes. A caller could pass an upstream
+Extrude together with its downstream Pocket; `TransformFeature::build()`
+transformed every selected shape into one compound, so the full wall filled
+the Pocket openings. Separately, `replace_result` hid only the explicitly
+selected Pocket, leaving its visible upstream Extrude to overlap the result.
+
+The fix keeps the explicit source dependency history, but emits only maximal
+selected results and serializes `effectiveSourceIds`. `replace_result` now
+hides selected sources and their upstream dependencies. No openings are
+recreated and no solids are silently fused.
 
 The MCP integration test launches the built ParametricCAD GUI process with
 automation enabled, connects through its local socket, and invokes the actual

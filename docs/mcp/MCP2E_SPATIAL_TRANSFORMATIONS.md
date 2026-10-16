@@ -15,9 +15,19 @@ transform every intermediate result in a dependency chain.
 
 `mode` is either `copy` or `replace_result`. Both modes create a persistent
 `Transform` feature with dependencies on the selected source features.
-`replace_result` additionally hides the source features as one Undo/Redo
-operation; it does not delete or rewrite their history. Multiple sources are
-returned as a compound and are not incorrectly required to be one solid.
+When selected sources contain both an intermediate feature and a downstream
+result that depends on it, the result uses only the maximal selected nodes
+(the downstream result). The original `sourceIds` remain in the dependency
+graph, and `effectiveSourceIds` is exposed in the serialized parameters. This
+prevents a full Extrude from being compounded with its cut Pocket and filling
+its openings. Multiple independent maximal sources are still returned as a
+compound and are not incorrectly required to be one solid.
+
+`copy` leaves the selected source visibility unchanged. `replace_result`
+additionally hides every selected source and its visible upstream dependencies
+as one Undo/Redo operation; it does not delete or rewrite their history. Thus,
+displaying a final Pocket result cannot leave its intermediate Extrude visible
+as an overlapping solid.
 
 Invalid feature IDs, zero-length directions, malformed vectors, and invalid
 angles are rejected before a model command is committed.
@@ -44,6 +54,9 @@ history-transformed construction frame.
 
 The real MCP stdio integration test covers tool discovery, translation,
 mirroring, rotation, `replace_result` visibility Undo/Redo, dependencies,
-save/reopen, upstream extrusion editing, and recompute. Unit tests additionally
-cover OCCT validity, multiple-source compounds, mirror/rotation volume
-preservation, and Transform serialization.
+save/reopen, upstream extrusion editing, and recompute. The mirror regression
+fixture builds a wall with two face-attached through-openings, verifies empty
+Boolean probe intersections before and after Mirror, and checks that a Mirror
+of the upstream Extrude has the intentionally different full-wall volume.
+Unit tests additionally cover OCCT validity, ancestor filtering, multiple-source
+compounds, mirror/rotation volume preservation, and Transform serialization.

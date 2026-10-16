@@ -41,6 +41,7 @@
 #include <cstdlib>
 
 #include <stdexcept>
+#include <unordered_set>
 #include <string>
 #include <utility>
 
@@ -73,6 +74,24 @@ void traceSweep(const char* event, const std::string& details)
     if (!sweepTraceEnabled()) return;
     std::fprintf(stderr, "[SWEEP] %s %s\n", event, details.c_str());
     std::fflush(stderr);
+}
+
+bool dependsTransitively(
+    const ParametricFeature::Ptr& feature,
+    const ParametricFeature::Ptr& possibleAncestor,
+    std::unordered_set<const ParametricFeature*>& visited)
+{
+    if (!feature || !possibleAncestor) return false;
+    if (!visited.insert(feature.get()).second) return false;
+    for (const auto& weakDependency : feature->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        if (!dependency) continue;
+        if (dependency == possibleAncestor
+            || dependsTransitively(dependency, possibleAncestor, visited)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const char* revolveAxisTypeName(const RevolveAxisType type)
@@ -3234,13 +3253,51 @@ TransformFeature::TransformFeature(
     }
 }
 
+std::vector<std::string> TransformFeature::effectiveSourceIds() const
+{
+    std::vector<std::string> effective;
+    effective.reserve(sources_.size());
+    for (std::size_t index = 0; index < sources_.size(); ++index) {
+        const auto source = sources_[index].lock();
+        if (!source) continue;
+        bool hasSelectedDescendant = false;
+        for (std::size_t candidateIndex = 0; candidateIndex < sources_.size(); ++candidateIndex) {
+            if (candidateIndex == index) continue;
+            const auto candidate = sources_[candidateIndex].lock();
+            std::unordered_set<const ParametricFeature*> visited;
+            if (dependsTransitively(candidate, source, visited)) {
+                hasSelectedDescendant = true;
+                break;
+            }
+        }
+        if (!hasSelectedDescendant) effective.push_back(source->id());
+    }
+    return effective;
+}
+
 TopoDS_Shape TransformFeature::build() const
 {
-    std::vector<TopoDS_Shape> transformed;
-    transformed.reserve(sources_.size());
-    for (const auto& weakSource : sources_) {
-        const auto source = weakSource.lock();
+    std::vector<Ptr> effectiveSources;
+    effectiveSources.reserve(sources_.size());
+    for (std::size_t index = 0; index < sources_.size(); ++index) {
+        const auto source = sources_[index].lock();
         if (!source) throw std::runtime_error("Transform source no longer exists");
+        bool hasSelectedDescendant = false;
+        for (std::size_t candidateIndex = 0; candidateIndex < sources_.size(); ++candidateIndex) {
+            if (candidateIndex == index) continue;
+            const auto candidate = sources_[candidateIndex].lock();
+            std::unordered_set<const ParametricFeature*> visited;
+            if (dependsTransitively(candidate, source, visited)) {
+                hasSelectedDescendant = true;
+                break;
+            }
+        }
+        if (!hasSelectedDescendant) effectiveSources.push_back(source);
+    }
+
+    std::vector<TopoDS_Shape> transformed;
+    transformed.reserve(effectiveSources.size());
+    for (const auto& source : effectiveSources) {
         if (source->shape().IsNull())
             throw std::runtime_error("Transform source has no valid shape");
         BRepBuilderAPI_Transform builder(source->shape(), transformation_, Standard_True);
@@ -3264,6 +3321,10 @@ void TransformFeature::writeParameters(QJsonObject& object) const
     for (const auto& sourceId : sourceIds_)
         sourceIds.append(QString::fromStdString(sourceId));
     object.insert("sourceIds", sourceIds);
+    QJsonArray effectiveSourceIdsJson;
+    for (const auto& sourceId : effectiveSourceIds())
+        effectiveSourceIdsJson.append(QString::fromStdString(sourceId));
+    object.insert("effectiveSourceIds", effectiveSourceIdsJson);
     object.insert("operation", operation_ == TransformOperation::Mirror ? "Mirror"
         : operation_ == TransformOperation::Translate ? "Translate" : "Rotate");
     object.insert("resultMode", resultMode_ == TransformResultMode::Copy

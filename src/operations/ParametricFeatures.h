@@ -940,6 +940,9 @@ public:
     Ptr clone(std::string newId) const override;
 
     const std::vector<std::string>& sourceIds() const noexcept { return sourceIds_; }
+    // If both an intermediate feature and one of its downstream results are
+    // selected, only the downstream result is emitted by this feature.
+    std::vector<std::string> effectiveSourceIds() const;
     TransformOperation operation() const noexcept { return operation_; }
     TransformResultMode resultMode() const noexcept { return resultMode_; }
     const gp_Trsf& transformation() const noexcept { return transformation_; }

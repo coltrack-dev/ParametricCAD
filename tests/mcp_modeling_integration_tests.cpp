@@ -333,6 +333,125 @@ private slots:
             .value("valid").toBool());
     }
 
+    void mirrorPreservesPocketOpeningsThroughMcp()
+    {
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto wallSketch = callTool("cad.create_sketch", QJsonObject{{"support", "XY"}})
+            .value("featureId").toString();
+        QVERIFY(!wallSketch.isEmpty());
+        QVERIFY(callTool("cad.add_rectangle", QJsonObject{{"sketchId", wallSketch},
+            {"x", 0.0}, {"y", 0.0}, {"width", 100.0}, {"height", 20.0}, {"units", "mm"}})
+            .value("success").toBool());
+        const auto wall = callTool("cad.extrude", QJsonObject{{"sketchId", wallSketch},
+            {"distance", 10.0}, {"units", "mm"}}).value("featureId").toString();
+        QVERIFY(!wall.isEmpty());
+
+        const auto topology = callTool("cad.get_topology", QJsonObject{{"featureId", wall}});
+        QJsonObject topFace;
+        for (const auto& value : topology.value("faces").toArray()) {
+            if (value.toObject().value("semanticId").toString() == "Box.Face:+Z") {
+                topFace = value.toObject();
+                break;
+            }
+        }
+        QVERIFY(!topFace.isEmpty());
+        const auto openingsSketch = callTool("cad.create_sketch",
+            QJsonObject{{"faceReference", topFace}}).value("featureId").toString();
+        QVERIFY(!openingsSketch.isEmpty());
+        QVERIFY(callTool("cad.add_rectangle", QJsonObject{{"sketchId", openingsSketch},
+            {"x", -5.0}, {"y", -35.0}, {"width", 10.0}, {"height", 10.0}, {"units", "mm"}})
+            .value("success").toBool());
+        QVERIFY(callTool("cad.add_rectangle", QJsonObject{{"sketchId", openingsSketch},
+            {"x", -5.0}, {"y", 20.0}, {"width", 10.0}, {"height", 15.0}, {"units", "mm"}})
+            .value("success").toBool());
+        const auto pocketResponse = call("cad.pocket", QJsonObject{{"sketchId", openingsSketch},
+            {"depth", 10.0}, {"units", "mm"}});
+        const auto pocket = pocketResponse.value("result").toObject()
+            .value("structuredContent").toObject().value("featureId").toString();
+        QVERIFY(!pocket.isEmpty());
+
+        const auto before = callTool("cad.inspect_shape", QJsonObject{{"featureId", pocket}});
+        QVERIFY(before.value("valid").toBool());
+        QCOMPARE(before.value("solidCount").toInt(), 1);
+        const double expectedVolume = 100.0 * 20.0 * 10.0 - 10.0 * 10.0 * 10.0
+            - 15.0 * 10.0 * 10.0;
+        QVERIFY(std::abs(before.value("volume").toDouble() - expectedVolume) < 1.0e-3);
+        verifyDependency(pocket, wall);
+        verifyDependency(pocket, openingsSketch);
+
+        // A probe covering the first opening must have empty Common volume;
+        // this is a geometric through-opening check, independent of display.
+        const auto probe = createRectangleExtrude(10.0, 10.0, 12.0, 15.0, 5.0);
+        QVERIFY(!probe.isEmpty());
+        verifyStructuredToolError("cad.boolean", QJsonObject{{"leftFeatureId", pocket},
+            {"rightFeatureId", probe}, {"operation", "Common"}});
+
+        const auto mirrored = callTool("cad.mirror", QJsonObject{
+            {"featureIds", QJsonArray{pocket}}, {"mode", "replace_result"},
+            {"origin", QJsonArray{0.0, 10.0, 0.0}},
+            {"normal", QJsonArray{0.0, 1.0, 0.0}}, {"units", "mm"}});
+        const auto mirroredId = mirrored.value("featureId").toString();
+        QVERIFY(!mirroredId.isEmpty());
+        const auto after = callTool("cad.inspect_shape", QJsonObject{{"featureId", mirroredId}});
+        QVERIFY(after.value("valid").toBool());
+        QCOMPARE(after.value("solidCount").toInt(), 1);
+        QVERIFY(std::abs(after.value("volume").toDouble() - before.value("volume").toDouble())
+            < 1.0e-3);
+        const auto afterBounds = after.value("boundingBox").toObject();
+        const auto afterMin = afterBounds.value("min").toArray();
+        const auto afterMax = afterBounds.value("max").toArray();
+        QVERIFY(std::abs(afterMax.at(0).toDouble() - afterMin.at(0).toDouble() - 100.0) < 0.2);
+        QVERIFY(std::abs(afterMax.at(1).toDouble() - afterMin.at(1).toDouble() - 20.0) < 0.2);
+        QVERIFY(std::abs(afterMax.at(2).toDouble() - afterMin.at(2).toDouble() - 10.0) < 0.2);
+        verifyDependency(mirroredId, pocket);
+        QVERIFY(!callTool("cad.get_feature", QJsonObject{{"featureId", pocket}})
+            .value("visible").toBool());
+        QVERIFY(!callTool("cad.get_feature", QJsonObject{{"featureId", wall}})
+            .value("visible").toBool());
+
+        const auto transformParameters = callTool("cad.get_feature",
+            QJsonObject{{"featureId", mirroredId}}).value("parameters").toObject();
+        QCOMPARE(transformParameters.value("effectiveSourceIds").toArray(), QJsonArray{pocket});
+        verifyStructuredToolError("cad.boolean", QJsonObject{{"leftFeatureId", mirroredId},
+            {"rightFeatureId", probe}, {"operation", "Common"}});
+
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QVERIFY(callTool("cad.get_feature", QJsonObject{{"featureId", pocket}})
+            .value("visible").toBool());
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", mirroredId}})
+            .value("valid").toBool());
+
+        const QString saved = temporaryDirectory_.filePath("mirror-pocket-openings.pcad");
+        QVERIFY(callTool("cad.save_project", QJsonObject{{"path", saved}})
+            .value("success").toBool());
+        QVERIFY(callTool("cad.open_project", QJsonObject{{"path", saved}})
+            .value("success").toBool());
+        const auto reopened = callTool("cad.inspect_shape", QJsonObject{{"featureId", mirroredId}});
+        QVERIFY(reopened.value("valid").toBool());
+        QVERIFY(std::abs(reopened.value("volume").toDouble() - expectedVolume) < 1.0e-3);
+
+        // An upstream Extrude is deliberately different: it has no openings.
+        const auto upstreamMirror = callTool("cad.mirror", QJsonObject{
+            {"featureIds", QJsonArray{wall}}, {"mode", "copy"},
+            {"origin", QJsonArray{0.0, 10.0, 0.0}},
+            {"normal", QJsonArray{0.0, 1.0, 0.0}}, {"units", "mm"}});
+        const auto upstreamId = upstreamMirror.value("featureId").toString();
+        QVERIFY(!upstreamId.isEmpty());
+        const auto upstreamShape = callTool("cad.inspect_shape", QJsonObject{{"featureId", upstreamId}});
+        QVERIFY(upstreamShape.value("valid").toBool());
+        QVERIFY(std::abs(upstreamShape.value("volume").toDouble() - 20000.0) < 1.0e-3);
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+
+        QVERIFY(callTool("cad.edit_feature", QJsonObject{{"featureId", wall},
+            {"property", "distance"}, {"value", 12.0}, {"units", "mm"}})
+            .value("success").toBool());
+        QVERIFY(callTool("cad.recompute").value("success").toBool());
+        const auto recomputed = callTool("cad.inspect_shape", QJsonObject{{"featureId", mirroredId}});
+        QVERIFY(recomputed.value("valid").toBool());
+        QVERIFY(std::abs(recomputed.value("volume").toDouble() - 21500.0) < 1.0e-3);
+    }
+
     void transactionalProfileEditingThroughMcp()
     {
         QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
