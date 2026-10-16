@@ -207,6 +207,75 @@ FeatureProperty textProperty(
     return {key, label, std::move(value), std::nullopt, std::nullopt, false};
 }
 
+FeatureProperty componentNumberProperty(const char* key, const char* label, const double value,
+                                       const bool editable)
+{
+    return {key, label, value, -1'000'000'000.0, 1'000'000'000.0, editable};
+}
+
+FeatureProperty componentTextProperty(const char* key, const char* label,
+                                      std::string value)
+{
+    return {key, label, std::move(value), std::nullopt, std::nullopt, false};
+}
+
+FeatureProperty componentEditableTextProperty(const char* key, const char* label,
+                                              std::string value)
+{
+    return {key, label, std::move(value), std::nullopt, std::nullopt, true};
+}
+
+std::string componentDependenciesText(const ParametricFeature::Ptr& source)
+{
+    if (!source || source->dependencies().empty()) return "none";
+    std::string result;
+    for (const auto& weakDependency : source->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        if (!dependency) continue;
+        if (!result.empty()) result += ", ";
+        result += dependency->id();
+    }
+    return result.empty() ? "none" : result;
+}
+
+std::string componentUpstreamSketchText(const ParametricFeature::Ptr& source)
+{
+    if (!source) return "none";
+    std::unordered_set<std::string> visited;
+    std::vector<ParametricFeature::Ptr> pending{source};
+    while (!pending.empty()) {
+        auto current = pending.back();
+        pending.pop_back();
+        if (!current || !visited.insert(current->id()).second) continue;
+        if (current->role() == FeatureRole::Sketch) return current->id();
+        for (const auto& weakDependency : current->dependencies()) {
+            if (auto dependency = weakDependency.lock()) pending.push_back(std::move(dependency));
+        }
+    }
+    return "none";
+}
+
+std::string componentBoundsText(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return "unavailable";
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) return "empty";
+    Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
+    bounds.Get(minX, minY, minZ, maxX, maxY, maxZ);
+    return std::to_string(minX) + ", " + std::to_string(minY) + ", "
+        + std::to_string(minZ) + " .. " + std::to_string(maxX) + ", "
+        + std::to_string(maxY) + ", " + std::to_string(maxZ);
+}
+
+std::string componentVolumeText(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return "unavailable";
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    return std::to_string(properties.Mass());
+}
+
 SketchFrame globalSketchFrame(const SketchSupportType support)
 {
     switch (support) {
@@ -3416,6 +3485,60 @@ ComponentTransformFeature::ComponentTransformFeature(
     addDependency(source);
 }
 
+std::vector<FeatureProperty> ComponentTransformFeature::properties() const
+{
+    const auto translation = transformation_.TranslationPart();
+    const bool translate = operation_ == TransformOperation::Translate;
+    std::vector<FeatureProperty> result{
+        componentTextProperty("sourceFeatureId", "Parent Feature", sourceFeatureId_),
+        componentTextProperty("sourceComponentId", "Component ID", sourceComponentId_),
+        componentTextProperty("dependencies", "Dependencies", componentDependenciesText(source_)),
+        componentTextProperty("upstreamSketch", "Upstream Sketch", componentUpstreamSketchText(source_)),
+        componentTextProperty("operation", "Operation",
+            operation_ == TransformOperation::Mirror ? "Mirror"
+                : operation_ == TransformOperation::Translate ? "Translate" : "Rotate"),
+        componentTextProperty("resultMode", "Result mode",
+            resultMode_ == TransformResultMode::Copy ? "copy" : "replace_result"),
+        componentNumberProperty("translationX", "Translate X", translation.X(), translate),
+        componentNumberProperty("translationY", "Translate Y", translation.Y(), translate),
+        componentNumberProperty("translationZ", "Translate Z", translation.Z(), translate),
+        componentTextProperty("boundingBox", "Bounding box", componentBoundsText(shape())),
+        componentTextProperty("volume", "Volume (mm^3)", componentVolumeText(shape())),
+        componentTextProperty("validity", "B-Rep validity",
+            !shape().IsNull() && BRepCheck_Analyzer(shape()).IsValid() ? "valid" : "invalid"),
+        componentTextProperty("recomputeStatus", "Recompute status",
+            state() == FeatureState::UpToDate ? "up_to_date"
+                : state() == FeatureState::Failed ? "failed" : "dirty"),
+        componentTextProperty("effectiveVisibility", "Effective visibility",
+            userVisible() && component_.visible ? "visible" : "hidden")};
+    if (!translate) {
+        result.push_back(componentTextProperty("editorNote", "Editing",
+            operation_ == TransformOperation::Rotate
+                ? "Rotate axis and angle are read-only for this legacy transform; recreate the operation to change them."
+                : "Mirror plane is read-only for this legacy transform; recreate the operation to change it."));
+    }
+    return result;
+}
+
+bool ComponentTransformFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (operation_ != TransformOperation::Translate || !std::isfinite(value)) return false;
+    if (key != "translationX" && key != "translationY" && key != "translationZ") return false;
+    gp_Vec translation(transformation_.TranslationPart());
+    if (key == "translationX") translation.SetX(value);
+    else if (key == "translationY") translation.SetY(value);
+    else translation.SetZ(value);
+    transformation_.SetTranslationPart(translation);
+    markDirty();
+    return true;
+}
+
+bool ComponentTransformFeature::setProperty(const std::string& key,
+                                            const PropertyValue& value)
+{
+    return ParametricFeature::setProperty(key, value);
+}
+
 TopoDS_Shape ComponentTransformFeature::build() const
 {
     const auto sourceShape = resolveComponentShape(source_->shape(), component_);
@@ -3554,6 +3677,66 @@ ComponentSplitFeature::ComponentSplitFeature(
     if (!source) throw std::invalid_argument("Component split source must not be null");
     if (sourceComponentId_.empty()) throw std::invalid_argument("Component id must not be empty");
     addDependency(source);
+}
+
+std::vector<FeatureProperty> ComponentSplitFeature::properties() const
+{
+    const auto normal = normal_.XYZ();
+    return {
+        componentTextProperty("sourceFeatureId", "Parent Feature", sourceFeatureId_),
+        componentTextProperty("sourceComponentId", "Component ID", sourceComponentId_),
+        componentTextProperty("dependencies", "Dependencies", componentDependenciesText(source_)),
+        componentTextProperty("upstreamSketch", "Upstream Sketch", componentUpstreamSketchText(source_)),
+        componentNumberProperty("planeOriginX", "Split origin X", origin_.X(), true),
+        componentNumberProperty("planeOriginY", "Split origin Y", origin_.Y(), true),
+        componentNumberProperty("planeOriginZ", "Split origin Z", origin_.Z(), true),
+        componentNumberProperty("planeNormalX", "Split normal X", normal.X(), true),
+        componentNumberProperty("planeNormalY", "Split normal Y", normal.Y(), true),
+        componentNumberProperty("planeNormalZ", "Split normal Z", normal.Z(), true),
+        componentEditableTextProperty("side", "Segment side",
+            side_ == ComponentSplitSide::Negative ? "negative" : "positive"),
+        componentTextProperty("boundingBox", "Bounding box", componentBoundsText(shape())),
+        componentTextProperty("volume", "Volume (mm^3)", componentVolumeText(shape())),
+        componentTextProperty("validity", "B-Rep validity",
+            !shape().IsNull() && BRepCheck_Analyzer(shape()).IsValid() ? "valid" : "invalid"),
+        componentTextProperty("recomputeStatus", "Recompute status",
+            state() == FeatureState::UpToDate ? "up_to_date"
+                : state() == FeatureState::Failed ? "failed" : "dirty"),
+        componentTextProperty("effectiveVisibility", "Effective visibility",
+            userVisible() && component_.visible ? "visible" : "hidden")};
+}
+
+bool ComponentSplitFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (!std::isfinite(value)) return false;
+    if (key == "planeOriginX") origin_.SetX(value);
+    else if (key == "planeOriginY") origin_.SetY(value);
+    else if (key == "planeOriginZ") origin_.SetZ(value);
+    else if (key == "planeNormalX" || key == "planeNormalY" || key == "planeNormalZ") {
+        auto normal = normal_.XYZ();
+        if (key == "planeNormalX") normal.SetX(value);
+        else if (key == "planeNormalY") normal.SetY(value);
+        else normal.SetZ(value);
+        if (normal.SquareModulus() <= 1.0e-12) return false;
+        try { normal_ = gp_Dir(normal); }
+        catch (...) { return false; }
+    } else return false;
+    markDirty();
+    return true;
+}
+
+bool ComponentSplitFeature::setProperty(const std::string& key,
+                                        const PropertyValue& value)
+{
+    if (key == "side" && std::holds_alternative<std::string>(value)) {
+        const auto& side = std::get<std::string>(value);
+        if (side == "negative") side_ = ComponentSplitSide::Negative;
+        else if (side == "positive") side_ = ComponentSplitSide::Positive;
+        else return false;
+        markDirty();
+        return true;
+    }
+    return ParametricFeature::setProperty(key, value);
 }
 
 TopoDS_Shape ComponentSplitFeature::build() const

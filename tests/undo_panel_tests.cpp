@@ -1,9 +1,11 @@
 #include "viewer/FeatureEditorPanel.h"
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
+#include "model/ModelComponent.h"
 #include <QtTest/QtTest>
 #include <QAction>
 #include <QDoubleSpinBox>
+#include <QComboBox>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTreeWidget>
@@ -111,6 +113,112 @@ private slots:
         QCOMPARE(controller.body().findFeature(pattern.id)->state(),
                  cad::parametric::FeatureState::UpToDate);
         QVERIFY(!controller.body().findFeature(pattern.id)->shape().IsNull());
+    }
+
+    void componentTransformEditorUsesUndoAndRedo()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto generated = cad::parametric::ComponentResolver::enumerate(
+            controller.body(), box.id);
+        QCOMPARE(generated.size(), std::size_t{1});
+        controller.body().replaceComponents(generated);
+
+        gp_Trsf translation;
+        translation.SetTranslation(gp_Vec(5.0, 0.0, 0.0));
+        const auto transformed = controller.transformComponent(
+            generated.front().id, cad::parametric::TransformOperation::Translate,
+            cad::parametric::TransformResultMode::ReplaceResult, translation);
+        QVERIFY(transformed.success);
+
+        FeatureEditorPanel panel;
+        panel.setService(&controller);
+        panel.setFeatures(controller.features());
+        panel.selectFeatures({QString::fromStdString(transformed.id)});
+        const auto editors = panel.findChildren<QDoubleSpinBox*>();
+        QCOMPARE(editors.size(), 3);
+        editors.at(0)->setValue(12.0);
+        QVERIFY(QMetaObject::invokeMethod(editors.at(0), "editingFinished",
+                                          Qt::DirectConnection));
+        QCoreApplication::processEvents();
+
+        const auto propertyValue = [&controller, &transformed](const char* key) {
+            const auto feature = controller.body().findFeature(transformed.id);
+            for (const auto& property : feature->properties())
+                if (property.key == key) return std::get<double>(property.value);
+            return -1.0;
+        };
+        QCOMPARE(propertyValue("translationX"), 12.0);
+        controller.undo();
+        QCOMPARE(propertyValue("translationX"), 5.0);
+        controller.redo();
+        QCOMPARE(propertyValue("translationX"), 12.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString error;
+        const auto path = directory.filePath("component-transform.pcad");
+        QVERIFY(ProjectController(controller).save(path, error));
+        ModelingController reopened;
+        QVERIFY(ProjectController(reopened).open(path, error));
+        const auto loaded = reopened.body().findFeature(transformed.id);
+        QVERIFY(loaded);
+        QCOMPARE(std::get<double>([&loaded]() {
+            for (const auto& property : loaded->properties())
+                if (property.key == "translationX") return property.value;
+            return cad::parametric::PropertyValue{-1.0};
+        }()), 12.0);
+    }
+
+    void componentSplitEditorSupportsSideAndRejectsInvalidPlane()
+    {
+        ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto components = cad::parametric::ComponentResolver::enumerate(
+            controller.body(), box.id);
+        QCOMPARE(components.size(), std::size_t{1});
+        controller.body().replaceComponents(components);
+
+        const auto split = controller.splitComponent(
+            components.front().id, gp_Pnt(5.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0));
+        QVERIFY(split.success);
+        QCOMPARE(split.componentIds.size(), std::size_t{2});
+
+        FeatureEditorPanel panel;
+        panel.setService(&controller);
+        panel.setFeatures(controller.features());
+        panel.selectFeatures({QString::fromStdString(split.id)});
+        QComboBox* side = nullptr;
+        for (auto* candidate : panel.findChildren<QComboBox*>()) {
+            if (candidate->findText(QStringLiteral("negative")) >= 0
+                && candidate->findText(QStringLiteral("positive")) >= 0) {
+                side = candidate;
+                break;
+            }
+        }
+        QVERIFY(side);
+        side->setCurrentText(QStringLiteral("positive"));
+        QCoreApplication::processEvents();
+        auto feature = controller.body().findFeature(split.id);
+        QVERIFY(feature);
+        auto sideValue = [&feature]() {
+            for (const auto& property : feature->properties())
+                if (property.key == "side") return std::get<std::string>(property.value);
+            return std::string{};
+        };
+        QCOMPARE(sideValue(), std::string("positive"));
+
+        controller.undo();
+        QCOMPARE(sideValue(), std::string("negative"));
+        controller.redo();
+        QCOMPARE(sideValue(), std::string("positive"));
+
+        const auto invalid = controller.setFeatureProperty(
+            split.id, "planeNormalX", 0.0);
+        QVERIFY(!invalid.success);
+        QCOMPARE(sideValue(), std::string("positive"));
     }
 
     void shortcutsAndCleanActions()

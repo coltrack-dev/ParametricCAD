@@ -976,6 +976,9 @@ public:
     TransformOperation operation() const noexcept { return operation_; }
     TransformResultMode resultMode() const noexcept { return resultMode_; }
     const gp_Trsf& transformation() const noexcept { return transformation_; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    bool setProperty(const std::string& key, const PropertyValue& value) override;
 
 protected:
     TopoDS_Shape build() const override;
@@ -1034,6 +1037,9 @@ public:
     const gp_Pnt& planeOrigin() const noexcept { return origin_; }
     const gp_Dir& planeNormal() const noexcept { return normal_; }
     ComponentSplitSide side() const noexcept { return side_; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    bool setProperty(const std::string& key, const PropertyValue& value) override;
 
 protected:
     TopoDS_Shape build() const override;
