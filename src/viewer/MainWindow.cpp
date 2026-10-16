@@ -186,6 +186,12 @@ QJsonObject componentJson(const cad::parametric::ModelComponent& component)
         {"volume", component.volume}};
     if (component.parentComponentId)
         result.insert("parentComponentId", QString::fromStdString(*component.parentComponentId));
+    if (!component.replacementComponentIds.empty()) {
+        QJsonArray replacements;
+        for (const auto& replacement : component.replacementComponentIds)
+            replacements.append(QString::fromStdString(replacement));
+        result.insert("replacementComponentIds", replacements);
+    }
     return result;
 }
 
@@ -277,9 +283,16 @@ bool validUnits(const QJsonObject& arguments, QString& error, bool required = tr
 
 QJsonObject modelingResultJson(const cad::application::ModelingResult& result)
 {
-    return QJsonObject{{"success", result.success},
+    QJsonObject value{{"success", result.success},
         {"featureId", QString::fromStdString(result.id)},
         {"error", QString::fromStdString(result.error)}};
+    if (!result.componentIds.empty()) {
+        QJsonArray componentIds;
+        for (const auto& componentId : result.componentIds)
+            componentIds.append(QString::fromStdString(componentId));
+        value.insert("componentIds", componentIds);
+    }
+    return value;
 }
 
 void traceActionState(const char* event, const QString& details)
@@ -846,7 +859,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch", "cad.mirror",
         "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
         "cad.get_components", "cad.get_component", "cad.get_component_topology",
-        "cad.set_component_visibility"};
+        "cad.set_component_visibility", "cad.transform_component", "cad.split_component"};
     static const QStringList transactionalTools{
         "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
         "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
@@ -900,6 +913,26 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (arguments.contains("isolate") && !arguments.value("isolate").isBool())
             return rpcError(id, -32602, "isolate must be boolean");
     }
+    if (tool == "cad.transform_component") {
+        if (!hasOnly({"componentId", "operation", "mode", "origin", "normal", "vector",
+                      "axisOrigin", "axisDirection", "angleDegrees", "units"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty()
+            || !arguments.value("operation").isString()
+            || !arguments.value("mode").isString())
+            return rpcError(id, -32602, "transform_component requires componentId, operation and mode");
+        const auto operation = arguments.value("operation").toString();
+        const auto mode = arguments.value("mode").toString();
+        if (!QStringList{"mirror", "translate", "rotate"}.contains(operation)
+            || !QStringList{"copy", "replace_result"}.contains(mode))
+            return rpcError(id, -32602, "Invalid component transform operation or mode");
+    }
+    if (tool == "cad.split_component") {
+        if (!hasOnly({"componentId", "origin", "normal", "units"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty())
+            return rpcError(id, -32602, "split_component requires componentId, origin and normal");
+    }
     if ((tool == "cad.get_feature" || tool == "cad.inspect_shape")
         && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
             || arguments.value("featureId").toString().isEmpty()))
@@ -907,7 +940,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.add_line",
         "cad.extrude", "cad.pocket", "cad.chamfer", "cad.fillet", "cad.shell",
         "cad.add_arc", "cad.linear_pattern", "cad.path_pattern", "cad.edit_sketch_profile",
-        "cad.mirror", "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature"};
+        "cad.mirror", "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
+        "cad.transform_component", "cad.split_component"};
     if (unitTools.contains(tool)) {
         QString unitsError;
         if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
@@ -1057,10 +1091,14 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
                 QJsonObject{{"componentId", QString::fromStdString(componentId)},
                             {"message", QString::fromStdString(resolveError)}});
         result = componentJson(resolved->component);
-        result.insert("effectiveVisibility", viewer_->componentVisibilityMode(
-            QString::fromStdString(componentId)) == cad::application::VisibilityMode::Hidden
-                ? "hidden" : viewer_->componentVisibilityMode(QString::fromStdString(componentId))
-                    == cad::application::VisibilityMode::Ghosted ? "ghosted" : "visible");
+        const auto componentVisibility = !resolved->component.visible
+            ? QStringLiteral("hidden")
+            : viewer_->componentVisibilityMode(QString::fromStdString(componentId))
+                == cad::application::VisibilityMode::Hidden ? QStringLiteral("hidden")
+            : viewer_->componentVisibilityMode(QString::fromStdString(componentId))
+                == cad::application::VisibilityMode::Ghosted ? QStringLiteral("ghosted")
+                                                               : QStringLiteral("visible");
+        result.insert("effectiveVisibility", componentVisibility);
         result.insert("shape", shapeInspection(resolved->shape));
         if (tool == "cad.get_component_topology") {
             QJsonArray faces;
@@ -1491,6 +1529,69 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!operation.success) return finishModeling(operation, "split_feature");
         refreshModelView();
         return finishModeling(operation, "split_feature");
+    } else if (tool == "cad.transform_component") {
+        const auto vector3 = [&arguments](const char* key, double& x, double& y, double& z) {
+            const auto values = arguments.value(QLatin1String(key)).toArray();
+            if (values.size() != 3 || !values.at(0).isDouble()
+                || !values.at(1).isDouble() || !values.at(2).isDouble()) return false;
+            x = values.at(0).toDouble(); y = values.at(1).toDouble(); z = values.at(2).toDouble();
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+        };
+        const auto operationName = arguments.value("operation").toString();
+        gp_Trsf transformation;
+        cad::parametric::TransformOperation operation;
+        if (operationName == "mirror") {
+            double ox, oy, oz, nx, ny, nz;
+            if (!vector3("origin", ox, oy, oz) || !vector3("normal", nx, ny, nz)
+                || gp_Vec(nx, ny, nz).Magnitude() <= 1.0e-12)
+                return rpcError(id, -32602, "Mirror requires finite origin and non-zero normal");
+            transformation.SetMirror(gp_Ax2(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz)));
+            operation = cad::parametric::TransformOperation::Mirror;
+        } else if (operationName == "translate") {
+            double x, y, z;
+            if (!vector3("vector", x, y, z))
+                return rpcError(id, -32602, "Translate requires a finite 3D vector");
+            transformation.SetTranslation(gp_Vec(x, y, z));
+            operation = cad::parametric::TransformOperation::Translate;
+        } else {
+            double ox, oy, oz, dx, dy, dz;
+            const auto angle = arguments.value("angleDegrees");
+            if (!vector3("axisOrigin", ox, oy, oz) || !vector3("axisDirection", dx, dy, dz)
+                || gp_Vec(dx, dy, dz).Magnitude() <= 1.0e-12
+                || !angle.isDouble() || !std::isfinite(angle.toDouble())
+                || std::abs(angle.toDouble()) <= 1.0e-12
+                || std::abs(angle.toDouble()) > 360000.0)
+                return rpcError(id, -32602, "Rotate requires a valid axis and angleDegrees");
+            transformation.SetRotation(gp_Ax1(gp_Pnt(ox, oy, oz), gp_Dir(dx, dy, dz)),
+                angle.toDouble() * std::acos(-1.0) / 180.0);
+            operation = cad::parametric::TransformOperation::Rotate;
+        }
+        const auto mode = arguments.value("mode").toString() == "copy"
+            ? cad::parametric::TransformResultMode::Copy
+            : cad::parametric::TransformResultMode::ReplaceResult;
+        const auto modelingResult = modeling_.transformComponent(
+            arguments.value("componentId").toString().toStdString(), operation, mode, transformation);
+        if (!modelingResult.success) return finishModeling(modelingResult, "transform_component");
+        refreshModelView();
+        return finishModeling(modelingResult, "transform_component");
+    } else if (tool == "cad.split_component") {
+        const auto vector3 = [&arguments](const char* key, double& x, double& y, double& z) {
+            const auto values = arguments.value(QLatin1String(key)).toArray();
+            if (values.size() != 3 || !values.at(0).isDouble()
+                || !values.at(1).isDouble() || !values.at(2).isDouble()) return false;
+            x = values.at(0).toDouble(); y = values.at(1).toDouble(); z = values.at(2).toDouble();
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+        };
+        double ox, oy, oz, nx, ny, nz;
+        if (!vector3("origin", ox, oy, oz) || !vector3("normal", nx, ny, nz)
+            || gp_Vec(nx, ny, nz).Magnitude() <= 1.0e-12)
+            return rpcError(id, -32602, "split_component requires finite origin and non-zero normal");
+        const auto modelingResult = modeling_.splitComponent(
+            arguments.value("componentId").toString().toStdString(),
+            gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz));
+        if (!modelingResult.success) return finishModeling(modelingResult, "split_component");
+        refreshModelView();
+        return finishModeling(modelingResult, "split_component");
     } else if (tool == "cad.mirror" || tool == "cad.translate"
                || tool == "cad.rotate" || tool == "cad.transform_model") {
         const QString operationName = tool == "cad.mirror" ? "mirror"

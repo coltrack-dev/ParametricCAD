@@ -13,6 +13,11 @@
 #include "operations/SketchConstraintSolver.h"
 
 #include <TopoDS.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepGProp.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <Bnd_Box.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <TopExp.hxx>
@@ -28,6 +33,9 @@
 namespace cad::application {
 
 namespace {
+using cad::parametric::ComponentResolver;
+using cad::parametric::ModelComponent;
+
 std::string id(const char* prefix)
 {
     return std::string(prefix) + "-"
@@ -52,6 +60,40 @@ bool containsVisibilityCommand(const QUndoCommand* command)
         if (containsVisibilityCommand(command->child(index))) return true;
     }
     return false;
+}
+
+ModelingResult componentFailure(const std::string& message)
+{
+    return {false, {}, message, {}};
+}
+
+ModelComponent componentFromShape(const TopoDS_Shape& shape, const std::string& id,
+                                  const std::string& sourceFeatureId)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) throw std::runtime_error("Component result has empty bounds");
+    ModelComponent component;
+    component.id = id;
+    component.name = "Component result";
+    component.sourceFeatureId = sourceFeatureId;
+    bounds.Get(component.minX, component.minY, component.minZ,
+               component.maxX, component.maxY, component.maxZ);
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    component.volume = properties.Mass();
+    return component;
+}
+
+std::vector<ModelComponent> componentMetadata(const cad::parametric::Body& body)
+{
+    if (!body.components().empty()) return body.components();
+    std::vector<ModelComponent> result;
+    for (const auto& feature : body.features()) {
+        const auto generated = ComponentResolver::enumerate(body, feature->id());
+        result.insert(result.end(), generated.begin(), generated.end());
+    }
+    return result;
 }
 
 void collectFeatureAndDependencies(
@@ -1811,6 +1853,105 @@ ModelingResult ModelingController::createTransform(
         }
         if (!transaction.commit()) return {false, {}, body_.lastError()};
         return {true, transformId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::transformComponent(
+    const std::string& componentId,
+    const cad::parametric::TransformOperation operation,
+    const cad::parametric::TransformResultMode resultMode,
+    const gp_Trsf& transformation)
+{
+    std::string resolveError;
+    const auto resolved = cad::parametric::ComponentResolver::resolve(
+        body_, componentId, resolveError);
+    if (!resolved) return componentFailure(resolveError);
+    const auto source = body_.findFeature(resolved->component.sourceFeatureId);
+    if (!source) return componentFailure("Component source feature does not exist");
+    try {
+        const auto featureId = id("component-transform");
+        auto transformed = std::make_shared<cad::parametric::ComponentTransformFeature>(
+            featureId, source, resolved->component, operation, resultMode, transformation);
+        if (!transformed->recompute()) return componentFailure(transformed->error());
+        const auto resultComponentId = featureId + ":component";
+        auto resultComponent = componentFromShape(transformed->shape(), resultComponentId, featureId);
+        resultComponent.parentComponentId = componentId;
+
+        auto before = componentMetadata(body_);
+        auto after = before;
+        auto sourceIterator = std::find_if(after.begin(), after.end(),
+            [&componentId](const ModelComponent& component) { return component.id == componentId; });
+        if (sourceIterator == after.end()) return componentFailure("Component metadata is unavailable");
+        if (resultMode == cad::parametric::TransformResultMode::ReplaceResult) {
+            sourceIterator->visible = false;
+            sourceIterator->replacementComponentIds = {resultComponentId};
+        }
+        after.push_back(resultComponent);
+
+        ModelTransaction transaction(body_, undoStack_, "Transform Component");
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, transformed,
+            QStringLiteral("Transform Component")));
+        undoStack_.push(new cad::commands::ReplaceComponentsCommand(body_, before,
+            after, QStringLiteral("Update Component Replacement")));
+        if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
+        return {true, featureId, {}, {resultComponentId}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::splitComponent(
+    const std::string& componentId, const gp_Pnt& origin, const gp_Dir& normal)
+{
+    std::string resolveError;
+    const auto resolved = cad::parametric::ComponentResolver::resolve(
+        body_, componentId, resolveError);
+    if (!resolved) return componentFailure(resolveError);
+    const auto source = body_.findFeature(resolved->component.sourceFeatureId);
+    if (!source) return componentFailure("Component source feature does not exist");
+    try {
+        const auto negativeId = id("component-split-negative");
+        const auto positiveId = id("component-split-positive");
+        auto negative = std::make_shared<cad::parametric::ComponentSplitFeature>(
+            negativeId, source, resolved->component, origin, normal,
+            cad::parametric::ComponentSplitSide::Negative);
+        auto positive = std::make_shared<cad::parametric::ComponentSplitFeature>(
+            positiveId, source, resolved->component, origin, normal,
+            cad::parametric::ComponentSplitSide::Positive);
+        if (!negative->recompute()) return componentFailure(negative->error());
+        if (!positive->recompute()) return componentFailure(positive->error());
+        BRepCheck_Analyzer negativeAnalyzer(negative->shape());
+        BRepCheck_Analyzer positiveAnalyzer(positive->shape());
+        if (!negativeAnalyzer.IsValid() || !positiveAnalyzer.IsValid())
+            return componentFailure("Component split produced an invalid B-Rep");
+
+        const auto negativeComponentId = negativeId + ":component";
+        const auto positiveComponentId = positiveId + ":component";
+        auto negativeComponent = componentFromShape(negative->shape(), negativeComponentId, negativeId);
+        auto positiveComponent = componentFromShape(positive->shape(), positiveComponentId, positiveId);
+        negativeComponent.parentComponentId = componentId;
+        positiveComponent.parentComponentId = componentId;
+        auto before = componentMetadata(body_);
+        auto after = before;
+        auto sourceIterator = std::find_if(after.begin(), after.end(),
+            [&componentId](const ModelComponent& component) { return component.id == componentId; });
+        if (sourceIterator == after.end()) return componentFailure("Component metadata is unavailable");
+        sourceIterator->visible = false;
+        sourceIterator->replacementComponentIds = {negativeComponentId, positiveComponentId};
+        after.push_back(negativeComponent);
+        after.push_back(positiveComponent);
+
+        ModelTransaction transaction(body_, undoStack_, "Split Component");
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, negative,
+            QStringLiteral("Split Component")));
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, positive,
+            QStringLiteral("Split Component")));
+        undoStack_.push(new cad::commands::ReplaceComponentsCommand(body_, before,
+            after, QStringLiteral("Update Component Replacement")));
+        if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
+        return {true, negativeId, {}, {negativeComponentId, positiveComponentId}};
     } catch (const std::exception& error) {
         return failure(error);
     }

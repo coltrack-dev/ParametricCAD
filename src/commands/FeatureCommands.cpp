@@ -42,6 +42,26 @@ void ImportFeaturesCommand::undo()
             throw std::runtime_error("Imported feature is missing during undo");
 }
 
+ReplaceComponentsCommand::ReplaceComponentsCommand(
+    parametric::Body& body,
+    std::vector<parametric::ModelComponent> before,
+    std::vector<parametric::ModelComponent> after,
+    const QString& text)
+    : QUndoCommand(text), body_(body), before_(std::move(before)), after_(std::move(after))
+{
+    if (after_.empty()) throw std::invalid_argument("Component replacement cannot be empty");
+}
+
+void ReplaceComponentsCommand::undo()
+{
+    body_.replaceComponents(before_);
+}
+
+void ReplaceComponentsCommand::redo()
+{
+    body_.replaceComponents(after_);
+}
+
 AddSketchEntityCommand::AddSketchEntityCommand(
     parametric::Body& body,
     std::shared_ptr<parametric::SketchFeature> sketch,

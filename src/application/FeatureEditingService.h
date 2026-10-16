@@ -26,6 +26,7 @@ struct ModelingResult
     bool success{false};
     std::string id;
     std::string error;
+    std::vector<std::string> componentIds;
 };
 
 struct ModelingActionState

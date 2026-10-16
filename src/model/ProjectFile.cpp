@@ -651,6 +651,12 @@ QJsonArray encodeComponents(const Body& body)
             {"volume", component.volume}, {"visible", component.visible}};
         if (component.parentComponentId)
             object.insert("parentComponentId", QString::fromStdString(*component.parentComponentId));
+        if (!component.replacementComponentIds.empty()) {
+            QJsonArray replacements;
+            for (const auto& id : component.replacementComponentIds)
+                replacements.append(QString::fromStdString(id));
+            object.insert("replacementComponentIds", replacements);
+        }
         result.append(object);
     }
     return result;
@@ -680,6 +686,15 @@ std::vector<ModelComponent> decodeComponents(const QJsonObject& root)
         if (object.contains("visible")) component.visible = boolean(object, "visible");
         if (object.contains("parentComponentId"))
             component.parentComponentId = string(object, "parentComponentId");
+        if (object.contains("replacementComponentIds")) {
+            require(object.value("replacementComponentIds").isArray(),
+                "Invalid component replacement metadata");
+            for (const auto& replacement : object.value("replacementComponentIds").toArray()) {
+                require(replacement.isString() && !replacement.toString().isEmpty(),
+                    "Invalid component replacement id");
+                component.replacementComponentIds.push_back(replacement.toString().toStdString());
+            }
+        }
         result.push_back(std::move(component));
     }
     return result;
@@ -963,6 +978,30 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             return std::make_shared<TransformFeature>(string(o, "id"), sources,
                 operation, mode, transformValue(o));
         }},
+        {"ComponentTransform", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "ComponentTransform references missing source");
+            const auto values = o.value("componentSignature").toArray();
+            require(values.size() == 7, "Invalid ComponentTransform signature");
+            ModelComponent component;
+            component.id = string(o, "sourceComponentId");
+            component.sourceFeatureId = string(o, "sourceFeatureId");
+            component.minX = values.at(0).toDouble(); component.minY = values.at(1).toDouble();
+            component.minZ = values.at(2).toDouble(); component.maxX = values.at(3).toDouble();
+            component.maxY = values.at(4).toDouble(); component.maxZ = values.at(5).toDouble();
+            component.volume = values.at(6).toDouble();
+            const auto operationName = string(o, "operation");
+            const auto operation = operationName == "Mirror" ? TransformOperation::Mirror
+                : operationName == "Translate" ? TransformOperation::Translate
+                : operationName == "Rotate" ? TransformOperation::Rotate
+                : throw std::invalid_argument("Invalid ComponentTransform operation");
+            const auto modeName = string(o, "resultMode");
+            const auto mode = modeName == "copy" ? TransformResultMode::Copy
+                : modeName == "replace_result" ? TransformResultMode::ReplaceResult
+                : throw std::invalid_argument("Invalid ComponentTransform result mode");
+            return std::make_shared<ComponentTransformFeature>(string(o, "id"), source,
+                component, operation, mode, transformValue(o));
+        }},
         {"SplitSegment", [](const QJsonObject& o, const Body& body) {
             const auto source = body.findFeature(string(o, "sourceFeatureId"));
             require(static_cast<bool>(source), "SplitSegment references missing source");
@@ -974,6 +1013,29 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             matrixObject.insert("transformation", o.value("sourceTransform"));
             return std::make_shared<SplitSegmentFeature>(string(o, "id"), source,
                 transformValue(matrixObject), number(o, "splitCoordinate"), side);
+        }},
+        {"ComponentSplit", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "ComponentSplit references missing source");
+            const auto values = o.value("componentSignature").toArray();
+            const auto origin = o.value("planeOrigin").toArray();
+            const auto normal = o.value("planeNormal").toArray();
+            require(values.size() == 7 && origin.size() == 3 && normal.size() == 3,
+                "Invalid ComponentSplit parameters");
+            ModelComponent component;
+            component.id = string(o, "sourceComponentId");
+            component.sourceFeatureId = string(o, "sourceFeatureId");
+            component.minX = values.at(0).toDouble(); component.minY = values.at(1).toDouble();
+            component.minZ = values.at(2).toDouble(); component.maxX = values.at(3).toDouble();
+            component.maxY = values.at(4).toDouble(); component.maxZ = values.at(5).toDouble();
+            component.volume = values.at(6).toDouble();
+            const auto sideName = string(o, "side");
+            const auto side = sideName == "negative" ? ComponentSplitSide::Negative
+                : sideName == "positive" ? ComponentSplitSide::Positive
+                : throw std::invalid_argument("Invalid ComponentSplit side");
+            return std::make_shared<ComponentSplitFeature>(string(o, "id"), source, component,
+                gp_Pnt(origin.at(0).toDouble(), origin.at(1).toDouble(), origin.at(2).toDouble()),
+                gp_Dir(normal.at(0).toDouble(), normal.at(1).toDouble(), normal.at(2).toDouble()), side);
         }},
         {"SplitAssembly", [](const QJsonObject& o, const Body& body) {
             const auto whole = body.findFeature(string(o, "wholeSourceFeatureId"));

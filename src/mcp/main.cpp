@@ -210,6 +210,38 @@ QJsonArray toolDefinitions()
         {"required", QJsonArray{"componentId"}}};
     const QJsonObject components{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}}}}};
+    const QJsonObject componentTransform{
+        {"type", "object"},
+        {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"componentId", QJsonObject{{"type", "string"}}},
+            {"operation", QJsonObject{
+                {"type", "string"},
+                {"enum", QJsonArray{"mirror", "translate", "rotate"}}}},
+            {"mode", QJsonObject{
+                {"type", "string"},
+                {"enum", QJsonArray{"copy", "replace_result"}}}},
+            {"origin", QJsonObject{{"type", "array"}}},
+            {"normal", QJsonObject{{"type", "array"}}},
+            {"vector", QJsonObject{{"type", "array"}}},
+            {"axisOrigin", QJsonObject{{"type", "array"}}},
+            {"axisDirection", QJsonObject{{"type", "array"}}},
+            {"angleDegrees", QJsonObject{{"type", "number"}}},
+            {"units", units}
+        }},
+        {"required", QJsonArray{"componentId", "operation", "mode", "units"}}
+    };
+    const QJsonObject componentSplit{
+        {"type", "object"},
+        {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"componentId", QJsonObject{{"type", "string"}}},
+            {"origin", QJsonObject{{"type", "array"}}},
+            {"normal", QJsonObject{{"type", "array"}}},
+            {"units", units}
+        }},
+        {"required", QJsonArray{"componentId", "origin", "normal", "units"}}
+    };
     const QJsonObject componentVisibility{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{
             {"componentId", QJsonObject{{"type", "string"}}},
@@ -273,6 +305,10 @@ QJsonArray toolDefinitions()
         ,{"cad.get_component_topology", QJsonObject{{"description", "Inspect topology of one model component"}, {"inputSchema", componentId}}}
         ,{"cad.set_component_visibility", QJsonObject{{"description", "Set visible, hidden, or ghosted state for one component"},
             {"inputSchema", componentVisibility}}}
+        ,{"cad.transform_component", QJsonObject{{"description", "Transform one persistent model component"},
+            {"inputSchema", componentTransform}}}
+        ,{"cad.split_component", QJsonObject{{"description", "Split one persistent model component by a plane"},
+            {"inputSchema", componentSplit}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {

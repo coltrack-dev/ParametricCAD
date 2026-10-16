@@ -215,6 +215,17 @@ public:
         cad::parametric::TransformResultMode resultMode,
         const gp_Trsf& transformation
     );
+    ModelingResult transformComponent(
+        const std::string& componentId,
+        cad::parametric::TransformOperation operation,
+        cad::parametric::TransformResultMode resultMode,
+        const gp_Trsf& transformation
+    );
+    ModelingResult splitComponent(
+        const std::string& componentId,
+        const gp_Pnt& origin,
+        const gp_Dir& normal
+    );
     ModelingResult splitFeature(
         const std::string& wholeFeatureId,
         const std::string& componentFeatureId,

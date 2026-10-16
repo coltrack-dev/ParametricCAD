@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ParametricFeature.h"
+#include "model/ModelComponent.h"
 #include "model/TopologicalReference.h"
 
 #include <TopoDS_Edge.hxx>
@@ -959,6 +960,37 @@ private:
     gp_Trsf transformation_;
 };
 
+class ComponentTransformFeature final : public ParametricFeature
+{
+public:
+    ComponentTransformFeature(std::string id, const Ptr& source,
+                              ModelComponent component,
+                              TransformOperation operation,
+                              TransformResultMode resultMode,
+                              gp_Trsf transformation);
+    const char* typeId() const noexcept override { return "ComponentTransform"; }
+    std::string creationLabel() const override { return "Transform Component"; }
+    Ptr clone(std::string newId) const override;
+    const std::string& sourceFeatureId() const noexcept { return sourceFeatureId_; }
+    const std::string& sourceComponentId() const noexcept { return sourceComponentId_; }
+    TransformOperation operation() const noexcept { return operation_; }
+    TransformResultMode resultMode() const noexcept { return resultMode_; }
+    const gp_Trsf& transformation() const noexcept { return transformation_; }
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string sourceFeatureId_;
+    std::string sourceComponentId_;
+    Ptr source_;
+    ModelComponent component_;
+    TransformOperation operation_;
+    TransformResultMode resultMode_;
+    gp_Trsf transformation_;
+};
+
 enum class SplitSide { Negative, Positive };
 
 class SplitSegmentFeature final : public ParametricFeature
@@ -984,6 +1016,37 @@ private:
     gp_Trsf sourceTransform_;
     double splitCoordinate_;
     SplitSide side_;
+};
+
+enum class ComponentSplitSide { Negative, Positive };
+
+class ComponentSplitFeature final : public ParametricFeature
+{
+public:
+    ComponentSplitFeature(std::string id, const Ptr& source,
+                          ModelComponent component, gp_Pnt origin, gp_Dir normal,
+                          ComponentSplitSide side);
+    const char* typeId() const noexcept override { return "ComponentSplit"; }
+    std::string creationLabel() const override { return "Split Component"; }
+    Ptr clone(std::string newId) const override;
+    const std::string& sourceFeatureId() const noexcept { return sourceFeatureId_; }
+    const std::string& sourceComponentId() const noexcept { return sourceComponentId_; }
+    const gp_Pnt& planeOrigin() const noexcept { return origin_; }
+    const gp_Dir& planeNormal() const noexcept { return normal_; }
+    ComponentSplitSide side() const noexcept { return side_; }
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string sourceFeatureId_;
+    std::string sourceComponentId_;
+    Ptr source_;
+    ModelComponent component_;
+    gp_Pnt origin_;
+    gp_Dir normal_;
+    ComponentSplitSide side_;
 };
 
 class SplitAssemblyFeature final : public ParametricFeature

@@ -292,14 +292,14 @@ private slots:
         const auto mirroredId = mirrored.value("featureId").toString();
         QVERIFY(!mirroredId.isEmpty());
         verifyOneSolid(mirroredId, 10.0, 4.0, 2.0);
-        QVERIFY(!callTool("cad.get_feature", QJsonObject{{"featureId", source}})
-            .value("visible").toBool());
+        QVERIFY(callTool("cad.get_feature", QJsonObject{{"featureId", source}})
+            .value("visible").toBool() == false);
         QVERIFY(callTool("cad.undo").value("success").toBool());
         QVERIFY(callTool("cad.get_feature", QJsonObject{{"featureId", source}})
             .value("visible").toBool());
         QVERIFY(callTool("cad.redo").value("success").toBool());
-        QVERIFY(!callTool("cad.get_feature", QJsonObject{{"featureId", source}})
-            .value("visible").toBool());
+        QVERIFY(callTool("cad.get_feature", QJsonObject{{"featureId", source}})
+            .value("visible").toBool() == false);
 
         const auto rotated = callTool("cad.rotate", QJsonObject{
             {"featureIds", QJsonArray{translatedId}}, {"mode", "copy"},
@@ -372,6 +372,91 @@ private slots:
         QVERIFY(callTool("cad.redo").value("success").toBool());
         QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", splitId}})
             .value("valid").toBool());
+    }
+
+    void componentOperationsThroughMcp()
+    {
+        const auto inventory = protocolCall("tools/list").value("result").toObject()
+            .value("tools").toArray();
+        for (const auto& name : {QStringLiteral("cad.get_components"),
+                                 QStringLiteral("cad.get_component"),
+                                 QStringLiteral("cad.transform_component"),
+                                 QStringLiteral("cad.split_component")}) {
+            bool found = false;
+            for (const auto& value : inventory)
+                found = found || value.toObject().value("name").toString() == name;
+            QVERIFY2(found, qPrintable("Missing component tool: " + name));
+        }
+
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto source = createRectangleExtrude(10.0, 4.0, 2.0);
+        QVERIFY(!source.isEmpty());
+        const auto components = callTool("cad.get_components");
+        QCOMPARE(components.value("componentCount").toInt(), 1);
+        const auto sourceComponent = components.value("components").toArray().first()
+            .toObject().value("id").toString();
+        QVERIFY(!sourceComponent.isEmpty());
+        QVERIFY(callTool("cad.get_component", QJsonObject{{"componentId", sourceComponent}})
+            .value("shape").toObject().value("valid").toBool());
+
+        const auto transformed = callTool("cad.transform_component", QJsonObject{
+            {"componentId", sourceComponent}, {"operation", "translate"},
+            {"mode", "replace_result"}, {"vector", QJsonArray{20.0, 0.0, 0.0}},
+            {"units", "mm"}});
+        const auto transformedId = transformed.value("featureId").toString();
+        QVERIFY(!transformedId.isEmpty());
+        const auto transformedComponents = transformed.value("componentIds").toArray();
+        QCOMPARE(transformedComponents.size(), 1);
+        const auto transformedComponent = transformedComponents.first().toString();
+        QVERIFY(!transformedComponent.isEmpty());
+        QCOMPARE(callTool("cad.get_component", QJsonObject{{"componentId", sourceComponent}})
+            .value("effectiveVisibility").toString(), QStringLiteral("hidden"));
+        verifyOneSolid(transformedId, 10.0, 4.0, 2.0);
+        const auto transformedBounds = callTool("cad.inspect_shape",
+            QJsonObject{{"featureId", transformedId}}).value("boundingBox").toObject();
+        QCOMPARE(qRound(transformedBounds.value("min").toArray().at(0).toDouble()), 20);
+
+        const auto split = callTool("cad.split_component", QJsonObject{
+            {"componentId", transformedComponent},
+            {"origin", QJsonArray{25.0, 0.0, 0.0}},
+            {"normal", QJsonArray{1.0, 0.0, 0.0}}, {"units", "mm"}});
+        const auto splitComponents = split.value("componentIds").toArray();
+        QCOMPARE(splitComponents.size(), 2);
+        for (const auto& value : splitComponents) {
+            const auto componentId = value.toString();
+            QVERIFY(!componentId.isEmpty());
+            const auto inspection = callTool("cad.get_component",
+                QJsonObject{{"componentId", componentId}}).value("shape").toObject();
+            QVERIFY(inspection.value("valid").toBool());
+            QCOMPARE(inspection.value("solidCount").toInt(), 1);
+        }
+        const auto negativeFeature = split.value("featureId").toString();
+        QVERIFY(!negativeFeature.isEmpty());
+        const auto treeAfterSplit = callTool("cad.get_model_tree");
+        QVERIFY(treeAfterSplit.value("featureCount").toInt() >= 5);
+        QCOMPARE(callTool("cad.get_component", QJsonObject{{"componentId", transformedComponent}})
+            .value("effectiveVisibility").toString(), QStringLiteral("hidden"));
+
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QCOMPARE(callTool("cad.get_component", QJsonObject{{"componentId", transformedComponent}})
+            .value("effectiveVisibility").toString(), QStringLiteral("visible"));
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QCOMPARE(callTool("cad.get_component", QJsonObject{{"componentId", transformedComponent}})
+            .value("effectiveVisibility").toString(), QStringLiteral("hidden"));
+
+        const QString saved = temporaryDirectory_.filePath("components-1c.pcad");
+        QVERIFY(callTool("cad.save_project", QJsonObject{{"path", saved}})
+            .value("success").toBool());
+        QVERIFY(callTool("cad.open_project", QJsonObject{{"path", saved}})
+            .value("success").toBool());
+        QCOMPARE(callTool("cad.get_components").value("componentCount").toInt(), 4);
+        QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", negativeFeature}})
+            .value("valid").toBool());
+
+        verifyStructuredToolError("cad.transform_component", QJsonObject{
+            {"componentId", "missing-component"}, {"operation", "translate"},
+            {"mode", "copy"}, {"vector", QJsonArray{1.0, 0.0, 0.0}}, {"units", "mm"}},
+            "component");
     }
 
     void mirrorPreservesPocketOpeningsThroughMcp()

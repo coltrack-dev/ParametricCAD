@@ -16,6 +16,8 @@
 #include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
@@ -3355,6 +3357,102 @@ ParametricFeature::Ptr TransformFeature::clone(std::string newId) const
 
 namespace {
 
+bool componentMetricMatches(const TopoDS_Shape& shape, const cad::parametric::ModelComponent& component)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) return false;
+    Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
+    bounds.Get(minX, minY, minZ, maxX, maxY, maxZ);
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    const auto close = [](double left, double right) {
+        return std::abs(left - right) <= 1.0e-6
+            * std::max({1.0, std::abs(left), std::abs(right)});
+    };
+    return close(minX, component.minX) && close(minY, component.minY)
+        && close(minZ, component.minZ) && close(maxX, component.maxX)
+        && close(maxY, component.maxY) && close(maxZ, component.maxZ)
+        && close(properties.Mass(), component.volume);
+}
+
+TopoDS_Shape resolveComponentShape(const TopoDS_Shape& source,
+                                   const cad::parametric::ModelComponent& component)
+{
+    if (source.IsNull()) throw std::runtime_error("Component source has no valid shape");
+    if (source.ShapeType() == TopAbs_SOLID) {
+        if (componentMetricMatches(source, component)) return source;
+        throw std::runtime_error("Component reference no longer resolves uniquely");
+    }
+    TopoDS_Shape match;
+    for (TopExp_Explorer explorer(source, TopAbs_SOLID); explorer.More(); explorer.Next()) {
+        if (!componentMetricMatches(explorer.Current(), component)) continue;
+        if (!match.IsNull()) throw std::runtime_error("Component reference is ambiguous");
+        match = explorer.Current();
+    }
+    if (match.IsNull()) throw std::runtime_error("Component reference no longer resolves");
+    return match;
+}
+
+QJsonArray componentBounds(const cad::parametric::ModelComponent& component)
+{
+    return QJsonArray{component.minX, component.minY, component.minZ,
+        component.maxX, component.maxY, component.maxZ, component.volume};
+}
+
+} // namespace
+
+ComponentTransformFeature::ComponentTransformFeature(
+    std::string id, const Ptr& source, ModelComponent component,
+    const TransformOperation operation, const TransformResultMode resultMode,
+    const gp_Trsf transformation)
+    : ParametricFeature(std::move(id), "Component Transform"),
+      sourceFeatureId_(source ? source->id() : std::string{}),
+      sourceComponentId_(component.id), source_(source), component_(std::move(component)),
+      operation_(operation), resultMode_(resultMode), transformation_(transformation)
+{
+    if (!source) throw std::invalid_argument("Component transform source must not be null");
+    if (sourceComponentId_.empty()) throw std::invalid_argument("Component id must not be empty");
+    addDependency(source);
+}
+
+TopoDS_Shape ComponentTransformFeature::build() const
+{
+    const auto sourceShape = resolveComponentShape(source_->shape(), component_);
+    BRepBuilderAPI_Transform builder(sourceShape, transformation_, Standard_True);
+    if (!builder.IsDone() || builder.Shape().IsNull())
+        throw std::runtime_error("OCCT component transform failed");
+    BRepCheck_Analyzer analyzer(builder.Shape());
+    if (!analyzer.IsValid()) throw std::runtime_error("Component transform B-Rep is invalid");
+    return builder.Shape();
+}
+
+void ComponentTransformFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("sourceComponentId", QString::fromStdString(sourceComponentId_));
+    object.insert("componentSignature", componentBounds(component_));
+    object.insert("operation", operation_ == TransformOperation::Mirror ? "Mirror"
+        : operation_ == TransformOperation::Translate ? "Translate" : "Rotate");
+    object.insert("resultMode", resultMode_ == TransformResultMode::Copy
+        ? "copy" : "replace_result");
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(transformation_.Value(row, column));
+    object.insert("transformation", matrix);
+}
+
+ParametricFeature::Ptr ComponentTransformFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ComponentTransformFeature>(std::move(newId), source_, component_,
+        operation_, resultMode_, transformation_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+namespace {
+
 TopoDS_Shape transformSplitSource(const TopoDS_Shape& source, const gp_Trsf& transform)
 {
     if (source.IsNull()) throw std::runtime_error("Split source has no valid shape");
@@ -3441,6 +3539,67 @@ ParametricFeature::Ptr SplitSegmentFeature::clone(std::string newId) const
 {
     auto copy = std::make_shared<SplitSegmentFeature>(std::move(newId), source_, sourceTransform_,
         splitCoordinate_, side_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ComponentSplitFeature::ComponentSplitFeature(
+    std::string id, const Ptr& source, ModelComponent component, const gp_Pnt origin,
+    const gp_Dir normal, const ComponentSplitSide side)
+    : ParametricFeature(std::move(id), "Component Split"),
+      sourceFeatureId_(source ? source->id() : std::string{}),
+      sourceComponentId_(component.id), source_(source), component_(std::move(component)),
+      origin_(origin), normal_(normal), side_(side)
+{
+    if (!source) throw std::invalid_argument("Component split source must not be null");
+    if (sourceComponentId_.empty()) throw std::invalid_argument("Component id must not be empty");
+    addDependency(source);
+}
+
+TopoDS_Shape ComponentSplitFeature::build() const
+{
+    const auto sourceShape = resolveComponentShape(source_->shape(), component_);
+    Bnd_Box bounds;
+    BRepBndLib::Add(sourceShape, bounds);
+    if (bounds.IsVoid()) throw std::runtime_error("Cannot split an empty component");
+    Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
+    bounds.Get(minX, minY, minZ, maxX, maxY, maxZ);
+    const double extent = std::max({maxX - minX, maxY - minY, maxZ - minZ, 1.0}) + 1.0;
+    const auto plane = BRepBuilderAPI_MakeFace(
+        gp_Pln(origin_, normal_), -extent, extent, -extent, extent).Face();
+    if (plane.IsNull()) throw std::runtime_error("Failed to construct split plane");
+    gp_Vec sideOffset(normal_);
+    sideOffset *= side_ == ComponentSplitSide::Negative ? -extent : extent;
+    gp_Pnt reference = origin_;
+    reference.Translate(sideOffset);
+    BRepPrimAPI_MakeHalfSpace halfSpace(plane, reference);
+    if (!halfSpace.IsDone()) throw std::runtime_error("Failed to construct split half-space");
+    BRepAlgoAPI_Common common(sourceShape, halfSpace.Solid());
+    common.Build();
+    if (!common.IsDone() || common.Shape().IsNull())
+        throw std::runtime_error("OCCT component split failed");
+    int solids = 0;
+    for (TopExp_Explorer explorer(common.Shape(), TopAbs_SOLID); explorer.More(); explorer.Next()) ++solids;
+    if (solids != 1) throw std::runtime_error("Component split must produce exactly one solid per segment");
+    BRepCheck_Analyzer analyzer(common.Shape());
+    if (!analyzer.IsValid()) throw std::runtime_error("Component split B-Rep is invalid");
+    return common.Shape();
+}
+
+void ComponentSplitFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("sourceComponentId", QString::fromStdString(sourceComponentId_));
+    object.insert("componentSignature", componentBounds(component_));
+    object.insert("planeOrigin", QJsonArray{origin_.X(), origin_.Y(), origin_.Z()});
+    object.insert("planeNormal", QJsonArray{normal_.X(), normal_.Y(), normal_.Z()});
+    object.insert("side", side_ == ComponentSplitSide::Negative ? "negative" : "positive");
+}
+
+ParametricFeature::Ptr ComponentSplitFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ComponentSplitFeature>(std::move(newId), source_, component_,
+        origin_, normal_, side_);
     copyPlacementTo(copy);
     return copy;
 }

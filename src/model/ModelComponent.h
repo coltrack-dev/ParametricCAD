@@ -22,6 +22,7 @@ struct ModelComponent
     std::string role{"solid"};
     std::string sourceFeatureId;
     std::optional<std::string> parentComponentId;
+    std::vector<std::string> replacementComponentIds;
     double minX{0.0};
     double minY{0.0};
     double minZ{0.0};
