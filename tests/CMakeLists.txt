@@ -61,6 +61,7 @@ add_executable(push_pull_drag_tests
     ../src/model/TopologicalReference.cpp
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
+    ../src/model/ModelComponent.cpp
     ../src/model/ShapePayload.cpp
     ../src/viewer/TransformGizmoPicking.cpp
 )
@@ -116,6 +117,7 @@ add_library(model_test_support STATIC
     ../src/model/Feature.cpp
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
+    ../src/model/ModelComponent.cpp
     ../src/model/ShapePayload.cpp
     ../src/model/TopologicalReference.cpp
     ../src/operations/BoxFeature.cpp
@@ -141,6 +143,12 @@ target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     ParametricCAD::OCCTModeling
     ParametricCAD::OCCTVisualization
     ParametricCAD::CAECore)
+
+add_executable(model_component_tests model_component_tests.cpp)
+target_include_directories(model_component_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(model_component_tests PRIVATE model_test_support
+    ParametricCAD::OCCTModeling)
+add_test(NAME model_component_tests COMMAND model_component_tests)
 
 add_executable(electrostatic_boundary_tests
     electrostatic_boundary_tests.cpp
@@ -265,6 +273,7 @@ set(_main_window_test_support_sources
     "${PROJECT_SOURCE_DIR}/src/viewer/BimInspectorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/CadViewer.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/SketchEntityPicker.cpp"
+    "${PROJECT_SOURCE_DIR}/src/model/ModelComponent.cpp"
 )
 add_library(main_window_test_support STATIC ${_main_window_test_support_sources})
 unset(_main_window_test_support_sources)

@@ -64,6 +64,7 @@ set(PARAMETRIC_CAD_SOURCES
     model/Feature.cpp
     model/Feature.h
     model/ParametricFeature.cpp
+    model/ModelComponent.cpp
     model/ParametricFeature.h
     model/TopologicalReference.cpp
     model/TopologicalReference.h

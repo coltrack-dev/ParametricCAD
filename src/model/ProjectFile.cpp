@@ -637,6 +637,54 @@ QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
     return feature->serialize();
 }
 
+QJsonArray encodeComponents(const Body& body)
+{
+    QJsonArray result;
+    for (const auto& component : body.components()) {
+        QJsonObject object{
+            {"id", QString::fromStdString(component.id)},
+            {"name", QString::fromStdString(component.name)},
+            {"role", QString::fromStdString(component.role)},
+            {"sourceFeatureId", QString::fromStdString(component.sourceFeatureId)},
+            {"min", QJsonArray{component.minX, component.minY, component.minZ}},
+            {"max", QJsonArray{component.maxX, component.maxY, component.maxZ}},
+            {"volume", component.volume}, {"visible", component.visible}};
+        if (component.parentComponentId)
+            object.insert("parentComponentId", QString::fromStdString(*component.parentComponentId));
+        result.append(object);
+    }
+    return result;
+}
+
+std::vector<ModelComponent> decodeComponents(const QJsonObject& root)
+{
+    std::vector<ModelComponent> result;
+    const auto value = root.value("components");
+    if (value.isUndefined()) return result;
+    require(value.isArray(), "Invalid component metadata");
+    for (const auto& entry : value.toArray()) {
+        require(entry.isObject(), "Invalid component metadata entry");
+        const auto object = entry.toObject();
+        const auto min = object.value("min").toArray();
+        const auto max = object.value("max").toArray();
+        require(min.size() == 3 && max.size() == 3, "Invalid component bounds");
+        ModelComponent component;
+        component.id = string(object, "id");
+        component.name = string(object, "name");
+        component.role = string(object, "role");
+        component.sourceFeatureId = string(object, "sourceFeatureId");
+        component.minX = min.at(0).toDouble(); component.minY = min.at(1).toDouble();
+        component.minZ = min.at(2).toDouble(); component.maxX = max.at(0).toDouble();
+        component.maxY = max.at(1).toDouble(); component.maxZ = max.at(2).toDouble();
+        component.volume = number(object, "volume");
+        if (object.contains("visible")) component.visible = boolean(object, "visible");
+        if (object.contains("parentComponentId"))
+            component.parentComponentId = string(object, "parentComponentId");
+        result.push_back(std::move(component));
+    }
+    return result;
+}
+
 using FeatureFactory = std::function<ParametricFeature::Ptr(const QJsonObject&, const Body&)>;
 
 const std::unordered_map<std::string, FeatureFactory>& factories()
@@ -1026,7 +1074,8 @@ bool ProjectFile::save(const QString& path, const Document& document,
         }
         QJsonObject root{{"format", "ParametricCAD"}, {"version", 1},
             {"storage", "archive"}, {"containerVersion", 1},
-            {"features", features}, {"body", history}};
+            {"features", features}, {"body", history},
+            {"components", encodeComponents(body)}};
         if (visibilityManager) {
             QJsonArray groups;
             for (const auto& group : visibilityManager->groups()) {
@@ -1206,6 +1255,8 @@ bool ProjectFile::load(const QString& path, Document& document,
             loadedBody.addFeature(decode(object, loadedBody));
             if (progress) progress(legacyFeatures.size() + index + 1, totalFeatures);
         }
+        const auto loadedComponents = decodeComponents(root);
+        if (!loadedComponents.empty()) loadedBody.replaceComponents(loadedComponents);
         if (metrics) metrics->deserializeMilliseconds = stageTimer.elapsed();
         stageTimer.restart();
         if (recompute && !loadedBody.recompute()) throw std::runtime_error(loadedBody.lastError());

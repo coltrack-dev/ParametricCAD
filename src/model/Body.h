@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ParametricFeature.h"
+#include "model/ModelComponent.h"
 
 #include <TopoDS_Shape.hxx>
 
@@ -25,6 +26,10 @@ public:
     FeaturePtr findFeature(const std::string& featureId) const;
 
     const std::vector<FeaturePtr>& features() const noexcept;
+    const std::vector<ModelComponent>& components() const noexcept { return components_; }
+    ModelComponent* findComponent(const std::string& componentId) noexcept;
+    const ModelComponent* findComponent(const std::string& componentId) const noexcept;
+    void replaceComponents(std::vector<ModelComponent> components);
     const TopoDS_Shape& shape() const noexcept;
 
     bool recompute();
@@ -46,6 +51,7 @@ private:
     std::uint64_t geometryRevision_{0};
     bool recomputeDeferred_{false};
     bool incrementalRecomputeActive_{false};
+    std::vector<ModelComponent> components_;
 };
 
 } // namespace cad::parametric

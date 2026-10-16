@@ -15,6 +15,7 @@
 #include "operations/SketchPathBuilder.h"
 #include "application/SelectionResolver.h"
 #include "application/ModelTransaction.h"
+#include "model/ModelComponent.h"
 #include "automation/CadAutomationService.h"
 
 #include <QAction>
@@ -167,6 +168,23 @@ QJsonObject featureJson(const cad::parametric::ParametricFeature& feature,
         }
         result.insert("topology", QJsonObject{{"faces", faces}});
     }
+    return result;
+}
+
+QJsonObject componentJson(const cad::parametric::ModelComponent& component)
+{
+    QJsonObject result{
+        {"id", QString::fromStdString(component.id)},
+        {"name", QString::fromStdString(component.name)},
+        {"role", QString::fromStdString(component.role)},
+        {"sourceFeatureId", QString::fromStdString(component.sourceFeatureId)},
+        {"visible", component.visible},
+        {"boundingBox", QJsonObject{
+            {"min", QJsonArray{component.minX, component.minY, component.minZ}},
+            {"max", QJsonArray{component.maxX, component.maxY, component.maxZ}}}},
+        {"volume", component.volume}};
+    if (component.parentComponentId)
+        result.insert("parentComponentId", QString::fromStdString(*component.parentComponentId));
     return result;
 }
 
@@ -806,7 +824,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     const QJsonObject params = request.value("params").toObject();
     const QString tool = params.value("tool").toString();
     const QJsonObject arguments = params.value("arguments").toObject();
-    static const QStringList tools{
+    static QStringList tools{
         "cad.get_model_tree", "cad.get_feature", "cad.inspect_shape",
         "cad.get_selection", "cad.get_view_state", "cad.screenshot",
         "cad.get_application_status", "cad.new_project", "cad.open_project",
@@ -820,7 +838,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.remove_constraint", "cad.get_constraints", "cad.linear_pattern",
         "cad.path_pattern", "cad.get_feature_dependencies", "cad.find_topology",
         "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch", "cad.mirror",
-        "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature"};
+        "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
+        "cad.get_components", "cad.get_component", "cad.get_component_topology"};
     static const QStringList transactionalTools{
         "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
         "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
@@ -835,6 +854,18 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
          || tool == "cad.get_application_status" || tool == "cad.inspect_model")
         && !arguments.isEmpty())
         return rpcError(id, -32602, "This tool does not accept arguments");
+    if (tool == "cad.get_components") {
+        if (!hasOnly({"featureId"}) && !arguments.isEmpty())
+            return rpcError(id, -32602, "get_components accepts only featureId");
+        if (arguments.contains("featureId") && !arguments.value("featureId").isString())
+            return rpcError(id, -32602, "featureId must be a string");
+    }
+    if (tool == "cad.get_component" || tool == "cad.get_component_topology") {
+        if (!hasOnly({"componentId"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty())
+            return rpcError(id, -32602, "componentId must be the only non-empty string argument");
+    }
     if ((tool == "cad.get_feature" || tool == "cad.inspect_shape")
         && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
             || arguments.value("featureId").toString().isEmpty()))
@@ -964,6 +995,47 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         result = QJsonObject{{"features", features},
             {"featureCount", features.size()},
             {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.get_components") {
+        const QString featureId = arguments.value("featureId").toString();
+        QJsonArray components;
+        if (!featureId.isEmpty()) {
+            for (const auto& component : cad::parametric::ComponentResolver::enumerate(
+                     modeling_.body(), featureId.toStdString()))
+                components.append(componentJson(component));
+            for (const auto& component : modeling_.body().components())
+                if (component.sourceFeatureId == featureId.toStdString())
+                    components.append(componentJson(component));
+        } else {
+            for (const auto& component : modeling_.body().components())
+                components.append(componentJson(component));
+            if (components.isEmpty()) {
+                for (const auto& feature : modeling_.body().features())
+                    for (const auto& component : cad::parametric::ComponentResolver::enumerate(
+                             modeling_.body(), feature->id()))
+                        components.append(componentJson(component));
+            }
+        }
+        result = QJsonObject{{"components", components}, {"componentCount", components.size()}};
+    } else if (tool == "cad.get_component" || tool == "cad.get_component_topology") {
+        const auto componentId = arguments.value("componentId").toString().toStdString();
+        std::string resolveError;
+        const auto resolved = cad::parametric::ComponentResolver::resolve(
+            modeling_.body(), componentId, resolveError);
+        if (!resolved)
+            return rpcError(id, -32004, "Component could not be resolved",
+                QJsonObject{{"componentId", QString::fromStdString(componentId)},
+                            {"message", QString::fromStdString(resolveError)}});
+        result = componentJson(resolved->component);
+        result.insert("shape", shapeInspection(resolved->shape));
+        if (tool == "cad.get_component_topology") {
+            QJsonArray faces;
+            for (TopExp_Explorer explorer(resolved->shape, TopAbs_FACE);
+                 explorer.More(); explorer.Next())
+                faces.append(cad::topology::toJson(
+                    cad::topology::TopologicalSignatureBuilder::createReference(
+                        componentId, resolved->shape, TopoDS::Face(explorer.Current()))));
+            result.insert("topology", QJsonObject{{"faces", faces}});
+        }
     } else if (tool == "cad.get_feature" || tool == "cad.inspect_shape") {
         const QString featureId = arguments.value("featureId").toString();
         if (featureId.isEmpty()) return rpcError(id, -32602, "featureId is required");

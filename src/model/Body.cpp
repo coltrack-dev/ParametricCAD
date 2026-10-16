@@ -103,6 +103,32 @@ const std::vector<Body::FeaturePtr>& Body::features() const noexcept
     return features_;
 }
 
+ModelComponent* Body::findComponent(const std::string& componentId) noexcept
+{
+    auto iterator = std::find_if(components_.begin(), components_.end(),
+        [&componentId](const ModelComponent& component) { return component.id == componentId; });
+    return iterator == components_.end() ? nullptr : &*iterator;
+}
+
+const ModelComponent* Body::findComponent(const std::string& componentId) const noexcept
+{
+    auto iterator = std::find_if(components_.begin(), components_.end(),
+        [&componentId](const ModelComponent& component) { return component.id == componentId; });
+    return iterator == components_.end() ? nullptr : &*iterator;
+}
+
+void Body::replaceComponents(std::vector<ModelComponent> components)
+{
+    std::unordered_set<std::string> ids;
+    for (const auto& component : components) {
+        if (component.id.empty() || !ids.insert(component.id).second)
+            throw std::invalid_argument("Component ids must be non-empty and unique");
+        if (!findFeature(component.sourceFeatureId))
+            throw std::invalid_argument("Component source feature is missing");
+    }
+    components_ = std::move(components);
+}
+
 const TopoDS_Shape& Body::shape() const noexcept
 {
     return resultShape_;
