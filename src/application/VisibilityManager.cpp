@@ -3,6 +3,7 @@
 #include "model/Body.h"
 #include "model/FeatureVisibility.h"
 #include "model/ParametricFeature.h"
+#include "model/ModelComponent.h"
 
 #include <BRepBndLib.hxx>
 #include <algorithm>
@@ -100,6 +101,36 @@ bool VisibilityManager::isolationActive() const noexcept
     return !isolatedFeatureIds_.empty();
 }
 
+void VisibilityManager::setIsolatedComponents(const std::vector<std::string>& componentIds)
+{
+    isolatedComponentIds_.clear();
+    isolatedComponentIds_.insert(componentIds.begin(), componentIds.end());
+}
+
+void VisibilityManager::clearComponentIsolation()
+{
+    isolatedComponentIds_.clear();
+}
+
+bool VisibilityManager::componentIsolationActive() const noexcept
+{
+    return !isolatedComponentIds_.empty();
+}
+
+void VisibilityManager::setComponentVisibility(const std::string& componentId,
+                                                const VisibilityMode mode)
+{
+    if (mode == VisibilityMode::Visible) componentModes_.erase(componentId);
+    else componentModes_[componentId] = mode;
+}
+
+VisibilityMode VisibilityManager::componentVisibilityMode(
+    const std::string& componentId) const noexcept
+{
+    const auto found = componentModes_.find(componentId);
+    return found == componentModes_.end() ? VisibilityMode::Visible : found->second;
+}
+
 void VisibilityManager::ghostOthers(const std::vector<std::string>& selectedIds)
 {
     ghostedSelectionIds_.clear();
@@ -159,7 +190,9 @@ std::optional<std::pair<gp_Pnt, gp_Pnt>> VisibilityManager::spatialBounds(
 void VisibilityManager::clear()
 {
     clearIsolation();
+    clearComponentIsolation();
     clearGhosting();
+    componentModes_.clear();
     groups_.clear();
     clearFilters();
     presets_.clear();
@@ -646,6 +679,56 @@ VisibilityMode VisibilityManager::effectiveMode(
         }
     }
     return modeForFeature(feature, hiddenFeatureSet, groupModes, filters_);
+}
+
+ComponentVisibilityResult VisibilityManager::effectiveComponentVisibility(
+    const cad::parametric::ParametricFeature& feature,
+    const cad::parametric::ModelComponent& component,
+    const cad::parametric::Body& body) const
+{
+    ComponentVisibilityResult result;
+    result.parentFeatureMode = effectiveMode(feature, body);
+    result.parentFeatureVisible = result.parentFeatureMode != VisibilityMode::Hidden;
+    result.replaced = !component.replacementComponentIds.empty();
+    result.technicallyHidden = component.technicalHidden || result.replaced;
+
+    // Technical state has absolute precedence. It must not be resurrected by
+    // isolation, ghosting, or a user-visible component flag.
+    if (result.technicallyHidden) {
+        result.mode = VisibilityMode::Hidden;
+        result.reason = result.replaced ? "replaced" : "technical_hidden";
+        return result;
+    }
+    if (result.parentFeatureMode == VisibilityMode::Hidden) {
+        result.mode = VisibilityMode::Hidden;
+        result.reason = "parent_feature_hidden";
+        return result;
+    }
+    if (!component.visible) {
+        result.mode = VisibilityMode::Hidden;
+        result.reason = "component_hidden";
+        return result;
+    }
+    if (componentIsolationActive() && !isolatedComponentIds_.contains(component.id)) {
+        result.mode = VisibilityMode::Hidden;
+        result.reason = "component_isolation";
+        return result;
+    }
+    const auto explicitMode = componentVisibilityMode(component.id);
+    if (explicitMode == VisibilityMode::Hidden) {
+        result.mode = VisibilityMode::Hidden;
+        result.reason = "component_hidden";
+        return result;
+    }
+    if (result.parentFeatureMode == VisibilityMode::Ghosted
+        || explicitMode == VisibilityMode::Ghosted) {
+        result.mode = VisibilityMode::Ghosted;
+        result.reason = result.parentFeatureMode == VisibilityMode::Ghosted
+            ? "ghosted_by_feature_policy" : "component_ghosted";
+        return result;
+    }
+    result.reason = "visible";
+    return result;
 }
 
 VisibilityMode VisibilityManager::modeForFeature(

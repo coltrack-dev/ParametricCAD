@@ -648,7 +648,8 @@ QJsonArray encodeComponents(const Body& body)
             {"sourceFeatureId", QString::fromStdString(component.sourceFeatureId)},
             {"min", QJsonArray{component.minX, component.minY, component.minZ}},
             {"max", QJsonArray{component.maxX, component.maxY, component.maxZ}},
-            {"volume", component.volume}, {"visible", component.visible}};
+            {"volume", component.volume}, {"visible", component.visible},
+            {"technicalHidden", component.technicalHidden}};
         if (component.parentComponentId)
             object.insert("parentComponentId", QString::fromStdString(*component.parentComponentId));
         if (!component.replacementComponentIds.empty()) {
@@ -684,6 +685,8 @@ std::vector<ModelComponent> decodeComponents(const QJsonObject& root)
         component.maxY = max.at(1).toDouble(); component.maxZ = max.at(2).toDouble();
         component.volume = number(object, "volume");
         if (object.contains("visible")) component.visible = boolean(object, "visible");
+        if (object.contains("technicalHidden"))
+            component.technicalHidden = boolean(object, "technicalHidden");
         if (object.contains("parentComponentId"))
             component.parentComponentId = string(object, "parentComponentId");
         if (object.contains("replacementComponentIds")) {
@@ -694,6 +697,9 @@ std::vector<ModelComponent> decodeComponents(const QJsonObject& root)
                     "Invalid component replacement id");
                 component.replacementComponentIds.push_back(replacement.toString().toStdString());
             }
+            // Files written before technicalHidden was persisted encoded
+            // replacement state by the replacement list itself.
+            component.technicalHidden = true;
         }
         result.push_back(std::move(component));
     }

@@ -76,19 +76,31 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
             resolverMilliseconds += resolverTimer.elapsed();
             ++resolverCalls;
         }
-        if (components.size() > 1) {
-            // A compound is represented by its component AIS objects only;
-            // never display the compound and its children simultaneously.
+        if (components.empty() && feature->shape().ShapeType() == TopAbs_SOLID) {
+            // Component operations can produce a single-solid feature. If a
+            // persisted component record exists for it, use component-level
+            // presentation so technical replacement visibility is respected.
+            for (const auto& component : body_.components()) {
+                if (component.sourceFeatureId != feature->id()) continue;
+                std::string resolveError;
+                const auto resolved = cad::parametric::ComponentResolver::resolve(
+                    body_, component.id, resolveError);
+                if (resolved) components.push_back(*resolved);
+            }
+        }
+        if (!components.empty()) {
+            // A feature with component records is represented by its component
+            // AIS objects only; never display the feature and its children
+            // simultaneously.
             resolvedComponents += static_cast<int>(components.size());
             for (const auto& resolved : components) {
-                const auto component = body_.findComponent(resolved.component.id);
-                const bool visible = !component || component->visible;
+                const auto visibility = visibilityManager_.effectiveComponentVisibility(
+                    *feature, resolved.component, body_);
                 viewer_.updateComponent(resolved.shape,
                     QString::fromStdString(resolved.component.id),
                     QString::fromStdString(feature->id()));
-                if (!visible) viewer_.setComponentVisibility(
-                    QString::fromStdString(resolved.component.id),
-                    cad::application::VisibilityMode::Hidden);
+                viewer_.setComponentVisibility(
+                    QString::fromStdString(resolved.component.id), visibility.mode);
                 presentedComponents.append(QString::fromStdString(resolved.component.id));
             }
             continue;

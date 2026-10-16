@@ -31,6 +31,10 @@ struct ModelComponent
     double maxZ{0.0};
     double volume{0.0};
     bool visible{true};
+    // Technical replacement state is distinct from user visibility.  The
+    // default keeps old .pcad files compatible; replacement metadata is also
+    // treated as technical-hidden when loading legacy files.
+    bool technicalHidden{false};
 };
 
 struct ComponentResolution

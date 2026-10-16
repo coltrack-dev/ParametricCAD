@@ -423,6 +423,48 @@ private slots:
         QCOMPARE(dependentManager.effectiveMode(*base, dependentBody), VisibilityMode::Hidden);
     }
 
+    void componentVisibilityPolicyCentralizesParentAndReplacementState()
+    {
+        Body body;
+        auto parent = std::make_shared<BoxParametricFeature>("parent", 2, 2, 2);
+        body.addFeature(parent);
+        QVERIFY(body.recompute());
+
+        ModelComponent component;
+        component.id = "parent:component";
+        component.sourceFeatureId = parent->id();
+        body.replaceComponents({component});
+
+        VisibilityManager manager;
+        auto state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Visible);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("visible"));
+
+        parent->setUserVisible(false);
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Hidden);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("parent_feature_hidden"));
+
+        parent->setUserVisible(true);
+        component.technicalHidden = true;
+        component.replacementComponentIds = {"replacement:component"};
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Hidden);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("replaced"));
+
+        component.technicalHidden = false;
+        component.replacementComponentIds.clear();
+        manager.setComponentVisibility(component.id, VisibilityMode::Ghosted);
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Ghosted);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("component_ghosted"));
+
+        manager.setIsolatedComponents({"other:component"});
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Hidden);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("component_isolation"));
+    }
+
     void visibilityGroupsCombineAndValidate()
     {
         Body body;

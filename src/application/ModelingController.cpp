@@ -1886,6 +1886,7 @@ ModelingResult ModelingController::transformComponent(
         if (sourceIterator == after.end()) return componentFailure("Component metadata is unavailable");
         if (resultMode == cad::parametric::TransformResultMode::ReplaceResult) {
             sourceIterator->visible = false;
+            sourceIterator->technicalHidden = true;
             sourceIterator->replacementComponentIds = {resultComponentId};
         }
         after.push_back(resultComponent);
@@ -1939,6 +1940,7 @@ ModelingResult ModelingController::splitComponent(
             [&componentId](const ModelComponent& component) { return component.id == componentId; });
         if (sourceIterator == after.end()) return componentFailure("Component metadata is unavailable");
         sourceIterator->visible = false;
+        sourceIterator->technicalHidden = true;
         sourceIterator->replacementComponentIds = {negativeComponentId, positiveComponentId};
         after.push_back(negativeComponent);
         after.push_back(positiveComponent);
