@@ -820,7 +820,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.remove_constraint", "cad.get_constraints", "cad.linear_pattern",
         "cad.path_pattern", "cad.get_feature_dependencies", "cad.find_topology",
         "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch", "cad.mirror",
-        "cad.translate", "cad.rotate", "cad.transform_model"};
+        "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature"};
     static const QStringList transactionalTools{
         "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
         "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
@@ -842,7 +842,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.add_line",
         "cad.extrude", "cad.pocket", "cad.chamfer", "cad.fillet", "cad.shell",
         "cad.add_arc", "cad.linear_pattern", "cad.path_pattern", "cad.edit_sketch_profile",
-        "cad.mirror", "cad.translate", "cad.rotate", "cad.transform_model"};
+        "cad.mirror", "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature"};
     if (unitTools.contains(tool)) {
         QString unitsError;
         if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
@@ -1202,6 +1202,33 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!operation.success) return finishModeling(operation, "pocket");
         refreshModelView();
         return finishModeling(operation, "pocket");
+    } else if (tool == "cad.split_feature") {
+        const QStringList allowed{"featureId", "componentFeatureId", "splitCoordinate",
+            "moveNegative", "units"};
+        if (!hasOnly(allowed) || !arguments.value("featureId").isString()
+            || !arguments.value("componentFeatureId").isString()
+            || arguments.value("featureId").toString().isEmpty()
+            || arguments.value("componentFeatureId").toString().isEmpty()
+            || !arguments.value("splitCoordinate").isDouble())
+            return rpcError(id, -32602,
+                "split_feature requires featureId, componentFeatureId, splitCoordinate, moveNegative and units");
+        const auto movement = arguments.value("moveNegative").toArray();
+        if (movement.size() != 3 || !movement.at(0).isDouble()
+            || !movement.at(1).isDouble() || !movement.at(2).isDouble())
+            return rpcError(id, -32602, "moveNegative must contain three finite numbers");
+        const gp_Vec moveNegative(movement.at(0).toDouble(), movement.at(1).toDouble(),
+            movement.at(2).toDouble());
+        if (!std::isfinite(arguments.value("splitCoordinate").toDouble())
+            || !std::isfinite(moveNegative.X()) || !std::isfinite(moveNegative.Y())
+            || !std::isfinite(moveNegative.Z()))
+            return rpcError(id, -32602, "split_feature parameters must be finite");
+        const auto operation = modeling_.splitFeature(
+            arguments.value("featureId").toString().toStdString(),
+            arguments.value("componentFeatureId").toString().toStdString(),
+            arguments.value("splitCoordinate").toDouble(), moveNegative);
+        if (!operation.success) return finishModeling(operation, "split_feature");
+        refreshModelView();
+        return finishModeling(operation, "split_feature");
     } else if (tool == "cad.mirror" || tool == "cad.translate"
                || tool == "cad.rotate" || tool == "cad.transform_model") {
         const QString operationName = tool == "cad.mirror" ? "mirror"

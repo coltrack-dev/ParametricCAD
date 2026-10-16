@@ -258,7 +258,8 @@ private slots:
         const auto inventory = protocolCall("tools/list").value("result").toObject()
             .value("tools").toArray();
         for (const auto& name : {QStringLiteral("cad.mirror"), QStringLiteral("cad.translate"),
-                                 QStringLiteral("cad.rotate"), QStringLiteral("cad.transform_model")}) {
+                                 QStringLiteral("cad.rotate"), QStringLiteral("cad.transform_model"),
+                                 QStringLiteral("cad.split_feature")}) {
             bool found = false;
             for (const auto& value : inventory)
                 found = found || value.toObject().value("name").toString() == name;
@@ -330,6 +331,35 @@ private slots:
         QVERIFY(callTool("cad.undo").value("success").toBool());
         QVERIFY(callTool("cad.redo").value("success").toBool());
         QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", rotatedId}})
+            .value("valid").toBool());
+
+        // Split one component of a composite result through the real MCP
+        // stdio path.  The second box proves that unrelated result components
+        // remain in the assembly.
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto splitSource = createRectangleExtrude(10.0, 4.0, 2.0);
+        const auto otherSource = createRectangleExtrude(10.0, 4.0, 2.0, 20.0, 0.0);
+        QVERIFY(!splitSource.isEmpty() && !otherSource.isEmpty());
+        const auto composite = callTool("cad.transform_model", QJsonObject{
+            {"featureIds", QJsonArray{splitSource, otherSource}},
+            {"mode", "replace_result"}, {"operation", "translate"},
+            {"vector", QJsonArray{0.0, 0.0, 0.0}}, {"units", "mm"}})
+            .value("featureId").toString();
+        QVERIFY(!composite.isEmpty());
+        const auto split = callTool("cad.split_feature", QJsonObject{
+            {"featureId", composite}, {"componentFeatureId", splitSource},
+            {"splitCoordinate", 5.0}, {"moveNegative", QJsonArray{0.0, -1.0, 0.0}},
+            {"units", "mm"}});
+        const auto splitId = split.value("featureId").toString();
+        QVERIFY(!splitId.isEmpty());
+        const auto splitInspection = callTool("cad.inspect_shape",
+            QJsonObject{{"featureId", splitId}});
+        QVERIFY(splitInspection.value("valid").toBool());
+        QCOMPARE(splitInspection.value("solidCount").toInt(), 3);
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QCOMPARE(callTool("cad.get_model_tree").value("featureCount").toInt(), 5);
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", splitId}})
             .value("valid").toBool());
     }
 

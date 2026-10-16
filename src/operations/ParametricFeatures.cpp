@@ -15,9 +15,11 @@
 #include <BRep_Builder.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <TopExp.hxx>
@@ -3347,6 +3349,172 @@ ParametricFeature::Ptr TransformFeature::clone(std::string newId) const
     }
     auto copy = std::make_shared<TransformFeature>(std::move(newId), sources,
         operation_, resultMode_, transformation_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+namespace {
+
+TopoDS_Shape transformSplitSource(const TopoDS_Shape& source, const gp_Trsf& transform)
+{
+    if (source.IsNull()) throw std::runtime_error("Split source has no valid shape");
+    BRepBuilderAPI_Transform builder(source, transform, Standard_True);
+    if (!builder.IsDone() || builder.Shape().IsNull())
+        throw std::runtime_error("OCCT transform failed while preparing split source");
+    return builder.Shape();
+}
+
+TopoDS_Shape clipSplitShape(const TopoDS_Shape& source, const double coordinate,
+                            const SplitSide side)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(source, bounds);
+    if (bounds.IsVoid()) throw std::runtime_error("Cannot split an empty shape");
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double margin = std::max({1.0, xmax - xmin, ymax - ymin, zmax - zmin}) + 1.0;
+    const double lowX = side == SplitSide::Negative ? xmin - margin : coordinate;
+    const double highX = side == SplitSide::Negative ? coordinate : xmax + margin;
+    if (!(highX > lowX)) throw std::runtime_error("Split plane does not intersect the source shape");
+    const auto box = BRepPrimAPI_MakeBox(
+        gp_Pnt(lowX, ymin - margin, zmin - margin),
+        gp_Pnt(highX, ymax + margin, zmax + margin)).Shape();
+    if (box.IsNull()) throw std::runtime_error("Failed to construct split half-space");
+    BRepAlgoAPI_Common common(source, box);
+    common.Build();
+    if (!common.IsDone() || common.Shape().IsNull())
+        throw std::runtime_error("OCCT split intersection failed");
+    return common.Shape();
+}
+
+bool sameSolidBounds(const TopoDS_Shape& left, const TopoDS_Shape& right)
+{
+    Bnd_Box leftBounds;
+    Bnd_Box rightBounds;
+    BRepBndLib::Add(left, leftBounds);
+    BRepBndLib::Add(right, rightBounds);
+    if (leftBounds.IsVoid() || rightBounds.IsVoid()) return false;
+    Standard_Real lx, ly, lz, lX, lY, lZ, rx, ry, rz, rX, rY, rZ;
+    leftBounds.Get(lx, ly, lz, lX, lY, lZ);
+    rightBounds.Get(rx, ry, rz, rX, rY, rZ);
+    constexpr double tolerance = 1.0e-6;
+    return std::abs(lx - rx) <= tolerance && std::abs(ly - ry) <= tolerance
+        && std::abs(lz - rz) <= tolerance && std::abs(lX - rX) <= tolerance
+        && std::abs(lY - rY) <= tolerance && std::abs(lZ - rZ) <= tolerance;
+}
+
+} // namespace
+
+SplitSegmentFeature::SplitSegmentFeature(std::string id, const Ptr& source,
+    gp_Trsf sourceTransform, const double splitCoordinate, const SplitSide side)
+    : ParametricFeature(std::move(id), "Split Segment"),
+      sourceFeatureId_(source ? source->id() : std::string{}), source_(source),
+      sourceTransform_(std::move(sourceTransform)), splitCoordinate_(splitCoordinate), side_(side)
+{
+    if (!source) throw std::invalid_argument("Split segment source must not be null");
+    if (!std::isfinite(splitCoordinate_)) throw std::invalid_argument("Split coordinate must be finite");
+    addDependency(source);
+}
+
+TopoDS_Shape SplitSegmentFeature::build() const
+{
+    const auto transformed = transformSplitSource(source_->shape(), sourceTransform_);
+    const auto result = clipSplitShape(transformed, splitCoordinate_, side_);
+    BRepCheck_Analyzer analyzer(result);
+    if (!analyzer.IsValid()) throw std::runtime_error("Split segment B-Rep is invalid");
+    return result;
+}
+
+void SplitSegmentFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("splitCoordinate", splitCoordinate_);
+    object.insert("side", side_ == SplitSide::Negative ? "negative" : "positive");
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(sourceTransform_.Value(row, column));
+    object.insert("sourceTransform", matrix);
+}
+
+ParametricFeature::Ptr SplitSegmentFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<SplitSegmentFeature>(std::move(newId), source_, sourceTransform_,
+        splitCoordinate_, side_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+SplitAssemblyFeature::SplitAssemblyFeature(std::string id, const Ptr& wholeSource,
+    const Ptr& componentSource, const Ptr& negativeSegment, const Ptr& positiveSegment,
+    const Ptr& movedSegment, gp_Trsf componentTransform, const double splitCoordinate)
+    : ParametricFeature(std::move(id), "Split Assembly"),
+      wholeSourceId_(wholeSource ? wholeSource->id() : std::string{}),
+      componentSourceId_(componentSource ? componentSource->id() : std::string{}),
+      wholeSource_(wholeSource), componentSource_(componentSource),
+      negativeSegment_(negativeSegment), positiveSegment_(positiveSegment),
+      movedSegment_(movedSegment),
+      componentTransform_(std::move(componentTransform)), splitCoordinate_(splitCoordinate)
+{
+    if (!wholeSource || !componentSource || !negativeSegment || !positiveSegment || !movedSegment)
+        throw std::invalid_argument("Split assembly requires all source features");
+    addDependency(wholeSource);
+    addDependency(componentSource);
+    addDependency(negativeSegment);
+    addDependency(positiveSegment);
+    addDependency(movedSegment);
+}
+
+TopoDS_Shape SplitAssemblyFeature::build() const
+{
+    const auto whole = wholeSource_->shape();
+    const auto target = transformSplitSource(componentSource_->shape(), componentTransform_);
+    std::vector<TopoDS_Shape> components;
+    TopExp_Explorer explorer(whole, TopAbs_SOLID);
+    bool removed = false;
+    for (; explorer.More(); explorer.Next()) {
+        const auto solid = explorer.Current();
+        if (!removed && sameSolidBounds(solid, target)) {
+            removed = true;
+            continue;
+        }
+        components.push_back(solid);
+    }
+    if (!removed)
+        throw std::runtime_error("Split target component was not found in the selected result");
+    components.push_back(movedSegment_->shape());
+    components.push_back(positiveSegment_->shape());
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const auto& component : components) {
+        if (component.IsNull()) throw std::runtime_error("Split assembly contains a null segment");
+        builder.Add(compound, component);
+    }
+    BRepCheck_Analyzer analyzer(compound);
+    if (!analyzer.IsValid()) throw std::runtime_error("Split assembly B-Rep is invalid");
+    return compound;
+}
+
+void SplitAssemblyFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("wholeSourceFeatureId", QString::fromStdString(wholeSourceId_));
+    object.insert("componentSourceFeatureId", QString::fromStdString(componentSourceId_));
+    object.insert("negativeSegmentFeatureId", QString::fromStdString(negativeSegment_->id()));
+    object.insert("positiveSegmentFeatureId", QString::fromStdString(positiveSegment_->id()));
+    object.insert("movedSegmentFeatureId", QString::fromStdString(movedSegment_->id()));
+    object.insert("splitCoordinate", splitCoordinate_);
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(componentTransform_.Value(row, column));
+    object.insert("componentTransform", matrix);
+}
+
+ParametricFeature::Ptr SplitAssemblyFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<SplitAssemblyFeature>(std::move(newId), wholeSource_, componentSource_,
+        negativeSegment_, positiveSegment_, movedSegment_, componentTransform_, splitCoordinate_);
     copyPlacementTo(copy);
     return copy;
 }

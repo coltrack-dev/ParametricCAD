@@ -35,6 +35,7 @@ public:
         if (finished_) return false;
         body_.setRecomputeDeferred(false);
         if (!body_.recompute()) {
+            error_ = QString::fromStdString(body_.lastError());
             rollback();
             return false;
         }
@@ -60,12 +61,14 @@ public:
     }
 
     int stackIndex() const noexcept { return stackIndex_; }
+    const QString& error() const noexcept { return error_; }
 
 private:
     cad::parametric::Body& body_;
     QUndoStack& stack_;
     int stackIndex_{0};
     bool finished_{false};
+    QString error_;
 };
 
 } // namespace cad::application

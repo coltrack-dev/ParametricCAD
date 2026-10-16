@@ -215,6 +215,12 @@ public:
         cad::parametric::TransformResultMode resultMode,
         const gp_Trsf& transformation
     );
+    ModelingResult splitFeature(
+        const std::string& wholeFeatureId,
+        const std::string& componentFeatureId,
+        double splitCoordinate,
+        const gp_Vec& moveNegative
+    );
     ModelingResult duplicateFeature(const std::string& featureId);
     ModelingResult duplicateFeatureWithDelta(
         const std::string& featureId,

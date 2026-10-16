@@ -178,6 +178,13 @@ QJsonArray toolDefinitions()
             {"angleDegrees", QJsonObject{{"type", "number"}}},
             {"units", units}}},
         {"required", QJsonArray{"featureIds", "mode", "units"}}};
+    const QJsonObject splitFeature{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"featureId", QJsonObject{{"type", "string"}}},
+            {"componentFeatureId", QJsonObject{{"type", "string"}}},
+            {"splitCoordinate", QJsonObject{{"type", "number"}}},
+            {"moveNegative", QJsonObject{{"type", "array"}}}, {"units", units}}},
+        {"required", QJsonArray{"featureId", "componentFeatureId", "splitCoordinate", "moveNegative", "units"}}};
     const QJsonObject tools = QJsonObject{
         {"cad.get_model_tree", QJsonObject{{"description", "Inspect the parametric model tree"}, {"inputSchema", empty}}},
         {"cad.get_feature", QJsonObject{{"description", "Inspect one parametric feature"}, {"inputSchema", feature}}},
@@ -226,6 +233,7 @@ QJsonArray toolDefinitions()
         ,{"cad.translate", QJsonObject{{"description", "Create a persistent translation transform"}, {"inputSchema", transform}}}
         ,{"cad.rotate", QJsonObject{{"description", "Create a persistent rotation transform"}, {"inputSchema", transform}}}
         ,{"cad.transform_model", QJsonObject{{"description", "Create a persistent parametric spatial transform"}, {"inputSchema", transform}}}
+        ,{"cad.split_feature", QJsonObject{{"description", "Split one component of a composite result and move its negative-X segment"}, {"inputSchema", splitFeature}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {

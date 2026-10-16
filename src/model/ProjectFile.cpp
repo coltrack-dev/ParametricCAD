@@ -915,6 +915,32 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
             return std::make_shared<TransformFeature>(string(o, "id"), sources,
                 operation, mode, transformValue(o));
         }},
+        {"SplitSegment", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "SplitSegment references missing source");
+            const auto sideName = string(o, "side");
+            const auto side = sideName == "negative" ? SplitSide::Negative
+                : sideName == "positive" ? SplitSide::Positive
+                : throw std::invalid_argument("Invalid SplitSegment side");
+            QJsonObject matrixObject = o;
+            matrixObject.insert("transformation", o.value("sourceTransform"));
+            return std::make_shared<SplitSegmentFeature>(string(o, "id"), source,
+                transformValue(matrixObject), number(o, "splitCoordinate"), side);
+        }},
+        {"SplitAssembly", [](const QJsonObject& o, const Body& body) {
+            const auto whole = body.findFeature(string(o, "wholeSourceFeatureId"));
+            const auto component = body.findFeature(string(o, "componentSourceFeatureId"));
+            const auto negative = body.findFeature(string(o, "negativeSegmentFeatureId"));
+            const auto positive = body.findFeature(string(o, "positiveSegmentFeatureId"));
+            const auto moved = body.findFeature(string(o, "movedSegmentFeatureId"));
+            require(whole && component && negative && positive && moved,
+                "SplitAssembly references missing source");
+            QJsonObject matrixObject = o;
+            matrixObject.insert("transformation", o.value("componentTransform"));
+            return std::make_shared<SplitAssemblyFeature>(string(o, "id"), whole, component,
+                negative, positive, moved, transformValue(matrixObject),
+                number(o, "splitCoordinate"));
+        }},
         {"IfcImported", [](const QJsonObject& o, const Body&) {
             const auto payload = o.value("geometryPayload");
             require(payload.isString() && !payload.toString().isEmpty(),

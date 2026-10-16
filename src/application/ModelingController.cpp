@@ -126,6 +126,34 @@ bool segmentsIntersect(const gp_Pnt2d& a, const gp_Pnt2d& b,
     return onSegment(a, b, c) || onSegment(a, b, d)
         || onSegment(c, d, a) || onSegment(c, d, b);
 }
+
+std::optional<gp_Trsf> transformToComponent(
+    const cad::parametric::ParametricFeature::Ptr& root,
+    const std::string& componentId)
+{
+    if (!root) return std::nullopt;
+    if (root->id() == componentId) {
+        return gp_Trsf();
+    }
+    if (const auto transform = std::dynamic_pointer_cast<cad::parametric::TransformFeature>(root)) {
+        for (const auto& weakDependency : transform->dependencies()) {
+            const auto dependency = weakDependency.lock();
+            if (!dependency) continue;
+            const auto nested = transformToComponent(dependency, componentId);
+            if (!nested) continue;
+            gp_Trsf result = transform->transformation();
+            result.Multiply(*nested);
+            return result;
+        }
+        return std::nullopt;
+    }
+    for (const auto& weakDependency : root->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        const auto nested = transformToComponent(dependency, componentId);
+        if (nested) return nested;
+    }
+    return std::nullopt;
+}
 }
 
 cad::parametric::Body& ModelingController::body() noexcept { return body_; }
@@ -322,7 +350,11 @@ ModelingResult ModelingController::replaceSketchProfile(
         undoStack_.push(new cad::commands::ReplaceSketchCommand(
             body_, sketch, sketch->entities(), std::move(after),
             sketch->constraints(), sketch->constraints(), "Replace Sketch Profile"));
-        if (!transaction.commit()) return {false, {}, body_.lastError()};
+        if (!transaction.commit()) {
+            const auto message = transaction.error().isEmpty()
+                ? QStringLiteral("Split transaction failed") : transaction.error();
+            return {false, {}, message.toStdString()};
+        }
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);
@@ -1779,6 +1811,75 @@ ModelingResult ModelingController::createTransform(
         }
         if (!transaction.commit()) return {false, {}, body_.lastError()};
         return {true, transformId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::splitFeature(
+    const std::string& wholeFeatureId,
+    const std::string& componentFeatureId,
+    const double splitCoordinate,
+    const gp_Vec& moveNegative)
+{
+    const auto whole = body_.findFeature(wholeFeatureId);
+    const auto component = body_.findFeature(componentFeatureId);
+    if (!whole) return {false, {}, "Split whole feature does not exist"};
+    if (!component) return {false, {}, "Split component feature does not exist"};
+    if (!std::isfinite(splitCoordinate)) return {false, {}, "Split coordinate must be finite"};
+    const auto componentTransform = transformToComponent(whole, componentFeatureId);
+    if (!componentTransform) {
+        return {false, {}, "Split component is not a dependency of the selected result"};
+    }
+    const auto transformFeature = std::dynamic_pointer_cast<cad::parametric::TransformFeature>(whole);
+    if (!transformFeature) {
+        return {false, {}, "Split currently requires a composite Transform result"};
+    }
+    try {
+        const auto negativeId = id("split-negative");
+        const auto positiveId = id("split-positive");
+        const auto movedId = id("transform");
+        const auto assemblyId = id("split-assembly");
+        auto negative = std::make_shared<cad::parametric::SplitSegmentFeature>(
+            negativeId, component, *componentTransform, splitCoordinate,
+            cad::parametric::SplitSide::Negative);
+        auto positive = std::make_shared<cad::parametric::SplitSegmentFeature>(
+            positiveId, component, *componentTransform, splitCoordinate,
+            cad::parametric::SplitSide::Positive);
+        gp_Trsf translation;
+        translation.SetTranslation(moveNegative);
+        auto moved = std::make_shared<cad::parametric::TransformFeature>(
+            movedId, std::vector<cad::parametric::ParametricFeature::Ptr>{negative},
+            cad::parametric::TransformOperation::Translate,
+            cad::parametric::TransformResultMode::ReplaceResult, translation);
+        auto assembly = std::make_shared<cad::parametric::SplitAssemblyFeature>(
+            assemblyId, whole, component, negative, positive, moved,
+            *componentTransform, splitCoordinate);
+
+        // Validate the complete candidate before touching the document.  This
+        // also preserves the concrete OCCT diagnostic instead of losing it in
+        // a deferred Body recompute rollback.
+        if (!negative->recompute()) return {false, {}, negative->error()};
+        if (!positive->recompute()) return {false, {}, positive->error()};
+        if (!moved->recompute()) return {false, {}, moved->error()};
+        if (!assembly->recompute()) return {false, {}, assembly->error()};
+
+        ModelTransaction transaction(body_, undoStack_, "Split and Move Wall");
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, negative,
+            QStringLiteral("Split Wall Segment")));
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, positive,
+            QStringLiteral("Split Wall Segment")));
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, moved,
+            QStringLiteral("Move Wall Segment")));
+        // The assembly consumes the moved segment by reference in its visible result.
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, assembly,
+            QStringLiteral("Assemble Split Wall")));
+        undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+            body_, {wholeFeatureId}, {whole->userVisible()}, {false},
+            QStringLiteral("Hide Original Wall Result")));
+        if (!transaction.commit()) return {false, {}, body_.lastError()};
+        assembly->setUserVisible(true);
+        return {true, assemblyId, {}};
     } catch (const std::exception& error) {
         return failure(error);
     }
