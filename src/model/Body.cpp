@@ -110,6 +110,7 @@ const TopoDS_Shape& Body::shape() const noexcept
 
 bool Body::recompute()
 {
+    if (recomputeDeferred_) return true;
     beginIncrementalRecompute();
     for (std::size_t index = 0; index < features_.size(); ++index) {
         if (!recomputeFeature(index)) return false;

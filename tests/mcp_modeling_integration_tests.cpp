@@ -134,7 +134,8 @@ private:
         const auto error = response.value("result").toObject().value("structuredContent")
             .toObject().value("error").toObject();
         QVERIFY(error.value("code").toInt() == -32602 || error.value("code").toInt() == -32020
-            || error.value("code").toInt() == -32001 || error.value("code").toInt() == -32002);
+            || error.value("code").toInt() == -32001 || error.value("code").toInt() == -32002
+            || error.value("code").toInt() == -32005);
         if (!messagePart.isEmpty())
             QVERIFY(error.value("message").toString().contains(messagePart, Qt::CaseInsensitive));
     }
@@ -250,6 +251,101 @@ private slots:
         QVERIFY(missing.value("result").toObject().value("isError").toBool());
         QCOMPARE(missing.value("result").toObject().value("structuredContent")
             .toObject().value("error").toObject().value("code").toInt(), -32004);
+    }
+
+    void transactionalProfileEditingThroughMcp()
+    {
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto sketchId = callTool("cad.create_sketch", QJsonObject{{"support", "XY"}})
+            .value("featureId").toString();
+        QVERIFY(!sketchId.isEmpty());
+        QVERIFY(callTool("cad.add_rectangle", QJsonObject{{"sketchId", sketchId},
+            {"x", 0.0}, {"y", 0.0}, {"width", 10.0}, {"height", 8.0}, {"units", "mm"}})
+            .value("success").toBool());
+        const auto extrudeId = callTool("cad.extrude", QJsonObject{{"sketchId", sketchId},
+            {"distance", 4.0}, {"units", "mm"}}).value("featureId").toString();
+        QVERIFY(!extrudeId.isEmpty());
+        const auto beforeEntities = callTool("cad.get_sketch_entities",
+            QJsonObject{{"sketchId", sketchId}}).value("entities").toArray();
+        QCOMPARE(beforeEntities.size(), 4);
+
+        const QJsonArray replacement{
+            QJsonObject{{"x1", 0.0}, {"y1", 0.0}, {"x2", 12.0}, {"y2", 0.0}},
+            QJsonObject{{"x1", 12.0}, {"y1", 0.0}, {"x2", 12.0}, {"y2", 9.0}},
+            QJsonObject{{"x1", 12.0}, {"y1", 9.0}, {"x2", 0.0}, {"y2", 9.0}},
+            QJsonObject{{"x1", 0.0}, {"y1", 9.0}, {"x2", 0.0}, {"y2", 0.0}}};
+        QVERIFY(callTool("cad.edit_sketch_profile", QJsonObject{{"sketchId", sketchId},
+            {"segments", replacement}, {"units", "mm"}}).value("success").toBool());
+        verifyOneSolid(extrudeId, 12.0, 9.0, 4.0);
+        const auto afterEntities = callTool("cad.get_sketch_entities",
+            QJsonObject{{"sketchId", sketchId}}).value("entities").toArray();
+        QCOMPARE(afterEntities.size(), 4);
+        for (int index = 0; index < 4; ++index)
+            QCOMPARE(afterEntities.at(index).toObject().value("id").toString(),
+                beforeEntities.at(index).toObject().value("id").toString());
+
+        const int featureCount = callTool("cad.get_model_tree").value("featureCount").toInt();
+        const auto invalid = call("cad.edit_sketch_profile", QJsonObject{{"sketchId", sketchId},
+            {"segments", QJsonArray{
+                QJsonObject{{"x1", 0.0}, {"y1", 0.0}, {"x2", 10.0}, {"y2", 0.0}},
+                QJsonObject{{"x1", 10.0}, {"y1", 0.0}, {"x2", 10.0}, {"y2", 8.0}}}},
+            {"units", "mm"}});
+        QVERIFY(invalid.value("result").toObject().value("isError").toBool());
+        QCOMPARE(callTool("cad.get_model_tree").value("featureCount").toInt(), featureCount);
+        verifyOneSolid(extrudeId, 12.0, 9.0, 4.0);
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        verifyOneSolid(extrudeId, 10.0, 8.0, 4.0);
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        verifyOneSolid(extrudeId, 12.0, 9.0, 4.0);
+    }
+
+    void batchAndAggregateInspectionThroughMcp()
+    {
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto batch = callTool("cad.batch", QJsonObject{{"operations", QJsonArray{
+            QJsonObject{{"tool", "cad.create_sketch"}, {"arguments", QJsonObject{{"support", "XY"}}}},
+            QJsonObject{{"tool", "cad.add_rectangle"}, {"arguments", QJsonObject{
+                {"sketchId", "$0.featureId"}, {"x", 0.0}, {"y", 0.0},
+                {"width", 20.0}, {"height", 10.0}, {"units", "mm"}}}},
+            QJsonObject{{"tool", "cad.extrude"}, {"arguments", QJsonObject{
+                {"sketchId", "$0.featureId"}, {"distance", 3.0}, {"units", "mm"}}}}}}});
+        QVERIFY(batch.value("success").toBool());
+        QCOMPARE(batch.value("operationCount").toInt(), 3);
+        const auto batchResults = batch.value("results").toArray();
+        const auto extrudeId = batchResults.last().toObject().value("featureId").toString();
+        QVERIFY(!extrudeId.isEmpty());
+        verifyOneSolid(extrudeId, 20.0, 10.0, 3.0);
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QCOMPARE(callTool("cad.get_model_tree").value("featureCount").toInt(), 0);
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QCOMPARE(callTool("cad.get_model_tree").value("featureCount").toInt(), 2);
+
+        const auto inspected = callTool("cad.inspect_model");
+        QVERIFY(inspected.value("valid").toBool());
+        QCOMPARE(inspected.value("solidCount").toInt(), 1);
+        QVERIFY(inspected.value("invalidFeatures").toArray().isEmpty());
+
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto failedBatch = call("cad.batch", QJsonObject{{"operations", QJsonArray{
+            QJsonObject{{"tool", "cad.create_sketch"}, {"arguments", QJsonObject{{"support", "XY"}}}},
+            QJsonObject{{"tool", "cad.add_line"}, {"arguments", QJsonObject{
+                {"sketchId", "$0.featureId"}, {"x1", 0.0}, {"y1", 0.0},
+                {"x2", 10.0}, {"units", "mm"}}}}}}});
+        QVERIFY(failedBatch.value("result").toObject().value("isError").toBool());
+        QCOMPARE(callTool("cad.get_model_tree").value("featureCount").toInt(), 0);
+    }
+
+    void topologyFilteringThroughMcp()
+    {
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto featureId = createRectangleExtrude(10.0, 8.0, 4.0);
+        const auto top = callTool("cad.find_topology", QJsonObject{{"featureId", featureId},
+            {"kind", "Face"}, {"surfaceKind", "Plane"}, {"normal", QJsonArray{0.0, 0.0, 1.0}},
+            {"location", QJsonArray{5.0, 4.0, 4.0}}, {"tolerance", 0.2}});
+        QCOMPARE(top.value("candidateCount").toInt(), 1);
+        QCOMPARE(top.value("reference").toObject().value("semanticId").toString(),
+            QString("Box.Face:+Z"));
+        verifyStructuredToolError("cad.find_topology", QJsonObject{{"featureId", featureId}});
     }
 
     void stage1SolidOperationsThroughMcp()

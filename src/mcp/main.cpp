@@ -74,6 +74,35 @@ QJsonArray toolDefinitions()
     const QJsonObject topology{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}}}},
         {"required", QJsonArray{"featureId"}}};
+    const QJsonObject profileSegment{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"x1", QJsonObject{{"type", "number"}}},
+            {"y1", QJsonObject{{"type", "number"}}}, {"x2", QJsonObject{{"type", "number"}}},
+            {"y2", QJsonObject{{"type", "number"}}}}},
+        {"required", QJsonArray{"x1", "y1", "x2", "y2"}}};
+    const QJsonObject editProfile{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
+            {"segments", QJsonObject{{"type", "array"}, {"items", profileSegment}}},
+            {"units", units}}},
+        {"required", QJsonArray{"sketchId", "segments", "units"}}};
+    const QJsonObject batchOperation{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"tool", QJsonObject{{"type", "string"}}},
+            {"arguments", QJsonObject{{"type", "object"}}}}},
+        {"required", QJsonArray{"tool", "arguments"}}};
+    const QJsonObject batchOperations{{"type", "array"}, {"items", batchOperation}};
+    const QJsonObject batch{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"operations", batchOperations}}},
+        {"required", QJsonArray{"operations"}}};
+    const QJsonObject findTopology{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}},
+            {"kind", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"Face", "Edge", "Vertex"}}}},
+            {"surfaceKind", QJsonObject{{"type", "string"}}},
+            {"curveKind", QJsonObject{{"type", "string"}}},
+            {"normal", QJsonObject{{"type", "array"}}},
+            {"location", QJsonObject{{"type", "array"}}},
+            {"tolerance", QJsonObject{{"type", "number"}}},
+            {"area", QJsonObject{{"type", "number"}}},
+            {"length", QJsonObject{{"type", "number"}}}}},
+        {"required", QJsonArray{"featureId"}}};
     const QJsonObject chamfer{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
             {"corners", QJsonObject{{"type", "array"}}}, {"featureId", QJsonObject{{"type", "string"}}},
@@ -161,6 +190,10 @@ QJsonArray toolDefinitions()
         {"cad.edit_sketch_entity", QJsonObject{{"description", "Edit a Sketch Line with Undo/Redo"}, {"inputSchema", editLine}}},
         {"cad.remove_sketch_entity", QJsonObject{{"description", "Remove an unconstrained Sketch entity with Undo/Redo"}, {"inputSchema", removeEntity}}},
         {"cad.get_topology", QJsonObject{{"description", "Get stable face and edge topology references"}, {"inputSchema", topology}}},
+        {"cad.find_topology", QJsonObject{{"description", "Find topology references using explicit geometric filters"}, {"inputSchema", findTopology}}},
+        {"cad.inspect_model", QJsonObject{{"description", "Inspect aggregate parametric model health and geometry"}, {"inputSchema", empty}}},
+        {"cad.edit_sketch_profile", QJsonObject{{"description", "Atomically replace an ordered closed Sketch profile"}, {"inputSchema", editProfile}}},
+        {"cad.batch", QJsonObject{{"description", "Execute eligible modeling tools as one transaction"}, {"inputSchema", batch}}},
         {"cad.chamfer", QJsonObject{{"description", "Chamfer Sketch corners or referenced 3D edges"}, {"inputSchema", chamfer}}},
         {"cad.boolean", QJsonObject{{"description", "Fuse, Cut, or Common two feature solids"}, {"inputSchema", boolean}}},
         {"cad.fillet", QJsonObject{{"description", "Fillet referenced 3D edges"}, {"inputSchema", fillet}}},

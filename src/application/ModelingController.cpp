@@ -1,4 +1,5 @@
 #include "application/ModelingController.h"
+#include "application/ModelTransaction.h"
 #include "application/SelectionResolver.h"
 
 #include "commands/FeatureCommands.h"
@@ -83,6 +84,36 @@ bool sameSegment(const gp_Pnt& a, const gp_Pnt& b, const gp_Pnt& c, const gp_Pnt
     constexpr double tolerance = 1.0e-6;
     return (a.Distance(c) <= tolerance && b.Distance(d) <= tolerance)
         || (a.Distance(d) <= tolerance && b.Distance(c) <= tolerance);
+}
+
+double orientation2d(const gp_Pnt2d& a, const gp_Pnt2d& b, const gp_Pnt2d& c)
+{
+    return (b.X() - a.X()) * (c.Y() - a.Y())
+        - (b.Y() - a.Y()) * (c.X() - a.X());
+}
+
+bool segmentsIntersect(const gp_Pnt2d& a, const gp_Pnt2d& b,
+                       const gp_Pnt2d& c, const gp_Pnt2d& d)
+{
+    constexpr double tolerance = 1.0e-9;
+    const auto onSegment = [tolerance](const gp_Pnt2d& p, const gp_Pnt2d& q,
+                                       const gp_Pnt2d& r) {
+        return std::abs(orientation2d(p, q, r)) <= tolerance
+            && r.X() >= std::min(p.X(), q.X()) - tolerance
+            && r.X() <= std::max(p.X(), q.X()) + tolerance
+            && r.Y() >= std::min(p.Y(), q.Y()) - tolerance
+            && r.Y() <= std::max(p.Y(), q.Y()) + tolerance;
+    };
+    const double abC = orientation2d(a, b, c);
+    const double abD = orientation2d(a, b, d);
+    const double cdA = orientation2d(c, d, a);
+    const double cdB = orientation2d(c, d, b);
+    if (((abC > tolerance && abD < -tolerance) || (abC < -tolerance && abD > tolerance))
+        && ((cdA > tolerance && cdB < -tolerance) || (cdA < -tolerance && cdB > tolerance))) {
+        return true;
+    }
+    return onSegment(a, b, c) || onSegment(a, b, d)
+        || onSegment(c, d, a) || onSegment(c, d, b);
 }
 }
 
@@ -219,6 +250,68 @@ ModelingResult ModelingController::addSketchLine(
     try {
         undoStack_.push(new cad::commands::AddSketchEntityCommand(
             body_, sketch, cad::parametric::SketchLine{start, end, {}, construction}));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::replaceSketchProfile(
+    const std::string& sketchId,
+    const std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>>& segments)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    if (segments.size() < 3) return {false, {}, "Sketch profile requires at least three segments"};
+
+    constexpr double tolerance = 1.0e-7;
+    for (std::size_t index = 0; index < segments.size(); ++index) {
+        const auto& [start, end] = segments[index];
+        if (!std::isfinite(start.X()) || !std::isfinite(start.Y())
+            || !std::isfinite(end.X()) || !std::isfinite(end.Y())
+            || start.Distance(end) <= tolerance) {
+            return {false, {}, "Sketch profile contains a zero-length or non-finite segment"};
+        }
+        const auto& next = segments[(index + 1) % segments.size()].first;
+        if (end.Distance(next) > tolerance)
+            return {false, {}, "Sketch profile is not an ordered closed chain"};
+    }
+    for (std::size_t first = 0; first < segments.size(); ++first) {
+        for (std::size_t second = first + 1; second < segments.size(); ++second) {
+            const bool adjacent = second == first + 1
+                || (first == 0 && second + 1 == segments.size());
+            if (!adjacent && segmentsIntersect(
+                    segments[first].first, segments[first].second,
+                    segments[second].first, segments[second].second)) {
+                return {false, {}, "Sketch profile contains intersecting or branching segments"};
+            }
+        }
+    }
+
+    std::vector<cad::parametric::SketchEntity> after;
+    after.reserve(segments.size());
+    for (std::size_t index = 0; index < segments.size(); ++index) {
+        std::string entityId;
+        bool construction = false;
+        if (index < sketch->entities().size()) {
+            if (const auto* line = std::get_if<cad::parametric::SketchLine>(
+                    &sketch->entities()[index])) {
+                entityId = line->id;
+                construction = line->construction;
+            }
+        }
+        if (entityId.empty()) entityId = id("entity");
+        after.emplace_back(cad::parametric::SketchLine{
+            segments[index].first, segments[index].second, entityId, construction});
+    }
+
+    try {
+        ModelTransaction transaction(body_, undoStack_, "Replace Sketch Profile");
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(after),
+            sketch->constraints(), sketch->constraints(), "Replace Sketch Profile"));
+        if (!transaction.commit()) return {false, {}, body_.lastError()};
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);

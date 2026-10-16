@@ -14,6 +14,7 @@
 #include "operations/SketchProfileBuilder.h"
 #include "operations/SketchPathBuilder.h"
 #include "application/SelectionResolver.h"
+#include "application/ModelTransaction.h"
 #include "automation/CadAutomationService.h"
 
 #include <QAction>
@@ -46,6 +47,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <QStandardPaths>
 #include <QDockWidget>
 #include <QGuiApplication>
@@ -73,6 +75,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <limits>
+#include <functional>
 #include <type_traits>
 
 namespace
@@ -193,6 +196,7 @@ QJsonObject topologyJson(const cad::parametric::ParametricFeature& feature)
 {
     QJsonArray faces;
     QJsonArray edges;
+    QJsonArray vertices;
     for (TopExp_Explorer explorer(feature.shape(), TopAbs_FACE);
          explorer.More(); explorer.Next()) {
         faces.append(cad::topology::toJson(
@@ -205,7 +209,15 @@ QJsonObject topologyJson(const cad::parametric::ParametricFeature& feature)
             cad::topology::TopologicalSignatureBuilder::createReference(
                 feature.id(), feature.shape(), TopoDS::Edge(explorer.Current()))));
     }
-    return QJsonObject{{"faces", faces}, {"edges", edges}};
+    for (TopExp_Explorer explorer(feature.shape(), TopAbs_VERTEX);
+         explorer.More(); explorer.Next()) {
+        TopoDS_Shape vertex;
+        vertex = TopoDS::Vertex(explorer.Current());
+        vertices.append(cad::topology::toJson(
+            cad::topology::TopologicalSignatureBuilder::createReference(
+                feature.id(), feature.shape(), vertex)));
+    }
+    return QJsonObject{{"faces", faces}, {"edges", edges}, {"vertices", vertices}};
 }
 
 bool validProjectPath(const QString& path, QString& error)
@@ -802,7 +814,11 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.shell", "cad.revolve", "cad.sweep", "cad.delete_feature",
         "cad.add_arc", "cad.add_constraint", "cad.edit_constraint",
         "cad.remove_constraint", "cad.get_constraints", "cad.linear_pattern",
-        "cad.path_pattern", "cad.get_feature_dependencies"};
+        "cad.path_pattern", "cad.get_feature_dependencies", "cad.find_topology",
+        "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch"};
+    static const QStringList transactionalTools{
+        "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
+        "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
     if (!tools.contains(tool)) return rpcError(id, -32601, "Unknown tool: " + tool);
 
     const auto hasOnly = [&arguments](const QStringList& names) {
@@ -811,7 +827,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     };
     if ((tool == "cad.get_model_tree" || tool == "cad.get_selection"
          || tool == "cad.get_view_state" || tool == "cad.screenshot"
-         || tool == "cad.get_application_status") && !arguments.isEmpty())
+         || tool == "cad.get_application_status" || tool == "cad.inspect_model")
+        && !arguments.isEmpty())
         return rpcError(id, -32602, "This tool does not accept arguments");
     if ((tool == "cad.get_feature" || tool == "cad.inspect_shape")
         && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
@@ -819,7 +836,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         return rpcError(id, -32602, "featureId must be the only non-empty string argument");
     const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.add_line",
         "cad.extrude", "cad.pocket", "cad.chamfer", "cad.fillet", "cad.shell",
-        "cad.add_arc", "cad.linear_pattern", "cad.path_pattern"};
+        "cad.add_arc", "cad.linear_pattern", "cad.path_pattern", "cad.edit_sketch_profile"};
     if (unitTools.contains(tool)) {
         QString unitsError;
         if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
@@ -857,7 +874,84 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     };
 
     QJsonObject result;
-    if (tool == "cad.get_model_tree") {
+    if (tool == "cad.batch") {
+        if (!arguments.keys().contains("operations") || arguments.keys().size() != 1
+            || !arguments.value("operations").isArray())
+            return rpcError(id, -32602, "batch requires only an operations array");
+        const auto operations = arguments.value("operations").toArray();
+        if (operations.isEmpty() || operations.size() > 128)
+            return rpcError(id, -32602, "batch operations must contain between 1 and 128 items");
+        cad::application::ModelTransaction transaction(
+            modeling_.body(), modeling_.undoStack(), "MCP Batch");
+        QJsonArray results;
+        const auto resolveReferences = [&results](QJsonValue value) {
+            std::function<QJsonValue(const QJsonValue&)> resolve;
+            resolve = [&resolve, &results](const QJsonValue& current) -> QJsonValue {
+                if (current.isString()) {
+                    const QString token = current.toString();
+                    if (!token.startsWith('$')) return current;
+                    const int dot = token.indexOf('.');
+                    bool ok = false;
+                    const int index = token.mid(1, dot < 0 ? -1 : dot - 1).toInt(&ok);
+                    if (!ok || index < 0 || index >= results.size()) return current;
+                    QJsonValue resolved = results.at(index);
+                    if (dot >= 0) {
+                        for (const auto& key : token.mid(dot + 1).split('.')) {
+                            if (!resolved.isObject()) return current;
+                            resolved = resolved.toObject().value(key);
+                        }
+                    }
+                    return resolved;
+                }
+                if (current.isArray()) {
+                    QJsonArray array;
+                    for (const auto& item : current.toArray()) array.append(resolve(item));
+                    return array;
+                }
+                if (current.isObject()) {
+                    QJsonObject object;
+                    const auto source = current.toObject();
+                    for (auto iterator = source.begin(); iterator != source.end(); ++iterator)
+                        object.insert(iterator.key(), resolve(iterator.value()));
+                    return object;
+                }
+                return current;
+            };
+            return resolve(value);
+        };
+        for (int index = 0; index < operations.size(); ++index) {
+            const auto operation = operations.at(index).toObject();
+            const QString operationTool = operation.value("tool").toString();
+            if (!transactionalTools.contains(operationTool) || operationTool == "cad.batch") {
+                transaction.rollback();
+                return rpcError(id, -32602, "Tool is not eligible for transactional batching",
+                    QJsonObject{{"index", index}, {"tool", operationTool}});
+            }
+            const auto resolvedArguments = resolveReferences(operation.value("arguments"));
+            if (!resolvedArguments.isObject()) {
+                transaction.rollback();
+                return rpcError(id, -32602, "Batch operation arguments must be an object",
+                    QJsonObject{{"index", index}});
+            }
+            const auto nested = handleAutomationRequest(QJsonObject{
+                {"jsonrpc", "2.0"}, {"id", id}, {"method", "automation/call"},
+                {"params", QJsonObject{{"tool", operationTool},
+                    {"arguments", resolvedArguments.toObject()}}}});
+            if (nested.contains("error")) {
+                transaction.rollback();
+                return rpcError(id, -32020, "Batch operation failed",
+                    QJsonObject{{"index", index}, {"tool", operationTool},
+                        {"cause", nested.value("error")}, {"completed", results}});
+            }
+            results.append(nested.value("result"));
+        }
+        if (!transaction.commit())
+            return rpcError(id, -32020, "Batch commit failed",
+                QJsonObject{{"message", QString::fromStdString(modeling_.body().lastError())}});
+        refreshModelView();
+        result = QJsonObject{{"success", true}, {"operationCount", results.size()},
+            {"results", results}, {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.get_model_tree") {
         QJsonArray features;
         for (const auto& feature : modeling_.body().features())
             features.append(featureJson(*feature, false));
@@ -871,6 +965,62 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!feature) return rpcError(id, -32004, "Feature not found", {{"featureId", featureId}});
         if (tool == "cad.inspect_shape") result = shapeInspection(feature->shape());
         else result = featureJson(*feature, true);
+    } else if (tool == "cad.inspect_model") {
+        QJsonArray invalidFeatures;
+        QJsonArray openProfiles;
+        for (const auto& feature : modeling_.body().features()) {
+            if (feature->state() == cad::parametric::FeatureState::Failed) {
+                invalidFeatures.append(QJsonObject{
+                    {"featureId", QString::fromStdString(feature->id())},
+                    {"type", QString::fromLatin1(feature->typeId())},
+                    {"message", QString::fromStdString(feature->error())}});
+            }
+            const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+            if (sketch && !sketch->entities().empty()) {
+                try {
+                    cad::operations::SketchProfileBuilder::build(*sketch);
+                } catch (const std::exception& error) {
+                    openProfiles.append(QJsonObject{
+                        {"sketchId", QString::fromStdString(sketch->id())},
+                        {"message", QString::fromUtf8(error.what())}});
+                }
+            }
+        }
+        const auto& shape = modeling_.body().shape();
+        int solids = 0;
+        int components = 0;
+        bool valid = shape.IsNull();
+        QJsonObject bounds;
+        double volume = 0.0;
+        if (!shape.IsNull()) {
+            BRepCheck_Analyzer analyzer(shape);
+            valid = analyzer.IsValid();
+            for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next()) ++solids;
+            for (TopExp_Explorer explorer(shape, TopAbs_COMPSOLID); explorer.More(); explorer.Next()) ++components;
+            if (components == 0) {
+                for (TopExp_Explorer explorer(shape, TopAbs_COMPOUND); explorer.More(); explorer.Next()) ++components;
+            }
+            if (components == 0) components = solids;
+            GProp_GProps props;
+            BRepGProp::VolumeProperties(shape, props);
+            volume = props.Mass();
+            Bnd_Box box;
+            BRepBndLib::Add(shape, box);
+            if (!box.IsVoid()) {
+                double xmin, ymin, zmin, xmax, ymax, zmax;
+                box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+                bounds = QJsonObject{{"min", QJsonArray{xmin, ymin, zmin}},
+                    {"max", QJsonArray{xmax, ymax, zmax}}};
+            }
+        }
+        result = QJsonObject{
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())},
+            {"invalidFeatures", invalidFeatures},
+            {"openSketchProfiles", openProfiles},
+            {"solidCount", solids}, {"componentCount", components},
+            {"valid", valid}, {"volume", volume}, {"boundingBox", bounds},
+            {"lastError", QString::fromStdString(modeling_.body().lastError())},
+            {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
     } else if (tool == "cad.get_selection") {
         QJsonArray items;
         for (const auto& item : viewer_->selectionSnapshot().items) {
@@ -1151,6 +1301,32 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!operation.success) return finishModeling(operation, "edit_sketch_entity");
         refreshModelView();
         return finishModeling(operation, "edit_sketch_entity");
+    } else if (tool == "cad.edit_sketch_profile") {
+        if (!hasOnly({"sketchId", "segments", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("segments").isArray())
+            return rpcError(id, -32602, "edit_sketch_profile requires sketchId, segments and units");
+        const auto rawSegments = arguments.value("segments").toArray();
+        if (rawSegments.size() < 3)
+            return rpcError(id, -32602, "edit_sketch_profile requires at least three segments");
+        std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>> segments;
+        segments.reserve(rawSegments.size());
+        for (const auto& raw : rawSegments) {
+            const auto segment = raw.toObject();
+            if (!segment.contains("x1") || !segment.contains("y1")
+                || !segment.contains("x2") || !segment.contains("y2")
+                || !segment.value("x1").isDouble() || !segment.value("y1").isDouble()
+                || !segment.value("x2").isDouble() || !segment.value("y2").isDouble())
+                return rpcError(id, -32602, "Each profile segment requires numeric x1, y1, x2 and y2");
+            segments.emplace_back(
+                gp_Pnt2d(segment.value("x1").toDouble(), segment.value("y1").toDouble()),
+                gp_Pnt2d(segment.value("x2").toDouble(), segment.value("y2").toDouble()));
+        }
+        const auto operation = modeling_.replaceSketchProfile(
+            arguments.value("sketchId").toString().toStdString(), segments);
+        if (!operation.success) return finishModeling(operation, "edit_sketch_profile");
+        refreshModelView();
+        return finishModeling(operation, "edit_sketch_profile");
     } else if (tool == "cad.remove_sketch_entity") {
         if (!hasOnly({"sketchId", "entityId"})
             || !arguments.value("sketchId").isString()
@@ -1172,6 +1348,62 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             QJsonObject{{"featureId", arguments.value("featureId").toString()}});
         result = topologyJson(*feature);
         result.insert("featureId", arguments.value("featureId").toString());
+    } else if (tool == "cad.find_topology") {
+        if (!arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty())
+            return rpcError(id, -32602, "find_topology requires featureId");
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found",
+            QJsonObject{{"featureId", arguments.value("featureId").toString()}});
+        const double tolerance = arguments.value("tolerance").toDouble(1.0e-6);
+        if (!std::isfinite(tolerance) || tolerance < 0.0)
+            return rpcError(id, -32602, "tolerance must be finite and non-negative");
+        const auto rawTopology = topologyJson(*feature);
+        QJsonArray candidates;
+        const auto matches = [&arguments, tolerance](const QJsonObject& candidate) {
+            if (arguments.contains("kind")
+                && candidate.value("kind").toString() != arguments.value("kind").toString()) return false;
+            const auto signature = candidate.value("signature").toObject();
+            if (arguments.contains("surfaceKind")
+                && signature.value("surfaceKind").toString() != arguments.value("surfaceKind").toString()) return false;
+            if (arguments.contains("curveKind")
+                && signature.value("curveKind").toString() != arguments.value("curveKind").toString()) return false;
+            if (arguments.contains("area")
+                && std::abs(signature.value("area").toDouble() - arguments.value("area").toDouble()) > tolerance) return false;
+            if (arguments.contains("length")
+                && std::abs(signature.value("length").toDouble() - arguments.value("length").toDouble()) > tolerance) return false;
+            const auto compareVector = [tolerance](const QJsonArray& actual, const QJsonArray& expected) {
+                if (actual.size() != expected.size()) return false;
+                for (int index = 0; index < actual.size(); ++index)
+                    if (std::abs(actual.at(index).toDouble() - expected.at(index).toDouble()) > tolerance) return false;
+                return true;
+            };
+            if (arguments.contains("normal") && !compareVector(
+                    signature.value("normal").toArray(), arguments.value("normal").toArray())) return false;
+            if (arguments.contains("location")) {
+                const auto location = arguments.value("location").toArray();
+                const auto point = signature.contains("centroid")
+                    ? signature.value("centroid").toArray()
+                    : signature.value("midpoint").toArray();
+                if (!compareVector(point, location)) return false;
+            }
+            return true;
+        };
+        for (const char* kind : {"faces", "edges", "vertices"}) {
+            for (const auto& value : rawTopology.value(kind).toArray()) {
+                const auto candidate = value.toObject();
+                if (matches(candidate)) candidates.append(candidate);
+            }
+        }
+        if (candidates.size() != 1) {
+            return rpcError(id, -32005, candidates.isEmpty()
+                ? "No topology reference matches the supplied filters"
+                : "Topology reference is ambiguous",
+                QJsonObject{{"candidateCount", candidates.size()}, {"candidates", candidates}});
+        }
+        result = QJsonObject{{"featureId", arguments.value("featureId")},
+            {"reference", candidates.first()}, {"candidateCount", 1}};
     } else if (tool == "cad.chamfer") {
         if (!hasOnly({"sketchId", "corners", "featureId", "edgeReferences", "distance", "units"})
             || !arguments.value("distance").isDouble())

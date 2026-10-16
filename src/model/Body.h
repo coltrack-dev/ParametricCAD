@@ -28,6 +28,8 @@ public:
     const TopoDS_Shape& shape() const noexcept;
 
     bool recompute();
+    void setRecomputeDeferred(bool deferred) noexcept { recomputeDeferred_ = deferred; }
+    bool recomputeDeferred() const noexcept { return recomputeDeferred_; }
     void beginIncrementalRecompute();
     bool recomputeFeature(std::size_t index);
     bool finishIncrementalRecompute();
@@ -42,6 +44,7 @@ private:
     TopoDS_Shape resultShape_;
     std::string lastError_;
     std::uint64_t geometryRevision_{0};
+    bool recomputeDeferred_{false};
 };
 
 } // namespace cad::parametric

@@ -42,6 +42,9 @@ public:
     ModelingResult addSketchLine(
         const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
         bool construction = false);
+    ModelingResult replaceSketchProfile(
+        const std::string& sketchId,
+        const std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>>& segments);
     ModelingResult editSketchLine(
         const std::string& sketchId, const std::string& entityId,
         const gp_Pnt2d& start, const gp_Pnt2d& end);
