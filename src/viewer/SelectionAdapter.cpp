@@ -11,12 +11,37 @@
 
 namespace cad::viewer {
 
+namespace {
+const std::map<QString, Handle(AIS_Shape)> emptyComponentObjects;
+const std::map<QString, QString> emptyComponentFeatures;
+}
+
 OcctSelectionAdapter::OcctSelectionAdapter(
     const Handle(AIS_InteractiveContext)& context,
-    const std::map<QString, Handle(AIS_Shape)>& featureObjects
-)
-    : context_(context), featureObjects_(featureObjects)
+    const std::map<QString, Handle(AIS_Shape)>& featureObjects)
+    : OcctSelectionAdapter(context, featureObjects,
+                           emptyComponentObjects, emptyComponentFeatures)
 {
+}
+
+OcctSelectionAdapter::OcctSelectionAdapter(
+    const Handle(AIS_InteractiveContext)& context,
+    const std::map<QString, Handle(AIS_Shape)>& featureObjects,
+    const std::map<QString, Handle(AIS_Shape)>& componentObjects,
+    const std::map<QString, QString>& componentFeatures
+)
+    : context_(context), featureObjects_(featureObjects),
+      componentObjects_(componentObjects), componentFeatures_(componentFeatures)
+{
+}
+
+std::optional<QString> OcctSelectionAdapter::componentIdFor(
+    const Handle(AIS_InteractiveObject)& presentation) const
+{
+    if (presentation.IsNull()) return std::nullopt;
+    for (const auto& [id, object] : componentObjects_)
+        if (object == presentation) return id;
+    return std::nullopt;
 }
 
 std::optional<QString> OcctSelectionAdapter::featureIdFor(
@@ -186,7 +211,10 @@ std::optional<SelectionHit> OcctSelectionAdapter::makeHit(
     const bool hasSelectedShape
 ) const
 {
-    const auto featureId = featureIdFor(presentation);
+    const auto componentId = componentIdFor(presentation);
+    const auto featureId = componentId
+        ? std::optional<QString>(componentFeatures_.at(*componentId))
+        : featureIdFor(presentation);
     const auto selectedObject = Handle(AIS_Shape)::DownCast(presentation);
     if (!featureId || selectedObject.IsNull()) return std::nullopt;
 
@@ -202,7 +230,7 @@ std::optional<SelectionHit> OcctSelectionAdapter::makeHit(
 
     if (kind == SelectionKind::Unknown) return std::nullopt;
 
-    SelectionItem item{*featureId, kind, std::nullopt};
+    SelectionItem item{*featureId, kind, std::nullopt, componentId};
     if (kind != SelectionKind::Object) {
         TopTools_IndexedMapOfShape subshapes;
         TopExp::MapShapes(parentShape, shape.ShapeType(), subshapes);

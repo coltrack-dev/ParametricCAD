@@ -190,6 +190,13 @@ QJsonArray toolDefinitions()
         {"required", QJsonArray{"componentId"}}};
     const QJsonObject components{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}}}}};
+    const QJsonObject componentVisibility{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"componentId", QJsonObject{{"type", "string"}}},
+            {"mode", QJsonObject{{"type", "string"},
+                {"enum", QJsonArray{"visible", "hidden", "ghosted"}}}},
+            {"isolate", QJsonObject{{"type", "boolean"}}}}},
+        {"required", QJsonArray{"componentId", "mode"}}};
     const QJsonObject tools = QJsonObject{
         {"cad.get_model_tree", QJsonObject{{"description", "Inspect the parametric model tree"}, {"inputSchema", empty}}},
         {"cad.get_feature", QJsonObject{{"description", "Inspect one parametric feature"}, {"inputSchema", feature}}},
@@ -242,6 +249,8 @@ QJsonArray toolDefinitions()
         ,{"cad.get_components", QJsonObject{{"description", "Discover independently addressable solid components"}, {"inputSchema", components}}}
         ,{"cad.get_component", QJsonObject{{"description", "Resolve and inspect one persistent model component"}, {"inputSchema", componentId}}}
         ,{"cad.get_component_topology", QJsonObject{{"description", "Inspect topology of one model component"}, {"inputSchema", componentId}}}
+        ,{"cad.set_component_visibility", QJsonObject{{"description", "Set visible, hidden, or ghosted state for one component"},
+            {"inputSchema", componentVisibility}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {

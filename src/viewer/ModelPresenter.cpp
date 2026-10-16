@@ -43,10 +43,15 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
     const auto selectedTopology = viewer_.captureTopologySelection(body_);
     const auto selection = viewer_.selectionSnapshot();
     std::vector<std::string> selectedObjects = selection.selectedObjectIds();
+    std::vector<std::string> selectedComponents;
+    for (const auto& item : selection.items) {
+        if (item.componentId) selectedComponents.push_back(*item.componentId);
+    }
     PresentationResult result;
     result.rebuilt = body_.recompute();
     if (!result.rebuilt) result.error = body_.lastError();
     viewer_.beginBulkUpdate();
+    QStringList presentedComponents;
     for (const auto& feature : body_.features()) {
         if (feature->typeId() == std::string("Sweep")) {
             traceSweepFeature("refresh.inspect", *feature);
@@ -55,6 +60,28 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
         if (feature->state() != cad::parametric::FeatureState::UpToDate
             || feature->shape().IsNull()
             || (sketch && sketch->entities().empty())) continue;
+        const auto candidates = cad::parametric::ComponentResolver::enumerate(
+            body_, feature->id());
+        if (candidates.size() > 1) {
+            // A compound is represented by its component AIS objects only;
+            // never display the compound and its children simultaneously.
+            for (const auto& candidate : candidates) {
+                std::string error;
+                const auto resolved = cad::parametric::ComponentResolver::resolve(
+                    body_, candidate.id, error);
+                if (!resolved) continue;
+                const auto component = body_.findComponent(candidate.id);
+                const bool visible = !component || component->visible;
+                viewer_.updateComponent(resolved->shape,
+                    QString::fromStdString(candidate.id),
+                    QString::fromStdString(feature->id()));
+                if (!visible) viewer_.setComponentVisibility(
+                    QString::fromStdString(candidate.id),
+                    cad::application::VisibilityMode::Hidden);
+                presentedComponents.append(QString::fromStdString(candidate.id));
+            }
+            continue;
+        }
         result.presentedIds.push_back(feature->id());
         traceSweepFeature("refresh.updateFeature", *feature);
         viewer_.updateFeature(feature->shape(), QString::fromStdString(feature->id()));
@@ -68,9 +95,10 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
         for (const auto& id : result.presentedIds) ids.append(QString::fromStdString(id));
         return ids;
     }());
+    viewer_.retainComponents(presentedComponents);
     visibilityManager_.updateBoundingBoxes(body_);
     applyVisibility();
-    viewer_.restoreSelection(body_, selectedTopology, selectedObjects);
+    viewer_.restoreSelection(body_, selectedTopology, selectedObjects, selectedComponents);
     viewer_.endBulkUpdate();
     return result;
 }

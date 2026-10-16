@@ -65,6 +65,10 @@ namespace cad::parametric {
 std::vector<ModelComponent> ComponentResolver::enumerate(const Body& body,
                                                          const std::string& featureId)
 {
+    std::vector<ModelComponent> persisted;
+    for (const auto& component : body.components())
+        if (component.sourceFeatureId == featureId) persisted.push_back(component);
+    if (!persisted.empty()) return persisted;
     const auto feature = body.findFeature(featureId);
     if (!feature || feature->shape().IsNull()) return {};
     std::vector<TopoDS_Shape> solids;

@@ -1822,7 +1822,7 @@ void CadViewer::initializeOcc()
 
     context_ = new AIS_InteractiveContext(viewer_);
     selectionAdapter_ = std::make_unique<cad::viewer::OcctSelectionAdapter>(
-        context_, featureObjects_);
+        context_, featureObjects_, componentObjects_, componentFeatures_);
     transformGizmo_ = std::make_unique<cad::viewer::TransformGizmo>(context_);
     view_ = viewer_->CreateView();
 
@@ -2140,6 +2140,50 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     traceSelectionLifecycle(QString("AIS replace feature=%1 obj=%2 after Redisplay")
         .arg(featureId).arg(selectionObjectPointer(object)));
     if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
+}
+
+void CadViewer::updateComponent(const TopoDS_Shape& shape,
+                                const QString& componentId,
+                                const QString& featureId)
+{
+    initializeOcc();
+    if (isEmptyDisplayShape(shape)) {
+        const auto found = componentObjects_.find(componentId);
+        if (found != componentObjects_.end()) {
+            context_->Remove(found->second, Standard_False);
+            std::erase(displayedShapes_, found->second);
+            componentObjects_.erase(found);
+            componentFeatures_.erase(componentId);
+            componentVisibility_.erase(componentId);
+        }
+        return;
+    }
+    const auto found = componentObjects_.find(componentId);
+    if (found == componentObjects_.end()) {
+        auto object = Handle(AIS_Shape)(new AIS_Shape(shape));
+        applyDisplayMode(object, shape);
+        context_->Display(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
+        componentObjects_[componentId] = object;
+        componentFeatures_[componentId] = featureId;
+        componentVisibility_.try_emplace(componentId, VisibilityMode::Visible);
+        displayedShapes_.push_back(object);
+        selectionActivationDirty_ = true;
+        return;
+    }
+    const auto& object = found->second;
+    if (!object->Shape().IsEqual(shape)) {
+        object->SetShape(shape);
+        applyDisplayMode(object, shape);
+    }
+    componentFeatures_[componentId] = featureId;
+    const auto mode = componentVisibilityMode(componentId);
+    if (mode == VisibilityMode::Hidden) context_->Erase(object, Standard_False);
+    else {
+        if (!context_->IsDisplayed(object)) context_->Display(object, Standard_False);
+        if (mode == VisibilityMode::Ghosted) object->SetTransparency(GhostTransparency);
+        else if (!xRayEnabled_) object->UnsetTransparency();
+        context_->Redisplay(object, Standard_False);
+    }
 }
 
 void CadViewer::updateSketchConstructionGeometry(
@@ -2644,6 +2688,8 @@ void CadViewer::updateSpatialBoxDrag(const QPoint& position)
 cad::application::VisibilityMode CadViewer::featureVisibilityMode(
     const QString& featureId) const noexcept
 {
+    const auto component = componentVisibility_.find(featureId);
+    if (component != componentVisibility_.end()) return component->second;
     const auto found = featureVisibility_.find(featureId);
     return found == featureVisibility_.end()
         ? VisibilityMode::Visible : found->second;
@@ -2677,11 +2723,15 @@ void CadViewer::releaseManagedSelection(const QString& featureId)
 {
     const auto active = managedSelectionModes_.find(featureId);
     if (active == managedSelectionModes_.end()) return;
-    const auto found = featureObjects_.find(featureId);
-    if (found != featureObjects_.end() && !found->second.IsNull()) {
+    const auto component = componentObjects_.find(featureId);
+    const auto feature = featureObjects_.find(featureId);
+    const auto object = component != componentObjects_.end()
+        ? component->second
+        : feature != featureObjects_.end() ? feature->second : Handle(AIS_Shape){};
+    if (!object.IsNull()) {
         traceSelectionLifecycle(QString("release managed BEFORE feature=%1 obj=%2 mode=%3")
-            .arg(featureId).arg(selectionObjectPointer(found->second)).arg(active->second));
-        context_->Deactivate(found->second, active->second);
+            .arg(featureId).arg(selectionObjectPointer(object)).arg(active->second));
+        context_->Deactivate(object, active->second);
         traceSelectionLifecycle(QString("release managed AFTER feature=%1").arg(featureId));
     }
     managedSelectionModes_.erase(active);
@@ -2753,6 +2803,44 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
     }
 }
 
+void CadViewer::retainComponents(const QStringList& componentIds)
+{
+    if (!initialized_) return;
+    for (auto it = componentObjects_.begin(); it != componentObjects_.end();) {
+        if (componentIds.contains(it->first)) { ++it; continue; }
+        context_->Remove(it->second, Standard_False);
+        std::erase(displayedShapes_, it->second);
+        componentFeatures_.erase(it->first);
+        componentVisibility_.erase(it->first);
+        it = componentObjects_.erase(it);
+        selectionActivationDirty_ = true;
+    }
+}
+
+void CadViewer::setComponentVisibility(const QString& componentId,
+                                       const VisibilityMode mode)
+{
+    const auto found = componentObjects_.find(componentId);
+    if (found == componentObjects_.end()) return;
+    componentVisibility_[componentId] = mode;
+    if (mode != VisibilityMode::Visible) releaseManagedSelection(componentId);
+    if (mode == VisibilityMode::Hidden) context_->Erase(found->second, Standard_False);
+    else {
+        if (!context_->IsDisplayed(found->second)) context_->Display(found->second, Standard_False);
+        if (mode == VisibilityMode::Ghosted) found->second->SetTransparency(GhostTransparency);
+        else if (!xRayEnabled_) found->second->UnsetTransparency();
+        context_->Redisplay(found->second, Standard_False);
+    }
+    selectionActivationDirty_ = true;
+    if (bulkUpdateDepth_ == 0) { applySelectionMode(); context_->UpdateCurrentViewer(); }
+}
+
+VisibilityMode CadViewer::componentVisibilityMode(const QString& componentId) const noexcept
+{
+    const auto found = componentVisibility_.find(componentId);
+    return found == componentVisibility_.end() ? VisibilityMode::Visible : found->second;
+}
+
 void CadViewer::removeFeaturePresentation(const QString& featureId)
 {
     const auto found = featureObjects_.find(featureId);
@@ -2802,6 +2890,9 @@ void CadViewer::clear()
     spatialBoxObject_.Nullify();
     displayedShapes_.clear();
     featureObjects_.clear();
+    componentObjects_.clear();
+    componentFeatures_.clear();
+    componentVisibility_.clear();
     geometryVisibilityBeforeMeshOnly_.clear();
     meshDisplayMode_ = MeshDisplayMode::Geometry;
     sketchConstructionObjects_.clear();
@@ -3276,7 +3367,8 @@ std::vector<cad::topology::TopologicalReference> CadViewer::captureTopologySelec
 void CadViewer::restoreSelection(
     const cad::parametric::Body& body,
     const std::vector<cad::topology::TopologicalReference>& topology,
-    const std::vector<std::string>& objectFeatureIds)
+    const std::vector<std::string>& objectFeatureIds,
+    const std::vector<std::string>& componentIds)
 {
     if (!initialized_ || !context_) return;
 
@@ -3302,6 +3394,13 @@ void CadViewer::restoreSelection(
             && featureIsSelectable(object->first)) {
             context_->AddOrRemoveSelected(object->second, Standard_False);
         }
+    }
+    for (const auto& componentId : componentIds) {
+        const auto object = componentObjects_.find(QString::fromStdString(componentId));
+        if (object != componentObjects_.end() && !object->second.IsNull()
+            && context_->IsDisplayed(object->second)
+            && featureIsSelectable(object->first))
+            context_->AddOrRemoveSelected(object->second, Standard_False);
     }
     if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
     syncSelectionStateFromOcct();
@@ -3438,6 +3537,23 @@ void CadViewer::applySelectionMode()
         traceSelectionLifecycle(QString("AIS state after activation obj=%1 feature=%2 cached=%3 activeModes=%4")
             .arg(selectionObjectPointer(object)).arg(id).arg(mode)
             .arg(activeSelectionModes(context_, object)));
+        managedSelectionModes_[id] = mode;
+    }
+    for (const auto& [id, object] : componentObjects_) {
+        if (object.IsNull()) { managedSelectionModes_.erase(id); continue; }
+        const bool selectable = !selectionDisabled_ && featureIsSelectable(id);
+        const auto active = managedSelectionModes_.find(id);
+        if (!selectable) {
+            if (active != managedSelectionModes_.end()) {
+                context_->Deactivate(object, active->second);
+                managedSelectionModes_.erase(active);
+            } else context_->Deactivate(object);
+            continue;
+        }
+        if (active != managedSelectionModes_.end() && active->second == mode) continue;
+        if (active != managedSelectionModes_.end()) context_->Deactivate(object, active->second);
+        context_->SetSelectionModeActive(object, mode, Standard_True,
+            AIS_SelectionModesConcurrency_Multiple, Standard_True);
         managedSelectionModes_[id] = mode;
     }
     if (transformGizmo_) {

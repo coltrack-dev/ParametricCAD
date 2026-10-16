@@ -132,6 +132,8 @@ public:
     std::int64_t lastViewerUpdateMilliseconds() const noexcept;
     std::int64_t lastSelectionActivationMilliseconds() const noexcept;
     void updateFeature(const TopoDS_Shape& shape, const QString& featureId);
+    void updateComponent(const TopoDS_Shape& shape, const QString& componentId,
+                         const QString& featureId);
     void updateSketchConstructionGeometry(
         const cad::parametric::SketchFeature& sketch, const QString& featureId);
     void selectFeatures(const QStringList& featureIds);
@@ -153,6 +155,11 @@ public:
     void restoreCamera(const CameraState& state);
     cad::application::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
+    void retainComponents(const QStringList& componentIds);
+    void setComponentVisibility(const QString& componentId,
+                                cad::application::VisibilityMode mode);
+    cad::application::VisibilityMode componentVisibilityMode(
+        const QString& componentId) const noexcept;
     void clear();
     bool hasDisplayedShapes() const;
     void fitAll();
@@ -186,7 +193,8 @@ public:
     void restoreSelection(
         const cad::parametric::Body& body,
         const std::vector<cad::topology::TopologicalReference>& topology,
-        const std::vector<std::string>& objectFeatureIds);
+        const std::vector<std::string>& objectFeatureIds,
+        const std::vector<std::string>& componentIds = {});
     void clearSelection();
     void enterSketchMode(const gp_Pnt& origin, const gp_Dir& xDirection,
                          const gp_Dir& yDirection, const gp_Dir& normal,
@@ -362,10 +370,13 @@ private:
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
+    std::map<QString, Handle(AIS_Shape)> componentObjects_;
+    std::map<QString, QString> componentFeatures_;
     std::map<QString, Handle(AIS_Shape)> sketchConstructionObjects_;
     std::map<QString, Standard_Integer> managedSelectionModes_;
     bool selectionTraceEnabled_{false};
     std::map<QString, cad::application::VisibilityMode> featureVisibility_;
+    std::map<QString, cad::application::VisibilityMode> componentVisibility_;
     Handle(AIS_Shape) spatialBoxObject_;
     Handle(AIS_Shape) sectionPlaneObject_;
     Handle(AIS_Shape) sectionHandleObject_;

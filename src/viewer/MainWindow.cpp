@@ -839,7 +839,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.path_pattern", "cad.get_feature_dependencies", "cad.find_topology",
         "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch", "cad.mirror",
         "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
-        "cad.get_components", "cad.get_component", "cad.get_component_topology"};
+        "cad.get_components", "cad.get_component", "cad.get_component_topology",
+        "cad.set_component_visibility"};
     static const QStringList transactionalTools{
         "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
         "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
@@ -865,6 +866,18 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             || !arguments.value("componentId").isString()
             || arguments.value("componentId").toString().isEmpty())
             return rpcError(id, -32602, "componentId must be the only non-empty string argument");
+    }
+    if (tool == "cad.set_component_visibility") {
+        if (!hasOnly({"componentId", "mode", "isolate"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty()
+            || !arguments.value("mode").isString())
+            return rpcError(id, -32602, "componentId and mode are required");
+        const auto mode = arguments.value("mode").toString();
+        if (mode != "visible" && mode != "hidden" && mode != "ghosted")
+            return rpcError(id, -32602, "mode must be visible, hidden, or ghosted");
+        if (arguments.contains("isolate") && !arguments.value("isolate").isBool())
+            return rpcError(id, -32602, "isolate must be boolean");
     }
     if ((tool == "cad.get_feature" || tool == "cad.inspect_shape")
         && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
@@ -1002,9 +1015,6 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             for (const auto& component : cad::parametric::ComponentResolver::enumerate(
                      modeling_.body(), featureId.toStdString()))
                 components.append(componentJson(component));
-            for (const auto& component : modeling_.body().components())
-                if (component.sourceFeatureId == featureId.toStdString())
-                    components.append(componentJson(component));
         } else {
             for (const auto& component : modeling_.body().components())
                 components.append(componentJson(component));
@@ -1026,6 +1036,10 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
                 QJsonObject{{"componentId", QString::fromStdString(componentId)},
                             {"message", QString::fromStdString(resolveError)}});
         result = componentJson(resolved->component);
+        result.insert("effectiveVisibility", viewer_->componentVisibilityMode(
+            QString::fromStdString(componentId)) == cad::application::VisibilityMode::Hidden
+                ? "hidden" : viewer_->componentVisibilityMode(QString::fromStdString(componentId))
+                    == cad::application::VisibilityMode::Ghosted ? "ghosted" : "visible");
         result.insert("shape", shapeInspection(resolved->shape));
         if (tool == "cad.get_component_topology") {
             QJsonArray faces;
@@ -1036,6 +1050,43 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
                         componentId, resolved->shape, TopoDS::Face(explorer.Current()))));
             result.insert("topology", QJsonObject{{"faces", faces}});
         }
+    } else if (tool == "cad.set_component_visibility") {
+        const auto componentId = arguments.value("componentId").toString().toStdString();
+        auto* component = modeling_.body().findComponent(componentId);
+        std::string resolveError;
+        if (!component) {
+            const auto resolved = cad::parametric::ComponentResolver::resolve(
+                modeling_.body(), componentId, resolveError);
+            if (!resolved)
+                return rpcError(id, -32004, "Component could not be resolved",
+                    QJsonObject{{"componentId", QString::fromStdString(componentId)},
+                                {"message", QString::fromStdString(resolveError)}});
+            auto values = modeling_.body().components();
+            const auto generated = cad::parametric::ComponentResolver::enumerate(
+                modeling_.body(), resolved->component.sourceFeatureId);
+            for (const auto& generatedComponent : generated) {
+                if (std::none_of(values.begin(), values.end(),
+                        [&generatedComponent](const auto& value) {
+                            return value.id == generatedComponent.id;
+                        })) values.push_back(generatedComponent);
+            }
+            modeling_.body().replaceComponents(std::move(values));
+            component = modeling_.body().findComponent(componentId);
+        }
+        const auto modeString = arguments.value("mode").toString();
+        const auto mode = modeString == "hidden" ? cad::application::VisibilityMode::Hidden
+            : modeString == "ghosted" ? cad::application::VisibilityMode::Ghosted
+                                       : cad::application::VisibilityMode::Visible;
+        component->visible = mode != cad::application::VisibilityMode::Hidden;
+        viewer_->setComponentVisibility(QString::fromStdString(componentId), mode);
+        if (arguments.value("isolate").toBool(false)) {
+            for (const auto& other : modeling_.body().components())
+                if (other.id != componentId)
+                    viewer_->setComponentVisibility(QString::fromStdString(other.id),
+                        cad::application::VisibilityMode::Hidden);
+        }
+        result = QJsonObject{{"componentId", QString::fromStdString(componentId)},
+                             {"mode", modeString}, {"isolate", arguments.value("isolate").toBool(false)}};
     } else if (tool == "cad.get_feature" || tool == "cad.inspect_shape") {
         const QString featureId = arguments.value("featureId").toString();
         if (featureId.isEmpty()) return rpcError(id, -32602, "featureId is required");
@@ -1112,6 +1163,14 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             }
             QJsonObject value{{"featureId", QString::fromStdString(item.featureId)}, {"kind", kind}};
             if (item.subshapeIndex) value.insert("subshapeIndex", *item.subshapeIndex);
+            if (item.componentId) {
+                value.insert("componentId", QString::fromStdString(*item.componentId));
+                value.insert("effectiveVisibility",
+                    viewer_->componentVisibilityMode(QString::fromStdString(*item.componentId))
+                        == cad::application::VisibilityMode::Hidden ? "hidden"
+                    : viewer_->componentVisibilityMode(QString::fromStdString(*item.componentId))
+                        == cad::application::VisibilityMode::Ghosted ? "ghosted" : "visible");
+            }
             items.append(value);
         }
         result = QJsonObject{{"items", items}};
