@@ -1722,6 +1722,54 @@ ModelingResult ModelingController::transformFeatureDelta(
     return transformFeature(featureId, feature->placement(), after);
 }
 
+ModelingResult ModelingController::createTransform(
+    const std::vector<std::string>& featureIds,
+    const cad::parametric::TransformOperation operation,
+    const cad::parametric::TransformResultMode resultMode,
+    const gp_Trsf& transformation
+)
+{
+    if (featureIds.empty()) return {false, {}, "Transform requires at least one source feature"};
+    std::vector<cad::parametric::ParametricFeature::Ptr> sources;
+    sources.reserve(featureIds.size());
+    std::vector<std::string> uniqueIds;
+    uniqueIds.reserve(featureIds.size());
+    for (const auto& featureId : featureIds) {
+        if (std::find(uniqueIds.begin(), uniqueIds.end(), featureId) != uniqueIds.end())
+            continue;
+        const auto source = body_.findFeature(featureId);
+        if (!source) return {false, {}, "Transform source does not exist: " + featureId};
+        if (source->shape().IsNull())
+            return {false, {}, "Transform source has no valid shape: " + featureId};
+        uniqueIds.push_back(featureId);
+        sources.push_back(source);
+    }
+    if (sources.empty()) return {false, {}, "Transform requires at least one source feature"};
+
+    try {
+        const auto transformId = id("transform");
+        auto transform = std::make_shared<cad::parametric::TransformFeature>(
+            transformId, sources, operation, resultMode, transformation);
+        ModelTransaction transaction(body_, undoStack_, "Transform Features");
+        undoStack_.push(new cad::commands::AddFeatureCommand(
+            body_, transform, QStringLiteral("Transform Features")));
+        if (resultMode == cad::parametric::TransformResultMode::ReplaceResult) {
+            std::vector<bool> before;
+            before.reserve(uniqueIds.size());
+            for (const auto& featureId : uniqueIds)
+                before.push_back(body_.findFeature(featureId)->userVisible());
+            undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+                body_, uniqueIds, before,
+                std::vector<bool>(uniqueIds.size(), false),
+                QStringLiteral("Replace Transformed Result")));
+        }
+        if (!transaction.commit()) return {false, {}, body_.lastError()};
+        return {true, transformId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::duplicateFeature(const std::string& featureId)
 {
     if (featureId == lastCopyFeatureId_ && lastCopyDelta_) {

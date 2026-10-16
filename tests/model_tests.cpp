@@ -17,8 +17,10 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <cmath>
 #include <limits>
@@ -130,6 +132,96 @@ private slots:
         QCOMPARE(last->state(), FeatureState::UpToDate);
         QVERIFY(!body.shape().IsNull());
         QVERIFY(body.lastError().empty());
+    }
+
+    void transformFeatureRecomputesAndPersistsDependency()
+    {
+        Body body;
+        auto source = std::make_shared<BoxParametricFeature>("source", 2, 3, 4);
+        body.addFeature(source);
+        QVERIFY(body.recompute());
+
+        gp_Trsf translation;
+        translation.SetTranslation(gp_Vec(10, 20, 30));
+        auto transformed = std::make_shared<TransformFeature>(
+            "translated", std::vector<ParametricFeature::Ptr>{source},
+            TransformOperation::Translate, TransformResultMode::Copy, translation);
+        body.addFeature(transformed);
+        QVERIFY(body.recompute());
+        QCOMPARE(transformed->sourceIds().size(), std::size_t{1});
+        QCOMPARE(transformed->sourceIds().front(), std::string("source"));
+        QVERIFY(transformed->dependencies().front().lock() == source);
+        QVERIFY(BRepCheck_Analyzer(transformed->shape()).IsValid());
+        QCOMPARE(volume(transformed->shape()), 24.0);
+        Bnd_Box bounds;
+        BRepBndLib::Add(transformed->shape(), bounds);
+        double xmin, ymin, zmin, xmax, ymax, zmax;
+        bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        QVERIFY(std::abs(xmin - 10.0) < 1.0e-5);
+        QVERIFY(std::abs(ymin - 20.0) < 1.0e-5);
+        QVERIFY(std::abs(zmin - 30.0) < 1.0e-5);
+        QVERIFY(std::abs(xmax - 12.0) < 1.0e-5);
+        QVERIFY(std::abs(ymax - 23.0) < 1.0e-5);
+        QVERIFY(std::abs(zmax - 34.0) < 1.0e-5);
+
+        source->setSize(3, 4, 5);
+        body.markDirtyFrom(source->id());
+        QVERIFY(body.recompute());
+        QCOMPARE(volume(transformed->shape()), 60.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("transform.pcad");
+        Document document;
+        QString error;
+        QVERIFY(ProjectFile::save(path, document, body, error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY(ProjectFile::load(path, loadedDocument, loadedBody, error));
+        const auto loadedTransform = loadedBody.findFeature("translated");
+        QVERIFY(loadedTransform);
+        QCOMPARE(QString::fromLatin1(loadedTransform->typeId()), QStringLiteral("Transform"));
+        QVERIFY(loadedBody.recompute());
+        QCOMPARE(volume(loadedTransform->shape()), 60.0);
+    }
+
+    void transformFeatureSupportsMirrorRotateAndMultipleSources()
+    {
+        Body body;
+        auto first = std::make_shared<BoxParametricFeature>("first", 2, 3, 4);
+        auto second = std::make_shared<BoxParametricFeature>("second", 1, 1, 1);
+        gp_Trsf secondPlacement;
+        secondPlacement.SetTranslation(gp_Vec(5, 0, 0));
+        second->setPlacement(secondPlacement);
+        body.addFeature(first);
+        body.addFeature(second);
+        QVERIFY(body.recompute());
+
+        gp_Trsf mirror;
+        mirror.SetMirror(gp_Ax2(gp_Pnt(10, 0, 0), gp_Dir(1, 0, 0)));
+        auto mirrored = std::make_shared<TransformFeature>(
+            "mirrored", std::vector<ParametricFeature::Ptr>{first},
+            TransformOperation::Mirror, TransformResultMode::Copy, mirror);
+        auto combined = std::make_shared<TransformFeature>(
+            "combined", std::vector<ParametricFeature::Ptr>{first, second},
+            TransformOperation::Translate, TransformResultMode::Copy, gp_Trsf());
+        gp_Trsf rotation;
+        rotation.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
+            0.5 * std::acos(-1.0));
+        auto rotated = std::make_shared<TransformFeature>(
+            "rotated", std::vector<ParametricFeature::Ptr>{first},
+            TransformOperation::Rotate, TransformResultMode::Copy, rotation);
+        body.addFeature(mirrored);
+        body.addFeature(combined);
+        body.addFeature(rotated);
+        QVERIFY(body.recompute());
+        QVERIFY(BRepCheck_Analyzer(mirrored->shape()).IsValid());
+        QVERIFY(BRepCheck_Analyzer(combined->shape()).IsValid());
+        QVERIFY(BRepCheck_Analyzer(rotated->shape()).IsValid());
+        QCOMPARE(volume(mirrored->shape()), 24.0);
+        QCOMPARE(volume(combined->shape()), 25.0);
+        QCOMPARE(volume(rotated->shape()), 24.0);
+        QCOMPARE(combined->sourceIds().size(), std::size_t{2});
     }
 
     void rectangleValidation_data()

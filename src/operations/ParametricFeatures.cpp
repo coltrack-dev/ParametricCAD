@@ -7,6 +7,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -3208,6 +3209,83 @@ ParametricFeature::Ptr SweepFeature::clone(std::string newId) const
         : (pathFeature_
             ? std::make_shared<SweepFeature>(std::move(newId), pathFeature_, profile_)
             : std::make_shared<SweepFeature>(std::move(newId), path_, profile_));
+    copyPlacementTo(copy);
+    return copy;
+}
+
+TransformFeature::TransformFeature(
+    std::string id,
+    std::vector<Ptr> sources,
+    const TransformOperation operation,
+    const TransformResultMode resultMode,
+    const gp_Trsf transformation
+)
+    : ParametricFeature(std::move(id), "Transform"),
+      operation_(operation), resultMode_(resultMode), transformation_(transformation)
+{
+    if (sources.empty()) throw std::invalid_argument("Transform requires at least one source");
+    sourceIds_.reserve(sources.size());
+    sources_.reserve(sources.size());
+    for (const auto& source : sources) {
+        if (!source) throw std::invalid_argument("Transform source must not be null");
+        sourceIds_.push_back(source->id());
+        sources_.push_back(source);
+        addDependency(source);
+    }
+}
+
+TopoDS_Shape TransformFeature::build() const
+{
+    std::vector<TopoDS_Shape> transformed;
+    transformed.reserve(sources_.size());
+    for (const auto& weakSource : sources_) {
+        const auto source = weakSource.lock();
+        if (!source) throw std::runtime_error("Transform source no longer exists");
+        if (source->shape().IsNull())
+            throw std::runtime_error("Transform source has no valid shape");
+        BRepBuilderAPI_Transform builder(source->shape(), transformation_, Standard_True);
+        if (!builder.IsDone()) throw std::runtime_error("OCCT transform failed");
+        const auto result = builder.Shape();
+        if (result.IsNull()) throw std::runtime_error("OCCT transform returned a null shape");
+        transformed.push_back(result);
+    }
+    if (transformed.size() == 1) return transformed.front();
+
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const auto& shape : transformed) builder.Add(compound, shape);
+    return compound;
+}
+
+void TransformFeature::writeParameters(QJsonObject& object) const
+{
+    QJsonArray sourceIds;
+    for (const auto& sourceId : sourceIds_)
+        sourceIds.append(QString::fromStdString(sourceId));
+    object.insert("sourceIds", sourceIds);
+    object.insert("operation", operation_ == TransformOperation::Mirror ? "Mirror"
+        : operation_ == TransformOperation::Translate ? "Translate" : "Rotate");
+    object.insert("resultMode", resultMode_ == TransformResultMode::Copy
+        ? "copy" : "replace_result");
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(transformation_.Value(row, column));
+    object.insert("transformation", matrix);
+}
+
+ParametricFeature::Ptr TransformFeature::clone(std::string newId) const
+{
+    std::vector<Ptr> sources;
+    sources.reserve(sources_.size());
+    for (const auto& weakSource : sources_) {
+        const auto source = weakSource.lock();
+        if (!source) return {};
+        sources.push_back(source);
+    }
+    auto copy = std::make_shared<TransformFeature>(std::move(newId), sources,
+        operation_, resultMode_, transformation_);
     copyPlacementTo(copy);
     return copy;
 }

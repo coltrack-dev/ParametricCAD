@@ -921,4 +921,39 @@ private:
     SweepPathDefinition pathDefinition_;
 };
 
+enum class TransformOperation { Mirror, Translate, Rotate };
+enum class TransformResultMode { Copy, ReplaceResult };
+
+class TransformFeature final : public ParametricFeature
+{
+public:
+    TransformFeature(
+        std::string id,
+        std::vector<Ptr> sources,
+        TransformOperation operation,
+        TransformResultMode resultMode,
+        gp_Trsf transformation
+    );
+
+    const char* typeId() const noexcept override { return "Transform"; }
+    std::string creationLabel() const override { return "Transform"; }
+    Ptr clone(std::string newId) const override;
+
+    const std::vector<std::string>& sourceIds() const noexcept { return sourceIds_; }
+    TransformOperation operation() const noexcept { return operation_; }
+    TransformResultMode resultMode() const noexcept { return resultMode_; }
+    const gp_Trsf& transformation() const noexcept { return transformation_; }
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::vector<std::string> sourceIds_;
+    std::vector<std::weak_ptr<ParametricFeature>> sources_;
+    TransformOperation operation_;
+    TransformResultMode resultMode_;
+    gp_Trsf transformation_;
+};
+
 } // namespace cad::parametric

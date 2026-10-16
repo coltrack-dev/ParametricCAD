@@ -253,6 +253,86 @@ private slots:
             .toObject().value("error").toObject().value("code").toInt(), -32004);
     }
 
+    void spatialTransformsThroughMcp()
+    {
+        const auto inventory = protocolCall("tools/list").value("result").toObject()
+            .value("tools").toArray();
+        for (const auto& name : {QStringLiteral("cad.mirror"), QStringLiteral("cad.translate"),
+                                 QStringLiteral("cad.rotate"), QStringLiteral("cad.transform_model")}) {
+            bool found = false;
+            for (const auto& value : inventory)
+                found = found || value.toObject().value("name").toString() == name;
+            QVERIFY(found);
+        }
+
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto source = createRectangleExtrude(10.0, 4.0, 2.0);
+        QVERIFY(!source.isEmpty());
+
+        const auto translated = callTool("cad.translate", QJsonObject{
+            {"featureIds", QJsonArray{source}}, {"mode", "copy"},
+            {"vector", QJsonArray{5.0, 6.0, 7.0}}, {"units", "mm"}});
+        const auto translatedId = translated.value("featureId").toString();
+        QVERIFY(!translatedId.isEmpty());
+        verifyOneSolid(translatedId, 10.0, 4.0, 2.0);
+        verifyDependency(translatedId, source);
+        const auto translatedShape = callTool("cad.inspect_shape",
+            QJsonObject{{"featureId", translatedId}});
+        const auto translatedMin = translatedShape.value("boundingBox").toObject()
+            .value("min").toArray();
+        QVERIFY(std::abs(translatedMin.at(0).toDouble() - 5.0) < 0.2);
+        QVERIFY(std::abs(translatedMin.at(1).toDouble() - 6.0) < 0.2);
+        QVERIFY(std::abs(translatedMin.at(2).toDouble() - 7.0) < 0.2);
+
+        const auto mirrored = callTool("cad.mirror", QJsonObject{
+            {"featureIds", QJsonArray{source}}, {"mode", "replace_result"},
+            {"origin", QJsonArray{20.0, 0.0, 0.0}},
+            {"normal", QJsonArray{1.0, 0.0, 0.0}}, {"units", "mm"}});
+        const auto mirroredId = mirrored.value("featureId").toString();
+        QVERIFY(!mirroredId.isEmpty());
+        verifyOneSolid(mirroredId, 10.0, 4.0, 2.0);
+        QVERIFY(!callTool("cad.get_feature", QJsonObject{{"featureId", source}})
+            .value("visible").toBool());
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QVERIFY(callTool("cad.get_feature", QJsonObject{{"featureId", source}})
+            .value("visible").toBool());
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QVERIFY(!callTool("cad.get_feature", QJsonObject{{"featureId", source}})
+            .value("visible").toBool());
+
+        const auto rotated = callTool("cad.rotate", QJsonObject{
+            {"featureIds", QJsonArray{translatedId}}, {"mode", "copy"},
+            {"axisOrigin", QJsonArray{0.0, 0.0, 0.0}},
+            {"axisDirection", QJsonArray{0.0, 0.0, 1.0}},
+            {"angleDegrees", 90.0}, {"units", "mm"}});
+        const auto rotatedId = rotated.value("featureId").toString();
+        QVERIFY(!rotatedId.isEmpty());
+        verifyOneSolid(rotatedId, 4.0, 10.0, 2.0);
+        verifyDependency(rotatedId, translatedId);
+
+        const QString saved = temporaryDirectory_.filePath("transforms.pcad");
+        QVERIFY(callTool("cad.save_project", QJsonObject{{"path", saved}})
+            .value("success").toBool());
+        QVERIFY(callTool("cad.open_project", QJsonObject{{"path", saved}})
+            .value("success").toBool());
+        QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", rotatedId}})
+            .value("valid").toBool());
+
+        const auto beforeEdit = callTool("cad.inspect_shape",
+            QJsonObject{{"featureId", rotatedId}}).value("volume").toDouble();
+        QVERIFY(callTool("cad.edit_feature", QJsonObject{{"featureId", source},
+            {"property", "distance"}, {"value", 3.0}, {"units", "mm"}})
+            .value("success").toBool());
+        const auto afterEdit = callTool("cad.inspect_shape",
+            QJsonObject{{"featureId", rotatedId}}).value("volume").toDouble();
+        QVERIFY(afterEdit > beforeEdit);
+
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", rotatedId}})
+            .value("valid").toBool());
+    }
+
     void transactionalProfileEditingThroughMcp()
     {
         QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);

@@ -68,6 +68,10 @@
 #include <QIcon>
 #include <QSignalBlocker>
 #include <QBuffer>
+#include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Vec.hxx>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -815,7 +819,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.add_arc", "cad.add_constraint", "cad.edit_constraint",
         "cad.remove_constraint", "cad.get_constraints", "cad.linear_pattern",
         "cad.path_pattern", "cad.get_feature_dependencies", "cad.find_topology",
-        "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch"};
+        "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch", "cad.mirror",
+        "cad.translate", "cad.rotate", "cad.transform_model"};
     static const QStringList transactionalTools{
         "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
         "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
@@ -836,7 +841,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         return rpcError(id, -32602, "featureId must be the only non-empty string argument");
     const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.add_line",
         "cad.extrude", "cad.pocket", "cad.chamfer", "cad.fillet", "cad.shell",
-        "cad.add_arc", "cad.linear_pattern", "cad.path_pattern", "cad.edit_sketch_profile"};
+        "cad.add_arc", "cad.linear_pattern", "cad.path_pattern", "cad.edit_sketch_profile",
+        "cad.mirror", "cad.translate", "cad.rotate", "cad.transform_model"};
     if (unitTools.contains(tool)) {
         QString unitsError;
         if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
@@ -1196,6 +1202,79 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!operation.success) return finishModeling(operation, "pocket");
         refreshModelView();
         return finishModeling(operation, "pocket");
+    } else if (tool == "cad.mirror" || tool == "cad.translate"
+               || tool == "cad.rotate" || tool == "cad.transform_model") {
+        const QString operationName = tool == "cad.mirror" ? "mirror"
+            : tool == "cad.translate" ? "translate"
+            : tool == "cad.rotate" ? "rotate"
+            : arguments.value("operation").toString();
+        const QStringList allowed{
+            "featureIds", "mode", "origin", "normal", "vector",
+            "axisOrigin", "axisDirection", "angleDegrees", "operation", "units"};
+        if (!hasOnly(allowed) || !arguments.value("featureIds").isArray()
+            || arguments.value("featureIds").toArray().isEmpty()
+            || !arguments.value("mode").isString()
+            || (arguments.value("mode").toString() != "copy"
+                && arguments.value("mode").toString() != "replace_result"))
+            return rpcError(id, -32602,
+                "Transform requires featureIds, mode and valid transform parameters");
+        if (operationName != "mirror" && operationName != "translate" && operationName != "rotate")
+            return rpcError(id, -32602, "operation must be mirror, translate or rotate");
+
+        std::vector<std::string> featureIds;
+        for (const auto& value : arguments.value("featureIds").toArray()) {
+            if (!value.isString() || value.toString().isEmpty())
+                return rpcError(id, -32602, "featureIds must contain non-empty strings");
+            featureIds.push_back(value.toString().toStdString());
+        }
+        const auto vector3 = [&arguments](const char* key, double& x, double& y, double& z) {
+            const auto values = arguments.value(QLatin1String(key)).toArray();
+            if (values.size() != 3) return false;
+            if (!values.at(0).isDouble() || !values.at(1).isDouble() || !values.at(2).isDouble())
+                return false;
+            x = values.at(0).toDouble();
+            y = values.at(1).toDouble();
+            z = values.at(2).toDouble();
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+        };
+        gp_Trsf transformation;
+        cad::parametric::TransformOperation operation;
+        if (operationName == "mirror") {
+            double ox, oy, oz, nx, ny, nz;
+            if (!vector3("origin", ox, oy, oz) || !vector3("normal", nx, ny, nz)
+                || gp_Vec(nx, ny, nz).Magnitude() <= 1.0e-12)
+                return rpcError(id, -32602, "Mirror requires finite origin and non-zero normal");
+            transformation.SetMirror(gp_Ax2(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz)));
+            operation = cad::parametric::TransformOperation::Mirror;
+        } else if (operationName == "translate") {
+            double x, y, z;
+            if (!vector3("vector", x, y, z))
+                return rpcError(id, -32602, "Translate requires a finite 3D vector");
+            transformation.SetTranslation(gp_Vec(x, y, z));
+            operation = cad::parametric::TransformOperation::Translate;
+        } else {
+            double ox, oy, oz, dx, dy, dz;
+            const auto angle = arguments.value("angleDegrees");
+            if (!vector3("axisOrigin", ox, oy, oz) || !vector3("axisDirection", dx, dy, dz)
+                || gp_Vec(dx, dy, dz).Magnitude() <= 1.0e-12
+                || !angle.isDouble() || !std::isfinite(angle.toDouble()))
+                return rpcError(id, -32602,
+                    "Rotate requires finite axis origin, non-zero direction and angleDegrees");
+            if (std::abs(angle.toDouble()) <= 1.0e-12 || std::abs(angle.toDouble()) > 360000.0)
+                return rpcError(id, -32602, "Rotate angleDegrees is out of range");
+            transformation.SetRotation(
+                gp_Ax1(gp_Pnt(ox, oy, oz), gp_Dir(dx, dy, dz)),
+                angle.toDouble() * std::acos(-1.0) / 180.0);
+            operation = cad::parametric::TransformOperation::Rotate;
+        }
+        const auto resultMode = arguments.value("mode").toString() == "copy"
+            ? cad::parametric::TransformResultMode::Copy
+            : cad::parametric::TransformResultMode::ReplaceResult;
+        const auto modelingResult = modeling_.createTransform(
+            featureIds, operation, resultMode, transformation);
+        if (!modelingResult.success) return finishModeling(modelingResult, operationName);
+        refreshModelView();
+        return finishModeling(modelingResult, operationName);
     } else if (tool == "cad.recompute") {
         if (!arguments.isEmpty()) return rpcError(id, -32602, "recompute does not accept arguments");
         const bool success = modeling_.body().recompute();

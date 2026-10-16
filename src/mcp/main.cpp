@@ -165,6 +165,19 @@ QJsonArray toolDefinitions()
             {"startOffset", QJsonObject{{"type", "number"}}}, {"endOffset", QJsonObject{{"type", "number"}}},
             {"includeSource", QJsonObject{{"type", "boolean"}}}, {"units", units}}},
         {"required", QJsonArray{"featureId", "pathFeatureId", "spacing", "count", "units"}}};
+    const QJsonObject transform{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"featureIds", QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}}}},
+            {"mode", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"copy", "replace_result"}}}},
+            {"operation", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"mirror", "translate", "rotate"}}}},
+            {"origin", QJsonObject{{"type", "array"}}},
+            {"normal", QJsonObject{{"type", "array"}}},
+            {"vector", QJsonObject{{"type", "array"}}},
+            {"axisOrigin", QJsonObject{{"type", "array"}}},
+            {"axisDirection", QJsonObject{{"type", "array"}}},
+            {"angleDegrees", QJsonObject{{"type", "number"}}},
+            {"units", units}}},
+        {"required", QJsonArray{"featureIds", "mode", "units"}}};
     const QJsonObject tools = QJsonObject{
         {"cad.get_model_tree", QJsonObject{{"description", "Inspect the parametric model tree"}, {"inputSchema", empty}}},
         {"cad.get_feature", QJsonObject{{"description", "Inspect one parametric feature"}, {"inputSchema", feature}}},
@@ -209,6 +222,10 @@ QJsonArray toolDefinitions()
         ,{"cad.linear_pattern", QJsonObject{{"description", "Create a parametric linear pattern"}, {"inputSchema", linearPattern}}}
         ,{"cad.path_pattern", QJsonObject{{"description", "Create a parametric path pattern"}, {"inputSchema", pathPattern}}}
         ,{"cad.get_feature_dependencies", QJsonObject{{"description", "Inspect direct feature dependencies"}, {"inputSchema", feature}}}
+        ,{"cad.mirror", QJsonObject{{"description", "Create a persistent mirror transform"}, {"inputSchema", transform}}}
+        ,{"cad.translate", QJsonObject{{"description", "Create a persistent translation transform"}, {"inputSchema", transform}}}
+        ,{"cad.rotate", QJsonObject{{"description", "Create a persistent rotation transform"}, {"inputSchema", transform}}}
+        ,{"cad.transform_model", QJsonObject{{"description", "Create a persistent parametric spatial transform"}, {"inputSchema", transform}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {

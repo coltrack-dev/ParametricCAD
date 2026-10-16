@@ -452,6 +452,24 @@ gp_Trsf rigidPlacement(const double* values)
     return placement;
 }
 
+gp_Trsf transformValue(const QJsonObject& object)
+{
+    const auto values = object.value("transformation").toArray();
+    require(values.size() == 12, "Invalid Transform matrix");
+    double matrix[12]{};
+    for (int index = 0; index < 12; ++index) {
+        require(values.at(index).isDouble() && std::isfinite(values.at(index).toDouble()),
+            "Invalid Transform matrix value");
+        matrix[index] = values.at(index).toDouble();
+    }
+    gp_Trsf transformation;
+    transformation.SetValues(
+        matrix[0], matrix[1], matrix[2], matrix[3],
+        matrix[4], matrix[5], matrix[6], matrix[7],
+        matrix[8], matrix[9], matrix[10], matrix[11]);
+    return transformation;
+}
+
 std::vector<cad::topology::TopologicalReference> topologicalReferences(
     const QJsonObject& o, const char* key, const std::string& sourceId)
 {
@@ -876,6 +894,26 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 string(o, "id"), sources, path, number(o, "spacing"),
                 static_cast<int>(number(o, "count")), distribution, orientation,
                 number(o, "startOffset"), number(o, "endOffset"), boolean(o, "includeSource"));
+        }},
+        {"Transform", [](const QJsonObject& o, const Body& body) {
+            std::vector<ParametricFeature::Ptr> sources;
+            for (const auto& sourceId : strings(o, "sourceIds")) {
+                const auto source = body.findFeature(sourceId);
+                require(static_cast<bool>(source), "Transform references missing source");
+                sources.push_back(source);
+            }
+            const auto operationName = string(o, "operation");
+            const auto operation = operationName == "Mirror"
+                ? TransformOperation::Mirror
+                : operationName == "Translate" ? TransformOperation::Translate
+                : operationName == "Rotate" ? TransformOperation::Rotate
+                : throw std::invalid_argument("Invalid Transform operation");
+            const auto modeName = string(o, "resultMode");
+            const auto mode = modeName == "copy" ? TransformResultMode::Copy
+                : modeName == "replace_result" ? TransformResultMode::ReplaceResult
+                : throw std::invalid_argument("Invalid Transform result mode");
+            return std::make_shared<TransformFeature>(string(o, "id"), sources,
+                operation, mode, transformValue(o));
         }},
         {"IfcImported", [](const QJsonObject& o, const Body&) {
             const auto payload = o.value("geometryPayload");

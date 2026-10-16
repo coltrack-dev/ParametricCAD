@@ -17,7 +17,8 @@ AddFeatureCommand::AddFeatureCommand(parametric::Body& body,
             throw std::invalid_argument("New feature references a missing source");
         }
     }
-    if (!feature_->recompute()) throw std::invalid_argument(feature_->error());
+    if (!body_.recomputeDeferred() && !feature_->recompute())
+        throw std::invalid_argument(feature_->error());
 }
 
 ImportFeaturesCommand::ImportFeaturesCommand(

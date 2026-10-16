@@ -209,6 +209,12 @@ public:
         const std::string& featureId,
         const gp_Trsf& delta
     );
+    ModelingResult createTransform(
+        const std::vector<std::string>& featureIds,
+        cad::parametric::TransformOperation operation,
+        cad::parametric::TransformResultMode resultMode,
+        const gp_Trsf& transformation
+    );
     ModelingResult duplicateFeature(const std::string& featureId);
     ModelingResult duplicateFeatureWithDelta(
         const std::string& featureId,
