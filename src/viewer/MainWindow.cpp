@@ -1213,8 +1213,21 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         const QString path = arguments.value("path").toString();
         if (!validProjectPath(path, pathError)) return rpcError(id, -32602, pathError);
         QString error;
+        QElapsedTimer projectOperationTimer;
+        projectOperationTimer.start();
+        const QString requestId = request.value("id").toVariant().toString();
+        const bool opening = tool == "cad.open_project";
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP")) {
+            qInfo().noquote() << QString("[MCP] project-%1-start id=%2 path=%3")
+                .arg(opening ? "open" : "save", requestId, path);
+        }
         const bool success = tool == "cad.open_project"
             ? project_.open(path, error) : project_.save(path, error);
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP")) {
+            qInfo().noquote() << QString("[MCP] project-%1-controller id=%2 elapsedMs=%3 success=%4")
+                .arg(opening ? "open" : "save", requestId)
+                .arg(projectOperationTimer.elapsed()).arg(success ? 1 : 0);
+        }
         if (!success) return rpcError(id, -32021,
             tool == "cad.open_project" ? "Project open failed" : "Project save failed",
             QJsonObject{{"path", path}, {"message", error}});
@@ -1225,6 +1238,11 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             refreshModelView(true);
         } else {
             refreshModelView();
+        }
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP")) {
+            qInfo().noquote() << QString("[MCP] project-%1-finished id=%2 elapsedMs=%3")
+                .arg(opening ? "open" : "save", requestId)
+                .arg(projectOperationTimer.elapsed());
         }
         result = QJsonObject{{"success", true}, {"path", path},
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())},

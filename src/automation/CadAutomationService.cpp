@@ -4,6 +4,7 @@
 
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -11,6 +12,11 @@
 
 namespace {
 constexpr qsizetype MaxRequestBytes = 1024 * 1024;
+
+bool traceAutomation()
+{
+    return qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP");
+}
 }
 
 CadAutomationService::CadAutomationService(MainWindow& window, QObject* parent)
@@ -89,15 +95,34 @@ void CadAutomationService::readClient()
         QJsonParseError parseError;
         const QJsonDocument request = QJsonDocument::fromJson(line, &parseError);
         QJsonObject response;
+        QElapsedTimer timer;
+        timer.start();
         if (parseError.error != QJsonParseError::NoError || !request.isObject()) {
             response = QJsonObject{{"jsonrpc", "2.0"}, {"id", QJsonValue()},
                 {"error", QJsonObject{{"code", -32700}, {"message", "Invalid JSON"}}}};
         } else {
-            response = window_.handleAutomationRequest(request.object());
+            const auto requestObject = request.object();
+            const QString requestId = requestObject.value("id").toVariant().toString();
+            const QString tool = requestObject.value("params").toObject().value("tool").toString();
+            if (traceAutomation()) {
+                qInfo().noquote() << QString("[MCP] receive id=%1 tool=%2")
+                    .arg(requestId, tool);
+            }
+            response = window_.handleAutomationRequest(requestObject);
+            if (traceAutomation()) {
+                qInfo().noquote() << QString("[MCP] dispatch-complete id=%1 tool=%2 elapsedMs=%3")
+                    .arg(requestId, tool).arg(timer.elapsed());
+            }
         }
-        client->write(QJsonDocument(response).toJson(QJsonDocument::Compact));
+        const QByteArray serialized = QJsonDocument(response).toJson(QJsonDocument::Compact);
+        client->write(serialized);
         client->write("\n");
         client->flush();
+        if (traceAutomation()) {
+            qInfo().noquote() << QString("[MCP] response-written bytes=%1 elapsedMs=%2 flushed=%3")
+                .arg(serialized.size()).arg(timer.elapsed())
+                .arg(client->bytesToWrite() == 0 ? 1 : 0);
+        }
     }
 }
 

@@ -3,11 +3,24 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>
+#include <QElapsedTimer>
 #include <QTextStream>
 #include <QTimer>
 
 namespace {
-constexpr int TimeoutMs = 5000;
+constexpr int DefaultTimeoutMs = 5000;
+constexpr int ProjectOperationTimeoutMs = 120000;
+
+bool traceMcp()
+{
+    return qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP");
+}
+
+void traceMcpMessage(const QString& message)
+{
+    if (!traceMcp()) return;
+    QTextStream(stderr) << "[MCP] " << message << '\n';
+}
 
 QJsonArray toolDefinitions()
 {
@@ -270,21 +283,39 @@ QJsonObject errorResponse(const QJsonValue& id, int code, const QString& message
 QJsonObject callApplication(const QString& socketName, const QString& tool,
                             const QJsonObject& arguments, const QJsonValue& id)
 {
+    QElapsedTimer timer;
+    timer.start();
+    const int timeoutMs = tool == "cad.open_project" || tool == "cad.save_project"
+        ? ProjectOperationTimeoutMs : DefaultTimeoutMs;
+    bool timeoutOverrideOk = false;
+    const int timeoutOverride = qEnvironmentVariable("PARAMETRICCAD_MCP_TIMEOUT_MS")
+        .toInt(&timeoutOverrideOk);
+    const int effectiveTimeoutMs = timeoutOverrideOk && timeoutOverride > 0
+        ? timeoutOverride : timeoutMs;
+    traceMcpMessage(QString("request id=%1 tool=%2 timeoutMs=%3")
+        .arg(id.toVariant().toString(), tool).arg(effectiveTimeoutMs));
     QLocalSocket socket;
     socket.connectToServer(socketName, QIODevice::ReadWrite);
-    if (!socket.waitForConnected(TimeoutMs))
+    if (!socket.waitForConnected(effectiveTimeoutMs))
         return errorResponse(id, -32001, "ParametricCAD is not connected: " + socket.errorString());
     const QJsonObject request{{"jsonrpc", "2.0"}, {"id", id}, {"method", "automation/call"},
         {"params", QJsonObject{{"tool", tool}, {"arguments", arguments}}}};
     socket.write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
-    if (!socket.waitForBytesWritten(TimeoutMs) || !socket.waitForReadyRead(TimeoutMs))
+    if (!socket.waitForBytesWritten(effectiveTimeoutMs)
+        || !socket.waitForReadyRead(effectiveTimeoutMs)) {
+        traceMcpMessage(QString("timeout id=%1 tool=%2 elapsedMs=%3")
+            .arg(id.toVariant().toString(), tool).arg(timer.elapsed()));
         return errorResponse(id, -32002, "Timed out waiting for ParametricCAD");
+    }
     QByteArray line = socket.readLine();
-    while (!line.endsWith('\n') && socket.waitForReadyRead(TimeoutMs)) line += socket.readLine();
+    while (!line.endsWith('\n') && socket.waitForReadyRead(effectiveTimeoutMs))
+        line += socket.readLine();
     QJsonParseError parseError;
     const QJsonDocument response = QJsonDocument::fromJson(line, &parseError);
     if (parseError.error != QJsonParseError::NoError || !response.isObject())
         return errorResponse(id, -32003, "ParametricCAD returned invalid JSON");
+    traceMcpMessage(QString("response id=%1 tool=%2 elapsedMs=%3 bytes=%4")
+        .arg(id.toVariant().toString(), tool).arg(timer.elapsed()).arg(line.size()));
     return response.object();
 }
 
