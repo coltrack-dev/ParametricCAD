@@ -481,6 +481,16 @@ private slots:
         QVERIFY(callTool("cad.open_project", QJsonObject{{"path", saved}})
             .value("success").toBool());
         QCOMPARE(callTool("cad.get_components").value("componentCount").toInt(), 5);
+        const auto presentationAfterLoad = callTool("cad.get_application_status");
+        QCOMPARE(presentationAfterLoad.value("displayedFeaturePresentationCount").toInt(), 0);
+        QVERIFY(presentationAfterLoad.value("displayedComponentPresentationCount").toInt() >= 2);
+        const auto aggregateAfterLoad = callTool("cad.inspect_model");
+        QVERIFY(aggregateAfterLoad.value("valid").toBool());
+        QVERIFY(aggregateAfterLoad.value("activeComponentCount").toInt() >= 2);
+        QCOMPARE(aggregateAfterLoad.value("visibleComponentCount").toInt(),
+            aggregateAfterLoad.value("activeComponentCount").toInt());
+        QVERIFY(aggregateAfterLoad.value("visibleGeometricSolidCount").toInt() >= 2);
+        QVERIFY(aggregateAfterLoad.value("totalVisibleGeometricVolume").toDouble() > 0.0);
         QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", negativeFeature}})
             .value("valid").toBool());
         const auto movedAfterLoad = callTool("cad.get_component",

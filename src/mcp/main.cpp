@@ -157,6 +157,9 @@ QJsonArray toolDefinitions()
     const QJsonObject deleteFeature{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"featureId", QJsonObject{{"type", "string"}}}}},
         {"required", QJsonArray{"featureId"}}};
+    const QJsonObject recoverPreSplit{{"type", "object"}, {"additionalProperties", false},
+        {"properties", QJsonObject{{"rootFeatureId", QJsonObject{{"type", "string"}}}}},
+        {"required", QJsonArray{"rootFeatureId"}}};
     const QJsonObject arc{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{{"sketchId", QJsonObject{{"type", "string"}}},
             {"center", QJsonObject{{"type", "array"}}}, {"start", QJsonObject{{"type", "array"}}},
@@ -309,6 +312,8 @@ QJsonArray toolDefinitions()
             {"inputSchema", componentTransform}}}
         ,{"cad.split_component", QJsonObject{{"description", "Split one persistent model component by a plane"},
             {"inputSchema", componentSplit}}}
+        ,{"cad.recover_pre_split", QJsonObject{{"description", "Restore a whole-feature result before downstream component Split/Transform operations"},
+            {"inputSchema", recoverPreSplit}}}
     };
     QJsonArray result;
     for (auto it = tools.begin(); it != tools.end(); ++it) {

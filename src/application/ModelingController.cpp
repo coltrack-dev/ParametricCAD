@@ -29,6 +29,7 @@
 #include <cmath>
 #include <memory>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace cad::application {
 
@@ -94,6 +95,18 @@ std::vector<ModelComponent> componentMetadata(const cad::parametric::Body& body)
         result.insert(result.end(), generated.begin(), generated.end());
     }
     return result;
+}
+
+bool dependsOn(const cad::parametric::ParametricFeature::Ptr& feature,
+               const std::string& ancestorId)
+{
+    if (!feature) return false;
+    for (const auto& weakDependency : feature->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        if (!dependency) continue;
+        if (dependency->id() == ancestorId || dependsOn(dependency, ancestorId)) return true;
+    }
+    return false;
 }
 
 void collectFeatureAndDependencies(
@@ -1954,6 +1967,73 @@ ModelingResult ModelingController::splitComponent(
             after, QStringLiteral("Update Component Replacement")));
         if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
         return {true, negativeId, {}, {negativeComponentId, positiveComponentId}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::recoverPreSplit(const std::string& rootFeatureId)
+{
+    const auto root = body_.findFeature(rootFeatureId);
+    if (!root) return componentFailure("Recovery root feature does not exist");
+
+    std::vector<std::string> removableIds;
+    removableIds.reserve(body_.features().size());
+    for (const auto& feature : body_.features()) {
+        if (feature->id() == rootFeatureId || !dependsOn(feature, rootFeatureId)) continue;
+        const bool isSplit = std::dynamic_pointer_cast<cad::parametric::ComponentSplitFeature>(feature)
+            != nullptr;
+        const bool isTransform = std::dynamic_pointer_cast<cad::parametric::ComponentTransformFeature>(feature)
+            != nullptr;
+        if (!isSplit && !isTransform) {
+            return componentFailure("Recovery is unsafe: non-component downstream feature '"
+                + feature->id() + "' depends on the selected root");
+        }
+        removableIds.push_back(feature->id());
+    }
+    if (removableIds.empty()) return componentFailure("No downstream component Split/Transform history found");
+
+    const auto before = componentMetadata(body_);
+    auto after = before;
+    std::unordered_set<std::string> removedFeatureIds(removableIds.begin(), removableIds.end());
+    std::unordered_set<std::string> removedComponentIds;
+    for (const auto& component : before) {
+        if (removedFeatureIds.contains(component.sourceFeatureId))
+            removedComponentIds.insert(component.id);
+    }
+    after.erase(std::remove_if(after.begin(), after.end(),
+        [&removedFeatureIds, &removedComponentIds](ModelComponent& component) {
+            if (removedFeatureIds.contains(component.sourceFeatureId)) return true;
+            if (component.parentComponentId
+                && removedComponentIds.contains(*component.parentComponentId)) return true;
+            const auto oldSize = component.replacementComponentIds.size();
+            component.replacementComponentIds.erase(
+                std::remove_if(component.replacementComponentIds.begin(),
+                               component.replacementComponentIds.end(),
+                    [&removedComponentIds](const std::string& id) {
+                        return removedComponentIds.contains(id);
+                    }), component.replacementComponentIds.end());
+            if (oldSize != component.replacementComponentIds.size()
+                && component.replacementComponentIds.empty()) {
+                component.visible = true;
+                component.technicalHidden = false;
+            }
+            return false;
+        }), after.end());
+    if (after.empty()) return componentFailure("Recovery would remove all component metadata");
+
+    try {
+        ModelTransaction transaction(body_, undoStack_, "Recover Pre-Split Model");
+        // Remove descendants in reverse body order so no dependent feature is
+        // removed before the feature that owns it.
+        for (auto iterator = body_.features().rbegin(); iterator != body_.features().rend(); ++iterator) {
+            if (removedFeatureIds.contains((*iterator)->id()))
+                undoStack_.push(new cad::commands::RemoveFeatureCommand(body_, (*iterator)->id()));
+        }
+        undoStack_.push(new cad::commands::ReplaceComponentsCommand(
+            body_, before, after, QStringLiteral("Restore Pre-Split Components")));
+        if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
+        return {true, rootFeatureId, {}, {}};
     } catch (const std::exception& error) {
         return failure(error);
     }

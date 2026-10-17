@@ -40,6 +40,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRep_Builder.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
@@ -870,7 +871,8 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch", "cad.mirror",
         "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
         "cad.get_components", "cad.get_component", "cad.get_component_topology",
-        "cad.set_component_visibility", "cad.transform_component", "cad.split_component"};
+        "cad.set_component_visibility", "cad.transform_component", "cad.split_component",
+        "cad.recover_pre_split"};
     static const QStringList transactionalTools{
         "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
         "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
@@ -943,6 +945,12 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             || !arguments.value("componentId").isString()
             || arguments.value("componentId").toString().isEmpty())
             return rpcError(id, -32602, "split_component requires componentId, origin and normal");
+    }
+    if (tool == "cad.recover_pre_split") {
+        if (!hasOnly({"rootFeatureId"})
+            || !arguments.value("rootFeatureId").isString()
+            || arguments.value("rootFeatureId").toString().isEmpty())
+            return rpcError(id, -32602, "recover_pre_split requires rootFeatureId");
     }
     if ((tool == "cad.get_feature" || tool == "cad.inspect_shape")
         && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
@@ -1194,7 +1202,49 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
                 }
             }
         }
-        const auto& shape = modeling_.body().shape();
+        // Body::shape() is the result of the last ParametricFeature and may
+        // therefore represent only a component-level operation result.  For
+        // aggregate inspection use the logically active ModelComponents,
+        // excluding replaced/technical-hidden history and resolving each
+        // component independently.  This is deliberately independent of AIS
+        // presentation state.
+        std::vector<TopoDS_Shape> activeComponentShapes;
+        qint64 activeComponentCount = 0;
+        for (const auto& component : modeling_.body().components()) {
+            const auto feature = modeling_.body().findFeature(component.sourceFeatureId);
+            if (!feature) continue;
+            std::string resolveError;
+            const auto resolved = cad::parametric::ComponentResolver::resolve(
+                modeling_.body(), component.id, resolveError);
+            if (!resolved) continue;
+            const auto visibility = visibilityManager_.effectiveComponentVisibility(
+                *feature, resolved->component, modeling_.body());
+            if (visibility.mode == cad::application::VisibilityMode::Hidden) continue;
+            if (resolved->shape.IsNull()) continue;
+            activeComponentShapes.push_back(resolved->shape);
+            ++activeComponentCount;
+        }
+
+        TopoDS_Shape activeShape;
+        if (!activeComponentShapes.empty()) {
+            if (activeComponentShapes.size() == 1) {
+                activeShape = activeComponentShapes.front();
+            } else {
+                TopoDS_Compound compound;
+                BRep_Builder builder;
+                builder.MakeCompound(compound);
+                for (const auto& componentShape : activeComponentShapes)
+                    builder.Add(compound, componentShape);
+                activeShape = compound;
+            }
+        } else if (modeling_.body().components().empty()) {
+            // Backward-compatible fallback for projects without component
+            // metadata.  In that case Body::shape() remains the only safe
+            // aggregate available to MCP inspection.
+            activeShape = modeling_.body().shape();
+        }
+
+        const auto& shape = activeShape;
         int solids = 0;
         int components = 0;
         bool valid = shape.IsNull();
@@ -1264,13 +1314,18 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         result = QJsonObject{
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())},
             {"modelComponentCount", modelComponentCount},
+            {"activeComponentCount", activeComponentCount == 0 && !shape.IsNull()
+                ? static_cast<qint64>(solids) : activeComponentCount},
+            {"visibleComponentCount", activeComponentCount == 0 && !shape.IsNull()
+                ? static_cast<qint64>(solids) : activeComponentCount},
             {"invalidFeatures", invalidFeatures},
             {"openSketchProfiles", openProfiles},
             {"solidCount", solids}, {"componentCount", components},
             {"visibleGeometricSolidCount", solids},
             {"totalVisibleGeometricVolume", volume},
             {"visibleBoundingBox", bounds},
-            {"volumePolicy", "BRepGProp volume of the final Body result; intermediate feature and component volumes are not summed"},
+            {"volumePolicy", "BRepGProp volume of the aggregate of logically active visible components; replaced and intermediate history components are excluded"},
+            {"aggregatePolicy", "Body::shape() is used only for legacy projects without ModelComponent metadata; AIS state is never used as geometry"},
             {"overlapWarnings", overlapWarnings},
             {"valid", valid}, {"volume", volume}, {"boundingBox", bounds},
             {"lastError", QString::fromStdString(modeling_.body().lastError())},
@@ -1327,7 +1382,13 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             {"pid", static_cast<qint64>(QCoreApplication::applicationPid())},
             {"thread", QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()), 16)},
             {"featureCount", static_cast<qint64>(modeling_.body().features().size())}, {"dirty", project_.isDirty()},
-            {"automationEnabled", automationService_ != nullptr}};
+            {"automationEnabled", automationService_ != nullptr},
+            {"featurePresentationCount", static_cast<qint64>(viewer_->featurePresentationCount())},
+            {"componentPresentationCount", static_cast<qint64>(viewer_->componentPresentationCount())},
+            {"displayedFeaturePresentationCount",
+                static_cast<qint64>(viewer_->displayedFeaturePresentationCount())},
+            {"displayedComponentPresentationCount",
+                static_cast<qint64>(viewer_->displayedComponentPresentationCount())}};
     } else if (tool == "cad.get_operation_status") {
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
         const auto operationId = arguments.value("operationId").toString();
@@ -1615,6 +1676,12 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!modelingResult.success) return finishModeling(modelingResult, "split_component");
         refreshModelView();
         return finishModeling(modelingResult, "split_component");
+    } else if (tool == "cad.recover_pre_split") {
+        const auto modelingResult = modeling_.recoverPreSplit(
+            arguments.value("rootFeatureId").toString().toStdString());
+        if (!modelingResult.success) return finishModeling(modelingResult, "recover_pre_split");
+        refreshModelView();
+        return finishModeling(modelingResult, "recover_pre_split");
     } else if (tool == "cad.mirror" || tool == "cad.translate"
                || tool == "cad.rotate" || tool == "cad.transform_model") {
         const QString operationName = tool == "cad.mirror" ? "mirror"
@@ -7109,21 +7176,22 @@ void MainWindow::processProjectLoadPresentationChunk()
         return;
     }
 
-    QStringList presentedIds;
-    for (const auto& feature : body.features()) {
-        if (feature->state() == cad::parametric::FeatureState::UpToDate
-            && !feature->shape().IsNull()) {
-            presentedIds.append(QString::fromStdString(feature->id()));
-        }
-    }
     QElapsedTimer finalSyncTimer;
     finalSyncTimer.start();
-    viewer_->beginBulkUpdate();
-    viewer_->retainFeatures(presentedIds);
-    viewer_->restoreSelection(body, {}, {});
-    viewer_->endBulkUpdate();
-    visibilityManager_.updateBoundingBoxes(body);
-    presenter_->refreshVisibility();
+    // The chunked loader above creates temporary feature-level AIS objects so
+    // the GUI remains responsive while features are being recomputed.  A
+    // visibility-only refresh is not sufficient here: it cannot replace a
+    // feature presentation with the component presentations required by
+    // ModelComponent replacement semantics.  Reconcile through the same
+    // ModelPresenter path used by Undo/Redo; otherwise historical feature
+    // AIS objects can remain displayed alongside active components after
+    // project load.
+    viewer_->clear();
+    const auto finalPresentation = presenter_->refreshModel();
+    if (!finalPresentation.rebuilt && !finalPresentation.error.empty()) {
+        qWarning().noquote() << "Project load presentation reconciliation failed:"
+                             << QString::fromStdString(finalPresentation.error);
+    }
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());

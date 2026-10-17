@@ -145,6 +145,22 @@ void cad::viewer::ModelPresenter::applyVisibility()
 {
     const auto update = visibilityManager_.evaluate(body_);
     viewer_.applyVisibilityChanges(update.changes);
+    // Feature visibility changes are reported separately from component
+    // visibility changes.  Re-apply the complete component policy here so a
+    // loaded/recomputed document cannot leave an old component AIS displayed
+    // after its parent Feature becomes hidden or replaced.
+    for (const auto& component : body_.components()) {
+        const auto feature = body_.findFeature(component.sourceFeatureId);
+        if (!feature) continue;
+        std::string resolveError;
+        const auto resolved = cad::parametric::ComponentResolver::resolve(
+            body_, component.id, resolveError);
+        if (!resolved) continue;
+        const auto visibility = visibilityManager_.effectiveComponentVisibility(
+            *feature, resolved->component, body_);
+        viewer_.setComponentVisibility(
+            QString::fromStdString(component.id), visibility.mode);
+    }
     if (sweepTraceEnabled()) {
         for (const auto& state : visibilityManager_.projection(body_)) {
             if (state.featureId.empty()) continue;

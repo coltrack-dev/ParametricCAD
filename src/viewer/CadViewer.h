@@ -165,6 +165,8 @@ public:
     bool hasDisplayedShapes() const;
     std::size_t featurePresentationCount() const noexcept { return featureObjects_.size(); }
     std::size_t componentPresentationCount() const noexcept { return componentObjects_.size(); }
+    std::size_t displayedFeaturePresentationCount() const noexcept;
+    std::size_t displayedComponentPresentationCount() const noexcept;
     QImage captureImage();
     void fitAll();
     void showMesh(const cad::cae::VolumeMesh& mesh);

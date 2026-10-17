@@ -2208,6 +2208,12 @@ void CadViewer::updateComponent(const TopoDS_Shape& shape,
                                 const QString& featureId)
 {
     initializeOcc();
+    // A feature and its component presentations are mutually exclusive.  A
+    // project load or a refresh can reach this path after the same feature was
+    // previously presented as one AIS_Shape.  Remove that stale feature-level
+    // object before displaying or reusing the component presentation, rather
+    // than relying only on the later retain pass.
+    if (featureObjects_.contains(featureId)) removeFeaturePresentation(featureId);
     if (isEmptyDisplayShape(shape)) {
         const auto found = componentObjects_.find(componentId);
         if (found != componentObjects_.end()) {
@@ -2886,13 +2892,27 @@ void CadViewer::setComponentVisibility(const QString& componentId,
     const auto found = componentObjects_.find(componentId);
     if (found == componentObjects_.end()) return;
     componentVisibility_[componentId] = mode;
-    if (mode != VisibilityMode::Visible) releaseManagedSelection(componentId);
+    if (mode != VisibilityMode::Visible) {
+        releaseManagedSelection(componentId);
+        // A component may have been activated before its effective visibility
+        // changed, or its activation cache may have been restored from a
+        // previous project state.  Deactivate all modes, not only the mode
+        // tracked in managedSelectionModes_, before hiding/ghosting it.
+        context_->Deactivate(found->second);
+    }
     if (mode == VisibilityMode::Hidden) context_->Erase(found->second, Standard_False);
     else {
         if (!context_->IsDisplayed(found->second)) context_->Display(found->second, Standard_False);
         if (mode == VisibilityMode::Ghosted) found->second->SetTransparency(GhostTransparency);
         else if (!xRayEnabled_) found->second->UnsetTransparency();
         context_->Redisplay(found->second, Standard_False);
+    }
+    if (qEnvironmentVariableIsSet("PARAMETRIC_CAD_TRACE_VISIBILITY")) {
+        qInfo().noquote() << "CadViewer component visibility: id=" << componentId
+                          << "mode=" << static_cast<int>(mode)
+                          << "displayed=" << context_->IsDisplayed(found->second)
+                          << "activeModes=" << activeSelectionModes(context_, found->second)
+                          << "object=" << selectionObjectPointer(found->second);
     }
     selectionActivationDirty_ = true;
     if (bulkUpdateDepth_ == 0) { applySelectionMode(); context_->UpdateCurrentViewer(); }
@@ -2971,6 +2991,28 @@ void CadViewer::clear()
 bool CadViewer::hasDisplayedShapes() const
 {
     return !displayedShapes_.empty();
+}
+
+std::size_t CadViewer::displayedFeaturePresentationCount() const noexcept
+{
+    if (context_.IsNull()) return 0;
+    std::size_t count = 0;
+    for (const auto& [id, object] : featureObjects_) {
+        Q_UNUSED(id);
+        if (!object.IsNull() && context_->IsDisplayed(object)) ++count;
+    }
+    return count;
+}
+
+std::size_t CadViewer::displayedComponentPresentationCount() const noexcept
+{
+    if (context_.IsNull()) return 0;
+    std::size_t count = 0;
+    for (const auto& [id, object] : componentObjects_) {
+        Q_UNUSED(id);
+        if (!object.IsNull() && context_->IsDisplayed(object)) ++count;
+    }
+    return count;
 }
 
 QImage CadViewer::captureImage()

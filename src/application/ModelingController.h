@@ -226,6 +226,7 @@ public:
         const gp_Pnt& origin,
         const gp_Dir& normal
     );
+    ModelingResult recoverPreSplit(const std::string& rootFeatureId);
     ModelingResult splitFeature(
         const std::string& wholeFeatureId,
         const std::string& componentFeatureId,
