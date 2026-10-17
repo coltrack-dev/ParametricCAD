@@ -45,6 +45,8 @@ public:
     std::uint64_t featureGeometryRevision(const std::string& featureId) const noexcept;
 
 private:
+    void refreshComponentGeometry();
+
     std::vector<FeaturePtr> features_;
     TopoDS_Shape resultShape_;
     std::string lastError_;

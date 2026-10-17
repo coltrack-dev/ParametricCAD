@@ -1,10 +1,50 @@
 #include "model/Body.h"
 
+#include <BRepBndLib.hxx>
+#include <BRepGProp.hxx>
+#include <Bnd_Box.hxx>
+#include <GProp_GProps.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+
 #include <algorithm>
+#include <unordered_map>
 #include <stdexcept>
 #include <unordered_set>
 
 namespace cad::parametric {
+
+namespace {
+
+void updateComponentGeometry(ModelComponent& component, const TopoDS_Shape& shape)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (!bounds.IsVoid()) {
+        bounds.Get(component.minX, component.minY, component.minZ,
+                   component.maxX, component.maxY, component.maxZ);
+    }
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    component.volume = properties.Mass();
+}
+
+std::vector<TopoDS_Shape> solidsOf(const TopoDS_Shape& shape)
+{
+    std::vector<TopoDS_Shape> solids;
+    if (shape.IsNull()) return solids;
+    if (shape.ShapeType() == TopAbs_SOLID) {
+        solids.push_back(shape);
+        return solids;
+    }
+    for (TopExp_Explorer explorer(shape, TopAbs_SOLID);
+         explorer.More(); explorer.Next()) {
+        solids.push_back(explorer.Current());
+    }
+    return solids;
+}
+
+}
 
 void Body::addFeature(const FeaturePtr& feature)
 {
@@ -182,7 +222,27 @@ bool Body::recomputeFeature(const std::size_t index)
 bool Body::finishIncrementalRecompute()
 {
     incrementalRecomputeActive_ = false;
+    if (!resultShape_.IsNull()) refreshComponentGeometry();
     return !resultShape_.IsNull() || features_.empty();
+}
+
+void Body::refreshComponentGeometry()
+{
+    std::unordered_map<std::string, std::vector<ModelComponent*>> grouped;
+    for (auto& component : components_)
+        grouped[component.sourceFeatureId].push_back(&component);
+
+    for (auto& [sourceFeatureId, components] : grouped) {
+        const auto source = findFeature(sourceFeatureId);
+        if (!source) continue;
+        const auto solids = solidsOf(source->shape());
+        // A one-to-one source/result relationship is unambiguous even when
+        // the result moved. Keep the persistent component ID and refresh only
+        // its geometric signature used by ComponentResolver.
+        if (components.size() == 1 && solids.size() == 1) {
+            updateComponentGeometry(*components.front(), solids.front());
+        }
+    }
 }
 
 void Body::markDirtyFrom(const std::string& featureId)

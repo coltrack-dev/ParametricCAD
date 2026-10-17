@@ -372,6 +372,15 @@ private slots:
         QVERIFY(callTool("cad.redo").value("success").toBool());
         QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", splitId}})
             .value("valid").toBool());
+        const QString legacySaved = temporaryDirectory_.filePath("legacy-split.pcad");
+        QVERIFY(callTool("cad.save_project", QJsonObject{{"path", legacySaved}})
+            .value("success").toBool());
+        QVERIFY(callTool("cad.open_project", QJsonObject{{"path", legacySaved}})
+            .value("success").toBool());
+        const auto legacyAfterLoad = callTool("cad.inspect_shape",
+            QJsonObject{{"featureId", splitId}});
+        QVERIFY(legacyAfterLoad.value("valid").toBool());
+        QCOMPARE(legacyAfterLoad.value("solidCount").toInt(), 3);
     }
 
     void componentOperationsThroughMcp()
@@ -444,14 +453,62 @@ private slots:
         QCOMPARE(callTool("cad.get_component", QJsonObject{{"componentId", transformedComponent}})
             .value("effectiveVisibility").toString(), QStringLiteral("hidden"));
 
+        const auto splitComponentIds = splitComponents;
+        QVERIFY(splitComponentIds.size() == 2);
+        const auto negativeComponent = splitComponentIds.at(0).toString();
+        const auto positiveComponent = splitComponentIds.at(1).toString();
+        const auto moved = callTool("cad.transform_component", QJsonObject{
+            {"componentId", negativeComponent}, {"operation", "translate"},
+            {"mode", "replace_result"}, {"vector", QJsonArray{0.0, -1000.0, 0.0}},
+            {"units", "mm"}});
+        const auto movedComponentIds = moved.value("componentIds").toArray();
+        QVERIFY(movedComponentIds.size() == 1);
+        const QString movedComponent = movedComponentIds.at(0).toString();
+        QVERIFY(!movedComponent.isEmpty());
+        const auto movedBeforeSave = callTool("cad.get_component",
+            QJsonObject{{"componentId", movedComponent}});
+        QVERIFY(movedBeforeSave.value("shape").toObject().value("valid").toBool());
+        const auto movedBoundsBefore = movedBeforeSave.value("boundingBox").toObject();
+        QCOMPARE(qRound(movedBoundsBefore.value("min").toArray().at(1).toDouble()), -1000);
+        const auto positiveBeforeSave = callTool("cad.get_component",
+            QJsonObject{{"componentId", positiveComponent}});
+        const auto positiveBoundsBefore = positiveBeforeSave.value("boundingBox").toObject();
+        QCOMPARE(qRound(positiveBoundsBefore.value("min").toArray().at(1).toDouble()), 0);
+
         const QString saved = temporaryDirectory_.filePath("components-1c.pcad");
         QVERIFY(callTool("cad.save_project", QJsonObject{{"path", saved}})
             .value("success").toBool());
         QVERIFY(callTool("cad.open_project", QJsonObject{{"path", saved}})
             .value("success").toBool());
-        QCOMPARE(callTool("cad.get_components").value("componentCount").toInt(), 4);
+        QCOMPARE(callTool("cad.get_components").value("componentCount").toInt(), 5);
         QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", negativeFeature}})
             .value("valid").toBool());
+        const auto movedAfterLoad = callTool("cad.get_component",
+            QJsonObject{{"componentId", movedComponent}});
+        QVERIFY(movedAfterLoad.value("shape").toObject().value("valid").toBool());
+        QCOMPARE(qRound(movedAfterLoad.value("boundingBox").toObject()
+            .value("min").toArray().at(1).toDouble()), -1000);
+        const auto positiveAfterLoad = callTool("cad.get_component",
+            QJsonObject{{"componentId", positiveComponent}});
+        QVERIFY(positiveAfterLoad.value("shape").toObject().value("valid").toBool());
+        QCOMPARE(qRound(positiveAfterLoad.value("boundingBox").toObject()
+            .value("min").toArray().at(1).toDouble()), 0);
+        const auto movedFeature = moved.value("featureId").toString();
+        QVERIFY(!movedFeature.isEmpty());
+        QVERIFY(callTool("cad.edit_feature", QJsonObject{
+            {"featureId", movedFeature}, {"property", "translationY"},
+            {"value", -900.0}, {"units", "mm"}}).value("success").toBool());
+        QCOMPARE(qRound(callTool("cad.get_component", QJsonObject{
+            {"componentId", movedComponent}}).value("boundingBox").toObject()
+            .value("min").toArray().at(1).toDouble()), -900);
+        QVERIFY(callTool("cad.undo").value("success").toBool());
+        QCOMPARE(qRound(callTool("cad.get_component", QJsonObject{
+            {"componentId", movedComponent}}).value("boundingBox").toObject()
+            .value("min").toArray().at(1).toDouble()), -1000);
+        QVERIFY(callTool("cad.redo").value("success").toBool());
+        QCOMPARE(qRound(callTool("cad.get_component", QJsonObject{
+            {"componentId", movedComponent}}).value("boundingBox").toObject()
+            .value("min").toArray().at(1).toDouble()), -900);
 
         verifyStructuredToolError("cad.transform_component", QJsonObject{
             {"componentId", "missing-component"}, {"operation", "translate"},
