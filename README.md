@@ -179,6 +179,12 @@ ProjectFile -> .pcad JSON
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 [docs/diagrams/architecture-overview.puml](docs/diagrams/architecture-overview.puml).
 
+### MCP automation
+
+Read-only MCP inspection is available through the opt-in
+`parametriccad-mcp` executable. See [docs/MCP.md](docs/MCP.md) for startup,
+client configuration, tools, and the MCP-2/MCP-3 roadmap.
+
 ## Build
 
 ### Platform build guides

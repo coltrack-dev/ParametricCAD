@@ -17,8 +17,10 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <cmath>
 #include <limits>
@@ -65,12 +67,185 @@ private:
     std::string type_;
     FeatureRole role_;
 };
+
+class RecoverableFailureFixture final : public ParametricFeature
+{
+public:
+    explicit RecoverableFailureFixture(std::string id)
+        : ParametricFeature(std::move(id), "Recoverable failure") {}
+
+    void setFail(const bool fail)
+    {
+        fail_ = fail;
+        markDirty();
+    }
+
+private:
+    TopoDS_Shape build() const override
+    {
+        if (fail_) throw std::runtime_error("intentional recompute failure");
+        return BasicFeatures::box(1, 1, 1);
+    }
+
+    bool fail_{true};
+};
 }
 
 class ModelTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void explicitRecomputeIgnoresDeferredMode()
+    {
+        Body body;
+        auto box = std::make_shared<BoxParametricFeature>("box", 2, 3, 4);
+        body.addFeature(box);
+        body.setRecomputeDeferred(true);
+
+        QVERIFY(body.recompute());
+        QCOMPARE(box->state(), FeatureState::UpToDate);
+        QVERIFY(!body.shape().IsNull());
+
+        body.setRecomputeDeferred(false);
+    }
+
+    void recomputeFailureCanRecoverAfterMiddleFeatureFailure()
+    {
+        Body body;
+        auto first = std::make_shared<BoxParametricFeature>("first", 2, 3, 4);
+        auto failing = std::make_shared<RecoverableFailureFixture>("failing");
+        auto last = std::make_shared<BoxParametricFeature>("last", 5, 6, 7);
+        body.addFeature(first);
+        body.addFeature(failing);
+        body.addFeature(last);
+
+        QVERIFY(!body.recompute());
+        QCOMPARE(failing->state(), FeatureState::Failed);
+        QCOMPARE(last->state(), FeatureState::Dirty);
+        QVERIFY(body.shape().IsNull());
+        QVERIFY(!body.lastError().empty());
+
+        failing->setFail(false);
+        QVERIFY(body.recompute());
+        QCOMPARE(first->state(), FeatureState::UpToDate);
+        QCOMPARE(failing->state(), FeatureState::UpToDate);
+        QCOMPARE(last->state(), FeatureState::UpToDate);
+        QVERIFY(!body.shape().IsNull());
+        QVERIFY(body.lastError().empty());
+    }
+
+    void transformFeatureRecomputesAndPersistsDependency()
+    {
+        Body body;
+        auto source = std::make_shared<BoxParametricFeature>("source", 2, 3, 4);
+        body.addFeature(source);
+        QVERIFY(body.recompute());
+
+        gp_Trsf translation;
+        translation.SetTranslation(gp_Vec(10, 20, 30));
+        auto transformed = std::make_shared<TransformFeature>(
+            "translated", std::vector<ParametricFeature::Ptr>{source},
+            TransformOperation::Translate, TransformResultMode::Copy, translation);
+        body.addFeature(transformed);
+        QVERIFY(body.recompute());
+        QCOMPARE(transformed->sourceIds().size(), std::size_t{1});
+        QCOMPARE(transformed->sourceIds().front(), std::string("source"));
+        QVERIFY(transformed->dependencies().front().lock() == source);
+        QVERIFY(BRepCheck_Analyzer(transformed->shape()).IsValid());
+        QCOMPARE(volume(transformed->shape()), 24.0);
+        Bnd_Box bounds;
+        BRepBndLib::Add(transformed->shape(), bounds);
+        double xmin, ymin, zmin, xmax, ymax, zmax;
+        bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        QVERIFY(std::abs(xmin - 10.0) < 1.0e-5);
+        QVERIFY(std::abs(ymin - 20.0) < 1.0e-5);
+        QVERIFY(std::abs(zmin - 30.0) < 1.0e-5);
+        QVERIFY(std::abs(xmax - 12.0) < 1.0e-5);
+        QVERIFY(std::abs(ymax - 23.0) < 1.0e-5);
+        QVERIFY(std::abs(zmax - 34.0) < 1.0e-5);
+
+        source->setSize(3, 4, 5);
+        body.markDirtyFrom(source->id());
+        QVERIFY(body.recompute());
+        QCOMPARE(volume(transformed->shape()), 60.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("transform.pcad");
+        Document document;
+        QString error;
+        QVERIFY(ProjectFile::save(path, document, body, error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY(ProjectFile::load(path, loadedDocument, loadedBody, error));
+        const auto loadedTransform = loadedBody.findFeature("translated");
+        QVERIFY(loadedTransform);
+        QCOMPARE(QString::fromLatin1(loadedTransform->typeId()), QStringLiteral("Transform"));
+        QVERIFY(loadedBody.recompute());
+        QCOMPARE(volume(loadedTransform->shape()), 60.0);
+    }
+
+    void transformFeatureSupportsMirrorRotateAndMultipleSources()
+    {
+        Body body;
+        auto first = std::make_shared<BoxParametricFeature>("first", 2, 3, 4);
+        auto second = std::make_shared<BoxParametricFeature>("second", 1, 1, 1);
+        gp_Trsf secondPlacement;
+        secondPlacement.SetTranslation(gp_Vec(5, 0, 0));
+        second->setPlacement(secondPlacement);
+        body.addFeature(first);
+        body.addFeature(second);
+        QVERIFY(body.recompute());
+
+        gp_Trsf mirror;
+        mirror.SetMirror(gp_Ax2(gp_Pnt(10, 0, 0), gp_Dir(1, 0, 0)));
+        auto mirrored = std::make_shared<TransformFeature>(
+            "mirrored", std::vector<ParametricFeature::Ptr>{first},
+            TransformOperation::Mirror, TransformResultMode::Copy, mirror);
+        auto combined = std::make_shared<TransformFeature>(
+            "combined", std::vector<ParametricFeature::Ptr>{first, second},
+            TransformOperation::Translate, TransformResultMode::Copy, gp_Trsf());
+        gp_Trsf rotation;
+        rotation.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
+            0.5 * std::acos(-1.0));
+        auto rotated = std::make_shared<TransformFeature>(
+            "rotated", std::vector<ParametricFeature::Ptr>{first},
+            TransformOperation::Rotate, TransformResultMode::Copy, rotation);
+        body.addFeature(mirrored);
+        body.addFeature(combined);
+        body.addFeature(rotated);
+        QVERIFY(body.recompute());
+        QVERIFY(BRepCheck_Analyzer(mirrored->shape()).IsValid());
+        QVERIFY(BRepCheck_Analyzer(combined->shape()).IsValid());
+        QVERIFY(BRepCheck_Analyzer(rotated->shape()).IsValid());
+        QCOMPARE(volume(mirrored->shape()), 24.0);
+        QCOMPARE(volume(combined->shape()), 25.0);
+        QCOMPARE(volume(rotated->shape()), 24.0);
+        QCOMPARE(combined->sourceIds().size(), std::size_t{2});
+    }
+
+    void transformFeatureDoesNotDuplicateSelectedAncestors()
+    {
+        Body body;
+        auto source = std::make_shared<BoxParametricFeature>("source", 2, 3, 4);
+        body.addFeature(source);
+        QVERIFY(body.recompute());
+
+        auto downstream = std::make_shared<TransformFeature>(
+            "downstream", std::vector<ParametricFeature::Ptr>{source},
+            TransformOperation::Translate, TransformResultMode::Copy, gp_Trsf());
+        body.addFeature(downstream);
+        auto selected = std::make_shared<TransformFeature>(
+            "selected", std::vector<ParametricFeature::Ptr>{source, downstream},
+            TransformOperation::Translate, TransformResultMode::Copy, gp_Trsf());
+        body.addFeature(selected);
+
+        QVERIFY(body.recompute());
+        QCOMPARE(selected->effectiveSourceIds(), std::vector<std::string>{"downstream"});
+        QCOMPARE(volume(selected->shape()), 24.0);
+        QVERIFY(BRepCheck_Analyzer(selected->shape()).IsValid());
+    }
+
     void rectangleValidation_data()
     {
         QTest::addColumn<double>("width");
@@ -246,6 +421,48 @@ private slots:
 
         dependentManager.ghostOthers({"cut"});
         QCOMPARE(dependentManager.effectiveMode(*base, dependentBody), VisibilityMode::Hidden);
+    }
+
+    void componentVisibilityPolicyCentralizesParentAndReplacementState()
+    {
+        Body body;
+        auto parent = std::make_shared<BoxParametricFeature>("parent", 2, 2, 2);
+        body.addFeature(parent);
+        QVERIFY(body.recompute());
+
+        ModelComponent component;
+        component.id = "parent:component";
+        component.sourceFeatureId = parent->id();
+        body.replaceComponents({component});
+
+        VisibilityManager manager;
+        auto state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Visible);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("visible"));
+
+        parent->setUserVisible(false);
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Hidden);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("parent_feature_hidden"));
+
+        parent->setUserVisible(true);
+        component.technicalHidden = true;
+        component.replacementComponentIds = {"replacement:component"};
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Hidden);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("replaced"));
+
+        component.technicalHidden = false;
+        component.replacementComponentIds.clear();
+        manager.setComponentVisibility(component.id, VisibilityMode::Ghosted);
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Ghosted);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("component_ghosted"));
+
+        manager.setIsolatedComponents({"other:component"});
+        state = manager.effectiveComponentVisibility(*parent, component, body);
+        QCOMPARE(state.mode, VisibilityMode::Hidden);
+        QCOMPARE(QString::fromStdString(state.reason), QStringLiteral("component_isolation"));
     }
 
     void visibilityGroupsCombineAndValidate()

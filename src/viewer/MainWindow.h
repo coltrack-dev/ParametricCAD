@@ -5,10 +5,12 @@
 #include <QElapsedTimer>
 #include <QProgressDialog>
 #include <QTimer>
+#include <QJsonObject>
 #include "application/ModelingController.h"
 #include "application/ProjectController.h"
 #include "application/VisibilityManager.h"
 #include "application/BimNavigationModel.h"
+#include "application/SimulationController.h"
 #include "application/InteractiveOperation.h"
 #include "model/TopologicalReference.h"
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
@@ -30,6 +32,7 @@ class QEvent;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
+class QListWidget;
 class QLineEdit;
 class QPushButton;
 class QDockWidget;
@@ -44,6 +47,8 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
+    QJsonObject handleAutomationRequest(const QJsonObject& request);
+
 private:
     friend class MainWindowTests;
     void closeEvent(QCloseEvent* event) override;
@@ -55,6 +60,7 @@ private:
     void updateIfcImportProgress();
     void finishIfcImport();
     void abortIfcImport(const QString& error = {});
+    void finishMcpIfcImport();
 #endif
     void startProjectLoad(const QString& path);
     void updateProjectLoadProgress();
@@ -74,6 +80,23 @@ private:
     void saveWindowLayout();
     void createParametricPanel();
     void createBimPanel();
+    void createSimulationPanel();
+    void generateMesh();
+    void regenerateMesh();
+    bool startMeshGeneration(const std::string& featureId);
+    void finishMeshGeneration();
+    void cancelMeshGeneration();
+    void updateMeshInspector();
+    void addVoltageBoundary();
+    void addGroundBoundary();
+    void removeBoundary();
+    void editBoundary();
+    void solveElectrostatics();
+    void finishElectrostaticSolve();
+    void showPotentialResult();
+    void showElectricFieldResult();
+    void clearElectrostaticResult();
+    void updateElectrostaticPanel();
     void updateBimInspector(const QStringList& featureIds);
     void refreshBimNavigation();
     void refreshModelView(bool fitView = false);
@@ -252,6 +275,14 @@ private:
 #endif
     QAction* bimNavigatorAction_{nullptr};
     QAction* bimInspectorAction_{nullptr};
+    QAction* generateMeshAction_{nullptr};
+    QAction* meshInspectorAction_{nullptr};
+    QAction* addVoltageBoundaryAction_{nullptr};
+    QAction* addGroundBoundaryAction_{nullptr};
+    QAction* solveElectrostaticsAction_{nullptr};
+    QAction* showPotentialAction_{nullptr};
+    QAction* showElectricFieldAction_{nullptr};
+    QAction* clearElectrostaticResultAction_{nullptr};
     QAction* createSketchAction_{nullptr};
     QAction* editSketchAction_{nullptr};
     QAction* sketchLineAction_{nullptr};
@@ -327,6 +358,7 @@ private:
     QStringList selectedObjectIds_;
     cad::application::SelectionSnapshot currentSelection_;
     CadViewer* viewer_{nullptr};
+    std::unique_ptr<class CadAutomationService> automationService_;
     FeatureEditorPanel* featureEditorPanel_{nullptr};
     QDockWidget* sketchChamferDock_{nullptr};
     bool sketchChamferFloatingFallback_{false};
@@ -345,6 +377,34 @@ private:
     QPushButton* sketchChamferCancel_{nullptr};
     BimNavigationPanel* bimNavigationPanel_{nullptr};
     BimInspectorPanel* bimInspectorPanel_{nullptr};
+    QDockWidget* meshInspectorDock_{nullptr};
+    QDoubleSpinBox* meshMinimumSize_{nullptr};
+    QDoubleSpinBox* meshMaximumSize_{nullptr};
+    QComboBox* meshDisplayMode_{nullptr};
+    QLabel* meshStatisticsLabel_{nullptr};
+    QListWidget* boundaryList_{nullptr};
+    QDoubleSpinBox* relativePermittivity_{nullptr};
+    QDoubleSpinBox* chargeDensity_{nullptr};
+    QLabel* electrostaticStatisticsLabel_{nullptr};
+    QPushButton* removeBoundaryButton_{nullptr};
+    QPushButton* editBoundaryButton_{nullptr};
+    QPushButton* meshGenerateButton_{nullptr};
+    QPushButton* meshRegenerateButton_{nullptr};
+    QPushButton* meshCancelButton_{nullptr};
+    QPushButton* meshShowButton_{nullptr};
+    QPushButton* meshHideButton_{nullptr};
+    QPushButton* meshDeleteButton_{nullptr};
+    cad::application::SimulationController simulation_;
+    QFutureWatcher<std::shared_ptr<cad::cae::MeshGenerationResult>> meshWatcher_;
+    std::shared_ptr<std::atomic_bool> meshCancelRequested_;
+    QString meshSourceFeatureId_;
+    std::uint64_t meshGenerationRevision_{0};
+    std::uint64_t meshGenerationId_{0};
+    bool meshGenerating_{false};
+    QFutureWatcher<std::shared_ptr<cad::cae::ElectrostaticResult>> electrostaticWatcher_;
+    std::uint64_t electrostaticSolveRevision_{0};
+    std::uint64_t electrostaticSolveRequestId_{0};
+    bool electrostaticSolving_{false};
     cad::application::BimNavigationModel bimNavigationModel_;
     std::unique_ptr<cad::viewer::ModelPresenter> presenter_;
     QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>> projectLoadWatcher_;
@@ -365,6 +425,13 @@ private:
     std::shared_ptr<std::atomic_bool> ifcImportCancelRequested_;
     QString pendingIfcPath_;
     bool ifcImporting_{false};
+    QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>> mcpIfcImportWatcher_;
+    QString mcpIfcOperationId_;
+    QString mcpIfcPath_;
+    QString mcpIfcState_;
+    QJsonObject mcpIfcOperationResult_;
+    QElapsedTimer mcpIfcTimer_;
+    bool mcpIfcReplaceCurrent_{false};
 #endif
     int lastUndoStackIndex_{0};
     bool historyRefreshScheduled_{false};

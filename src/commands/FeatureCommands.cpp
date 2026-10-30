@@ -17,7 +17,8 @@ AddFeatureCommand::AddFeatureCommand(parametric::Body& body,
             throw std::invalid_argument("New feature references a missing source");
         }
     }
-    if (!feature_->recompute()) throw std::invalid_argument(feature_->error());
+    if (!body_.recomputeDeferred() && !feature_->recompute())
+        throw std::invalid_argument(feature_->error());
 }
 
 ImportFeaturesCommand::ImportFeaturesCommand(
@@ -39,6 +40,26 @@ void ImportFeaturesCommand::undo()
     for (auto iterator = features_.rbegin(); iterator != features_.rend(); ++iterator)
         if (!body_.removeFeature((*iterator)->id()))
             throw std::runtime_error("Imported feature is missing during undo");
+}
+
+ReplaceComponentsCommand::ReplaceComponentsCommand(
+    parametric::Body& body,
+    std::vector<parametric::ModelComponent> before,
+    std::vector<parametric::ModelComponent> after,
+    const QString& text)
+    : QUndoCommand(text), body_(body), before_(std::move(before)), after_(std::move(after))
+{
+    if (after_.empty()) throw std::invalid_argument("Component replacement cannot be empty");
+}
+
+void ReplaceComponentsCommand::undo()
+{
+    body_.replaceComponents(before_);
+}
+
+void ReplaceComponentsCommand::redo()
+{
+    body_.replaceComponents(after_);
 }
 
 AddSketchEntityCommand::AddSketchEntityCommand(
@@ -129,7 +150,7 @@ void ReplaceSketchCommand::apply(
     sketch_->replaceEntities(0, sketch_->entityCount(), entities);
     sketch_->replaceConstraints(constraints);
     body_.markDirtyFrom(sketch_->id());
-    if (!body_.recompute()) throw std::runtime_error(body_.lastError());
+    if (!body_.recomputeDeferred() && !body_.recompute()) throw std::runtime_error(body_.lastError());
 }
 
 void ReplaceSketchCommand::redo() { apply(afterEntities_, afterConstraints_); }
@@ -220,14 +241,14 @@ void AddSketchEntityCommand::redo()
 {
     sketch_->addEntity(entity_);
     body_.markDirtyFrom(sketch_->id());
-    if (!body_.recompute()) throw std::runtime_error(body_.lastError());
+    if (!body_.recomputeDeferred() && !body_.recompute()) throw std::runtime_error(body_.lastError());
 }
 
 void AddSketchEntityCommand::undo()
 {
     sketch_->removeLastEntity();
     body_.markDirtyFrom(sketch_->id());
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
 }
 
 ToggleSketchEntityConstructionCommand::ToggleSketchEntityConstructionCommand(
@@ -244,7 +265,7 @@ void ToggleSketchEntityConstructionCommand::apply(const bool construction)
 {
     sketch_->setEntityConstruction(entityId_, construction);
     body_.markDirtyFrom(sketch_->id());
-    if (!body_.recompute()) throw std::runtime_error(body_.lastError());
+    if (!body_.recomputeDeferred() && !body_.recompute()) throw std::runtime_error(body_.lastError());
 }
 
 void ToggleSketchEntityConstructionCommand::redo() { apply(after_); }
@@ -294,7 +315,7 @@ void ChangeParametricPropertyCommand::apply(const parametric::PropertyValue& val
         throw std::invalid_argument("Feature does not expose property '" + key_ + "'");
     }
     body_.markDirtyFrom(feature_->id());
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
 }
 
 void ChangeParametricPropertyCommand::undo() { apply(before_); }
@@ -325,7 +346,7 @@ void TransformFeatureCommand::apply(const gp_Trsf& placement)
     }
     feature->setPlacement(placement);
     body_.markDirtyFrom(featureId_);
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
 }
 
 void TransformFeatureCommand::undo()
@@ -494,25 +515,25 @@ void SetVisibilityConfigurationCommand::redo()
 void AddFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
 }
 
 void AddFeatureCommand::redo()
 {
     body_.insertFeature(position_, feature_);
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
 }
 
 void DuplicateFeatureCommand::undo()
 {
     body_.removeFeature(feature_->id());
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
 }
 
 void DuplicateFeatureCommand::redo()
 {
     body_.insertFeature(position_, feature_);
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
 }
 
 RemoveFeatureCommand::RemoveFeatureCommand(parametric::Body& body, const std::string& featureId)
@@ -547,7 +568,7 @@ void RemoveFeatureCommand::undo()
 {
     if (!applied_) return;
     for (const auto& [position, feature] : removed_) body_.insertFeature(position, feature);
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
     applied_ = false;
 }
 
@@ -555,7 +576,7 @@ void RemoveFeatureCommand::redo()
 {
     if (applied_) return;
     for (auto it = removed_.rbegin(); it != removed_.rend(); ++it) body_.removeFeature(it->second->id());
-    body_.recompute();
+    if (!body_.recomputeDeferred()) body_.recompute();
     applied_ = true;
 }
 

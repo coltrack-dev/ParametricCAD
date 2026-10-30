@@ -11,6 +11,8 @@
 #include <QDoubleSpinBox>
 #include <QToolBar>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QThread>
 #include <QSet>
 #include <array>
 #include <QtTest/QtTest>
@@ -23,6 +25,7 @@
 #include <QTreeWidgetItemIterator>
 #include <QMouseEvent>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <AIS_Triangulation.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <TopExp_Explorer.hxx>
@@ -462,6 +465,42 @@ private slots:
         QCOMPARE(modes.First(), AIS_Shape::SelectionMode(TopAbs_FACE));
     }
 
+    void xRayKeepsFaceSelectionAndCaePresentationIsNotSelectable()
+    {
+        CadViewer viewer;
+        const Handle(OpenGl_GraphicDriver) driver = new OpenGl_GraphicDriver(
+            Handle(Aspect_DisplayConnection)(), Standard_False);
+        viewer.viewer_ = new V3d_Viewer(driver);
+        viewer.context_ = new AIS_InteractiveContext(viewer.viewer_);
+        viewer.initialized_ = true;
+
+        const QString id = "xray-box";
+        viewer.display(BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape(), id, false);
+        viewer.setSelectionMode(CadViewer::SelectionMode::Face);
+        viewer.setXRayEnabled(true);
+
+        TColStd_ListOfInteger modes;
+        viewer.context_->ActivatedModes(viewer.featureObjects_.at(id), modes);
+        QCOMPARE(modes.Extent(), 1);
+        QCOMPARE(modes.First(), AIS_Shape::SelectionMode(TopAbs_FACE));
+
+        cad::cae::VolumeMesh mesh;
+        mesh.nodes = {{0, 0.0, 0.0, 0.0}, {1, 1.0, 0.0, 0.0},
+                      {2, 0.0, 1.0, 0.0}, {3, 0.0, 0.0, 1.0}};
+        mesh.tetrahedra = {{0, {0, 1, 2, 3}}};
+        mesh.surfaceTriangles = {{{0, 1, 2}, 1, 0}};
+        viewer.showMesh(mesh);
+        modes.Clear();
+        viewer.context_->ActivatedModes(viewer.meshObject_, modes);
+        QVERIFY(modes.IsEmpty());
+
+        viewer.setXRayEnabled(false);
+        modes.Clear();
+        viewer.context_->ActivatedModes(viewer.featureObjects_.at(id), modes);
+        QCOMPARE(modes.Extent(), 1);
+        QCOMPARE(modes.First(), AIS_Shape::SelectionMode(TopAbs_FACE));
+    }
+
     void finishedFaceAttachedSketchEnablesVisibleExtrudeAction()
     {
         if (qEnvironmentVariable("DISPLAY").isEmpty()) {
@@ -494,6 +533,10 @@ private slots:
         MainWindow window;
         const auto sketch = window.modeling_.createSketch();
         QVERIFY(sketch.success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(window.modeling_.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
         window.applySelection({QString::fromStdString(sketch.id)});
         QVERIFY(window.extrudeAction_->isEnabled());
     }
@@ -1014,6 +1057,99 @@ private slots:
         QCOMPARE(viewer->managedSelectionModes_.at(id), 0);
         viewer->setSelectionMode(CadViewer::SelectionMode::Face);
         QCOMPARE(viewer->managedSelectionModes_.at(id), AIS_Shape::SelectionMode(TopAbs_FACE));
+    }
+
+    void electrostaticResolvesAgainThroughMainWindowAfterGeometryChange()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()
+            || qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen")
+            QSKIP("Native OCCT viewer is required for the MainWindow CAE regression test");
+        if (QStandardPaths::findExecutable("gmsh").isEmpty())
+            QSKIP("Gmsh is required for the MainWindow electrostatic regression test");
+
+        MainWindow window;
+        const auto box = window.modeling_.createBox();
+        QVERIFY(box.success);
+        window.refreshModelView();
+        window.applySelection({QString::fromStdString(box.id)});
+
+        window.generateMesh();
+        const auto waitFor = [](const auto& predicate) {
+            QElapsedTimer timer;
+            timer.start();
+            while (!predicate() && timer.elapsed() < 30000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                QThread::msleep(10);
+            }
+            return predicate();
+        };
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
+        const auto studyId = window.simulation_.study().studyId;
+        window.applySelection({});
+        QVERIFY(window.meshRegenerateButton_->isEnabled());
+        window.meshRegenerateButton_->click();
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().studyId, studyId);
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
+
+        std::vector<cad::topology::TopologicalReference> faces;
+        for (TopExp_Explorer explorer(window.modeling_.body().findFeature(box.id)->shape(),
+                                      TopAbs_FACE);
+             explorer.More(); explorer.Next()) {
+            faces.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
+                box.id, window.modeling_.body().findFeature(box.id)->shape(),
+                explorer.Current()));
+        }
+        QVERIFY(faces.size() == 6);
+        std::string diagnostic;
+        QVERIFY(window.simulation_.addVoltageBoundary("Ground", 0.0,
+            {faces[0]}, diagnostic));
+        QVERIFY(window.simulation_.addVoltageBoundary("Voltage", 100.0,
+            {faces[1]}, diagnostic));
+        window.solveElectrostatics();
+        QVERIFY(waitFor([&window]() { return !window.electrostaticSolving_; }));
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Ready);
+
+        window.simulation_.deleteMesh();
+        window.viewer_->deleteMeshPresentation();
+        window.updateMeshInspector();
+        window.updateElectrostaticPanel();
+        QVERIFY(window.meshRegenerateButton_->isEnabled());
+        window.meshRegenerateButton_->click();
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
+        QVERIFY(window.simulation_.study().boundaryConditions[0].valid);
+        QVERIFY(window.simulation_.study().boundaryConditions[1].valid);
+        window.solveElectrostatics();
+        QVERIFY(waitFor([&window]() { return !window.electrostaticSolving_; }));
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Ready);
+
+        QVERIFY(window.modeling_.setFeatureProperty(box.id, "width", 120.0).success);
+        window.refreshModelView();
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Outdated);
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Outdated);
+        window.applySelection({QString::fromStdString(box.id)});
+        window.generateMesh();
+        QVERIFY(waitFor([&window]() { return !window.meshGenerating_; }));
+        QCOMPARE(window.simulation_.study().status,
+                 cad::application::SimulationStatus::Ready);
+        QVERIFY(window.simulation_.study().boundaryConditions[0].valid);
+        QVERIFY(window.simulation_.study().boundaryConditions[1].valid);
+
+        window.solveElectrostatics();
+        QVERIFY(waitFor([&window]() { return !window.electrostaticSolving_; }));
+        QCOMPARE(window.simulation_.study().solutionStatus,
+                 cad::application::ElectrostaticSolutionStatus::Ready);
+        QVERIFY(window.simulation_.study().solvedMeshRevision
+            == window.simulation_.study().meshRevision);
     }
 };
 

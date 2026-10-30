@@ -37,9 +37,19 @@ public:
     ModelingResult createSketch(
         cad::parametric::SketchSupportType support = cad::parametric::SketchSupportType::XY);
     ModelingResult createSketchOnFace(const SelectionSnapshot& selection);
+    ModelingResult createSketchOnFace(
+        const cad::topology::TopologicalReference& faceReference);
     ModelingResult addSketchLine(
         const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
         bool construction = false);
+    ModelingResult replaceSketchProfile(
+        const std::string& sketchId,
+        const std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>>& segments);
+    ModelingResult editSketchLine(
+        const std::string& sketchId, const std::string& entityId,
+        const gp_Pnt2d& start, const gp_Pnt2d& end);
+    ModelingResult removeSketchEntity(
+        const std::string& sketchId, const std::string& entityId);
     ModelingResult toggleSketchEntityConstruction(
         const std::string& sketchId, const std::string& entityId);
     ModelingResult addSketchCircle(
@@ -157,13 +167,25 @@ public:
         const std::string& featureId,
         cad::parametric::RevolveAxisDefinition axis);
     ModelingResult createLinearPattern(const std::vector<std::string>& selection);
+    ModelingResult createLinearPattern(const std::vector<std::string>& selection,
+                                       gp_Vec direction, double spacing, int count,
+                                       bool includeSource);
     ModelingResult createPathPattern(const std::vector<std::string>& selection);
+    ModelingResult createPathPattern(const std::vector<std::string>& selection,
+                                     double spacing, int count,
+                                     cad::parametric::PathPatternDistribution distribution,
+                                     cad::parametric::PathPatternOrientation orientation,
+                                     double startOffset, double endOffset, bool includeSource);
     ModelingResult createFillet(
         const SelectionSnapshot& selection,
         double radius = 3.0
     );
     ModelingResult createChamfer(
         const SelectionSnapshot& selection,
+        double distance = 3.0
+    );
+    ModelingResult createChamfer(
+        const std::vector<cad::topology::TopologicalReference>& references,
         double distance = 3.0
     );
     ModelingResult pushPull(
@@ -186,6 +208,30 @@ public:
     ModelingResult transformFeatureDelta(
         const std::string& featureId,
         const gp_Trsf& delta
+    );
+    ModelingResult createTransform(
+        const std::vector<std::string>& featureIds,
+        cad::parametric::TransformOperation operation,
+        cad::parametric::TransformResultMode resultMode,
+        const gp_Trsf& transformation
+    );
+    ModelingResult transformComponent(
+        const std::string& componentId,
+        cad::parametric::TransformOperation operation,
+        cad::parametric::TransformResultMode resultMode,
+        const gp_Trsf& transformation
+    );
+    ModelingResult splitComponent(
+        const std::string& componentId,
+        const gp_Pnt& origin,
+        const gp_Dir& normal
+    );
+    ModelingResult recoverPreSplit(const std::string& rootFeatureId);
+    ModelingResult splitFeature(
+        const std::string& wholeFeatureId,
+        const std::string& componentFeatureId,
+        double splitCoordinate,
+        const gp_Vec& moveNegative
     );
     ModelingResult duplicateFeature(const std::string& featureId);
     ModelingResult duplicateFeatureWithDelta(

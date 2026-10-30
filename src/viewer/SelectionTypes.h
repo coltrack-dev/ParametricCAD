@@ -30,6 +30,7 @@ struct SelectionItem
     // This is an index in the current presentation shape only. It is not a
     // persistent topology identifier and must not survive a recompute.
     std::optional<int> currentSubshapeIndex;
+    std::optional<QString> componentId;
 
     bool isValid() const noexcept
     {
@@ -39,6 +40,7 @@ struct SelectionItem
     friend bool operator==(const SelectionItem& left, const SelectionItem& right)
     {
         return left.featureId == right.featureId
+            && left.componentId == right.componentId
             && left.kind == right.kind
             && left.currentSubshapeIndex == right.currentSubshapeIndex;
     }
@@ -110,7 +112,9 @@ struct SelectionState
                         : item.kind == SelectionKind::Edge
                             ? cad::application::SelectionKind::Edge
                             : cad::application::SelectionKind::Vertex,
-                item.currentSubshapeIndex
+                item.currentSubshapeIndex,
+                item.componentId ? std::optional<std::string>(item.componentId->toStdString())
+                                 : std::nullopt
             });
         }
         return result;

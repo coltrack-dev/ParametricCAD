@@ -23,6 +23,7 @@ struct SelectionDescriptor
     std::string featureId;
     SelectionKind kind{SelectionKind::Object};
     std::optional<int> subshapeIndex;
+    std::optional<std::string> componentId;
 
     friend bool operator==(const SelectionDescriptor&, const SelectionDescriptor&) = default;
 };

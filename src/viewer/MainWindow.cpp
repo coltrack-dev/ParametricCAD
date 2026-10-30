@@ -14,6 +14,9 @@
 #include "operations/SketchProfileBuilder.h"
 #include "operations/SketchPathBuilder.h"
 #include "application/SelectionResolver.h"
+#include "application/ModelTransaction.h"
+#include "model/ModelComponent.h"
+#include "automation/CadAutomationService.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -21,6 +24,7 @@
 #include <QDialog>
 #include <QEvent>
 #include <QDir>
+#include <QFileInfo>
 #include <QFileDialog>
 #include <QKeySequence>
 #include <QMessageBox>
@@ -30,11 +34,14 @@
 #include <QFormLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QListWidget>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRep_Builder.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -42,13 +49,16 @@
 #include <TopExp_Explorer.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <QStandardPaths>
 #include <QDockWidget>
 #include <QGuiApplication>
+#include <QCoreApplication>
 #include <QScreen>
 #include <QElapsedTimer>
 #include <QProgressDialog>
 #include <QTimer>
+#include <QThread>
 #include <QDebug>
 #include <QHash>
 #include <QMenu>
@@ -59,9 +69,20 @@
 #include <QStyle>
 #include <QIcon>
 #include <QSignalBlocker>
+#include <QBuffer>
+#include <QUuid>
+#include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Vec.hxx>
+#include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cstdio>
+#include <limits>
+#include <functional>
 #include <type_traits>
 
 namespace
@@ -69,12 +90,239 @@ namespace
 constexpr int ModelPanelWidth = 320;
 constexpr qint64 ProjectLoadTimeBudgetMs = 30;
 
+QJsonObject rpcError(const QJsonValue& id, int code, const QString& message,
+                     const QJsonObject& data = {})
+{
+    QJsonObject error{{"code", code}, {"message", message}};
+    if (!data.isEmpty()) error.insert("data", data);
+    return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"error", error}};
+}
+
+QString featureStateName(cad::parametric::FeatureState state)
+{
+    switch (state) {
+    case cad::parametric::FeatureState::Dirty: return "dirty";
+    case cad::parametric::FeatureState::UpToDate: return "up_to_date";
+    case cad::parametric::FeatureState::Failed: return "failed";
+    }
+    return "unknown";
+}
+
+QJsonObject shapeInspection(const TopoDS_Shape& shape)
+{
+    QJsonObject result{{"valid", false}, {"shapeNull", shape.IsNull()}};
+    if (shape.IsNull()) return result;
+    const BRepCheck_Analyzer analyzer(shape);
+    int solids = 0;
+    int faces = 0;
+    int edges = 0;
+    for (TopExp_Explorer it(shape, TopAbs_SOLID); it.More(); it.Next()) ++solids;
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) ++faces;
+    for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) ++edges;
+    GProp_GProps volumeProperties;
+    BRepGProp::VolumeProperties(shape, volumeProperties);
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    QJsonObject box;
+    if (!bounds.IsVoid()) {
+        Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+        bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        box = QJsonObject{{"min", QJsonArray{xmin, ymin, zmin}},
+                          {"max", QJsonArray{xmax, ymax, zmax}}};
+    }
+    result.insert("valid", analyzer.IsValid());
+    result.insert("solidCount", solids);
+    result.insert("faceCount", faces);
+    result.insert("edgeCount", edges);
+    result.insert("volume", volumeProperties.Mass());
+    result.insert("boundingBox", box);
+    return result;
+}
+
+QJsonObject featureJson(const cad::parametric::ParametricFeature& feature,
+                        bool includeShape)
+{
+    QJsonArray dependencies;
+    for (const auto& weak : feature.dependencies()) {
+        if (const auto dependency = weak.lock())
+            dependencies.append(QString::fromStdString(dependency->id()));
+    }
+    QJsonObject result{
+        {"id", QString::fromStdString(feature.id())},
+        {"name", QString::fromStdString(feature.name())},
+        {"type", QString::fromLatin1(feature.typeId())},
+        {"state", featureStateName(feature.state())},
+        {"recomputeState", featureStateName(feature.state())},
+        {"error", QString::fromStdString(feature.error())},
+        {"dependencies", dependencies},
+        {"geometryRevision", static_cast<qint64>(feature.geometryRevision())},
+        {"visible", feature.userVisible()},
+        {"parameters", feature.serialize()}
+    };
+    if (includeShape) {
+        result.insert("shape", shapeInspection(feature.shape()));
+        QJsonArray faces;
+        for (TopExp_Explorer explorer(feature.shape(), TopAbs_FACE);
+             explorer.More(); explorer.Next()) {
+            faces.append(cad::topology::toJson(
+                cad::topology::TopologicalSignatureBuilder::createReference(
+                    feature.id(), feature.shape(), TopoDS::Face(explorer.Current()))));
+        }
+        result.insert("topology", QJsonObject{{"faces", faces}});
+    }
+    return result;
+}
+
+QJsonObject componentJson(const cad::parametric::ModelComponent& component)
+{
+    QJsonObject result{
+        {"id", QString::fromStdString(component.id)},
+        {"name", QString::fromStdString(component.name)},
+        {"role", QString::fromStdString(component.role)},
+        {"sourceFeatureId", QString::fromStdString(component.sourceFeatureId)},
+        {"visible", component.visible},
+        {"technicalHidden", component.technicalHidden},
+        {"boundingBox", QJsonObject{
+            {"min", QJsonArray{component.minX, component.minY, component.minZ}},
+            {"max", QJsonArray{component.maxX, component.maxY, component.maxZ}}}},
+        {"volume", component.volume}};
+    if (component.parentComponentId)
+        result.insert("parentComponentId", QString::fromStdString(*component.parentComponentId));
+    if (!component.replacementComponentIds.empty()) {
+        QJsonArray replacements;
+        for (const auto& replacement : component.replacementComponentIds)
+            replacements.append(QString::fromStdString(replacement));
+        result.insert("replacementComponentIds", replacements);
+    }
+    return result;
+}
+
+QString visibilityModeString(const cad::application::VisibilityMode mode)
+{
+    switch (mode) {
+    case cad::application::VisibilityMode::Hidden: return QStringLiteral("hidden");
+    case cad::application::VisibilityMode::Ghosted: return QStringLiteral("ghosted");
+    case cad::application::VisibilityMode::Visible: return QStringLiteral("visible");
+    }
+    return QStringLiteral("hidden");
+}
+
+QJsonObject sketchEntityJson(const cad::parametric::SketchEntity& entity)
+{
+    return std::visit([](const auto& value) {
+        using Entity = std::decay_t<decltype(value)>;
+        QJsonObject result{{"id", QString::fromStdString(value.id)},
+            {"construction", value.construction}};
+        if constexpr (std::is_same_v<Entity, cad::parametric::SketchLine>) {
+            result.insert("type", "Line");
+            result.insert("start", QJsonArray{value.start.X(), value.start.Y()});
+            result.insert("end", QJsonArray{value.end.X(), value.end.Y()});
+        } else if constexpr (std::is_same_v<Entity, cad::parametric::SketchCircle>) {
+            result.insert("type", "Circle");
+            result.insert("center", QJsonArray{value.center.X(), value.center.Y()});
+            result.insert("radius", value.radius);
+        } else {
+            result.insert("type", "Arc");
+            result.insert("center", QJsonArray{value.center.X(), value.center.Y()});
+            result.insert("radius", value.radius);
+            result.insert("startAngle", value.startAngle);
+            result.insert("endAngle", value.endAngle);
+            result.insert("clockwise", value.clockwise);
+        }
+        return result;
+    }, entity);
+}
+
+QJsonObject topologyJson(const cad::parametric::ParametricFeature& feature)
+{
+    QJsonArray faces;
+    QJsonArray edges;
+    QJsonArray vertices;
+    for (TopExp_Explorer explorer(feature.shape(), TopAbs_FACE);
+         explorer.More(); explorer.Next()) {
+        faces.append(cad::topology::toJson(
+            cad::topology::TopologicalSignatureBuilder::createReference(
+                feature.id(), feature.shape(), TopoDS::Face(explorer.Current()))));
+    }
+    for (TopExp_Explorer explorer(feature.shape(), TopAbs_EDGE);
+         explorer.More(); explorer.Next()) {
+        edges.append(cad::topology::toJson(
+            cad::topology::TopologicalSignatureBuilder::createReference(
+                feature.id(), feature.shape(), TopoDS::Edge(explorer.Current()))));
+    }
+    for (TopExp_Explorer explorer(feature.shape(), TopAbs_VERTEX);
+         explorer.More(); explorer.Next()) {
+        TopoDS_Shape vertex;
+        vertex = TopoDS::Vertex(explorer.Current());
+        vertices.append(cad::topology::toJson(
+            cad::topology::TopologicalSignatureBuilder::createReference(
+                feature.id(), feature.shape(), vertex)));
+    }
+    return QJsonObject{{"faces", faces}, {"edges", edges}, {"vertices", vertices}};
+}
+
+bool validProjectPath(const QString& path, QString& error)
+{
+    const QFileInfo info(path);
+    if (path.isEmpty() || !info.isAbsolute()) {
+        error = "Project path must be an absolute path";
+        return false;
+    }
+    if (info.suffix().compare("pcad", Qt::CaseInsensitive) != 0) {
+        error = "Project path must use the .pcad extension";
+        return false;
+    }
+    if (info.exists() && !info.isFile()) {
+        error = "Project path is not a regular file";
+        return false;
+    }
+    return true;
+}
+
+bool validUnits(const QJsonObject& arguments, QString& error, bool required = true)
+{
+    if (!arguments.contains("units")) {
+        if (required) error = "units must be explicitly set to 'mm'";
+        return !required;
+    }
+    if (!arguments.value("units").isString()
+        || arguments.value("units").toString() != "mm") {
+        error = "Only millimeter units ('mm') are supported";
+        return false;
+    }
+    return true;
+}
+
+QJsonObject modelingResultJson(const cad::application::ModelingResult& result)
+{
+    QJsonObject value{{"success", result.success},
+        {"featureId", QString::fromStdString(result.id)},
+        {"error", QString::fromStdString(result.error)}};
+    if (!result.componentIds.empty()) {
+        QJsonArray componentIds;
+        for (const auto& componentId : result.componentIds)
+            componentIds.append(QString::fromStdString(componentId));
+        value.insert("componentIds", componentIds);
+    }
+    return value;
+}
+
 void traceActionState(const char* event, const QString& details)
 {
     if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_ACTIONS")) return;
     static unsigned long long sequence = 0;
     const auto text = details.toUtf8();
     std::fprintf(stderr, "[ACTION %llu] %s %s\n", ++sequence, event, text.constData());
+    std::fflush(stderr);
+}
+
+void traceCae(const char* event, const QString& details)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRIC_CAD_CAE_TRACE")) return;
+    static unsigned long long sequence = 0;
+    const auto text = details.toUtf8();
+    std::fprintf(stderr, "[CAE %llu thread=%p] %s %s\n", ++sequence,
+        QThread::currentThreadId(), event, text.constData());
     std::fflush(stderr);
 }
 
@@ -275,6 +523,7 @@ MainWindow::MainWindow(QWidget* parent)
     createActions();
     createParametricPanel();
     createBimPanel();
+    createSimulationPanel();
     setupToolbars();
     restoreWindowLayout();
     featureEditorPanel_->setSketchConstraintSelectionHandler(
@@ -543,26 +792,1497 @@ MainWindow::MainWindow(QWidget* parent)
         this, &MainWindow::sampleProjectLoadEventLoop);
     connect(&projectLoadWatcher_, &QFutureWatcher<std::shared_ptr<cad::application::ProjectLoadResult>>::finished,
         this, &MainWindow::finishProjectLoad);
+    connect(&meshWatcher_, &QFutureWatcher<std::shared_ptr<cad::cae::MeshGenerationResult>>::finished,
+        this, &MainWindow::finishMeshGeneration);
+    connect(&electrostaticWatcher_,
+        &QFutureWatcher<std::shared_ptr<cad::cae::ElectrostaticResult>>::finished,
+        this, &MainWindow::finishElectrostaticSolve);
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     connect(&ifcImportProgressTimer_, &QTimer::timeout,
         this, &MainWindow::updateIfcImportProgress);
     connect(&ifcImportWatcher_, &QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>>::finished,
         this, &MainWindow::finishIfcImport);
+    connect(&mcpIfcImportWatcher_,
+        &QFutureWatcher<std::shared_ptr<cad::import::IfcImportResult>>::finished,
+        this, &MainWindow::finishMcpIfcImport);
 #endif
     statusBar()->showMessage("Ready");
+
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_ENABLE_AUTOMATION")) {
+        automationService_ = std::make_unique<CadAutomationService>(*this, this);
+        QString error;
+        const QString socket = qEnvironmentVariable(
+            "PARAMETRICCAD_AUTOMATION_SOCKET", "parametriccad-automation");
+        if (!automationService_->start(socket, error)) {
+            qWarning() << "Unable to start automation service:" << error;
+            automationService_.reset();
+        } else {
+            qInfo() << "Automation service listening on" << automationService_->socketName();
+        }
+    }
 }
 
 
 MainWindow::~MainWindow()
 {
+    if (meshGenerating_ && meshCancelRequested_) {
+        meshCancelRequested_->store(true, std::memory_order_relaxed);
+        meshWatcher_.future().waitForFinished();
+    }
+    if (electrostaticSolving_) electrostaticWatcher_.future().waitForFinished();
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
     if (ifcImporting_ && ifcImportCancelRequested_) {
         ifcImportCancelRequested_->store(true, std::memory_order_relaxed);
         ifcImportWatcher_.future().waitForFinished();
     }
+    if (mcpIfcImportWatcher_.isRunning()) mcpIfcImportWatcher_.future().waitForFinished();
 #endif
     disconnect(&modeling_.undoStack(), nullptr, this, nullptr);
     featureEditorPanel_->setService(nullptr);
+}
+
+QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
+{
+    const QJsonValue id = request.value("id");
+    if (request.value("jsonrpc").toString() != "2.0")
+        return rpcError(id, -32600, "Request must use JSON-RPC 2.0");
+    if (!request.value("method").isString())
+        return rpcError(id, -32600, "Request method is required");
+    if (request.value("method").toString() != "automation/call")
+        return rpcError(id, -32601, "Unknown automation method");
+
+    const QJsonObject params = request.value("params").toObject();
+    const QString tool = params.value("tool").toString();
+    const QJsonObject arguments = params.value("arguments").toObject();
+    static QStringList tools{
+        "cad.get_model_tree", "cad.get_feature", "cad.inspect_shape",
+        "cad.get_selection", "cad.get_view_state", "cad.screenshot",
+        "cad.get_application_status", "cad.get_operation_status", "cad.import_ifc",
+        "cad.new_project", "cad.open_project",
+        "cad.save_project", "cad.create_sketch", "cad.add_rectangle",
+        "cad.add_circle", "cad.extrude", "cad.pocket", "cad.recompute",
+        "cad.edit_feature", "cad.undo", "cad.redo", "cad.get_sketch_entities",
+        "cad.add_line", "cad.edit_sketch_entity", "cad.remove_sketch_entity",
+        "cad.get_topology", "cad.chamfer", "cad.boolean", "cad.fillet",
+        "cad.shell", "cad.revolve", "cad.sweep", "cad.delete_feature",
+        "cad.add_arc", "cad.add_constraint", "cad.edit_constraint",
+        "cad.remove_constraint", "cad.get_constraints", "cad.linear_pattern",
+        "cad.path_pattern", "cad.get_feature_dependencies", "cad.find_topology",
+        "cad.inspect_model", "cad.edit_sketch_profile", "cad.batch", "cad.mirror",
+        "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
+        "cad.get_components", "cad.get_component", "cad.get_component_topology",
+        "cad.set_component_visibility", "cad.transform_component", "cad.split_component",
+        "cad.recover_pre_split"};
+    static const QStringList transactionalTools{
+        "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
+        "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
+    if (!tools.contains(tool)) return rpcError(id, -32601, "Unknown tool: " + tool);
+
+    const auto hasOnly = [&arguments](const QStringList& names) {
+        for (const QString& key : arguments.keys()) if (!names.contains(key)) return false;
+        return true;
+    };
+    if ((tool == "cad.get_model_tree" || tool == "cad.get_selection"
+         || tool == "cad.get_view_state" || tool == "cad.screenshot"
+         || tool == "cad.get_application_status" || tool == "cad.inspect_model")
+        && !arguments.isEmpty())
+        return rpcError(id, -32602, "This tool does not accept arguments");
+    if (tool == "cad.get_operation_status") {
+        if (!hasOnly({"operationId"})
+            || (arguments.contains("operationId")
+                && (!arguments.value("operationId").isString()
+                    || arguments.value("operationId").toString().isEmpty())))
+            return rpcError(id, -32602, "operationId must be the only non-empty string argument");
+    }
+    if (tool == "cad.import_ifc") {
+        if (!hasOnly({"path", "replaceCurrent"})
+            || !arguments.value("path").isString()
+            || arguments.value("path").toString().isEmpty()
+            || (arguments.contains("replaceCurrent")
+                && !arguments.value("replaceCurrent").isBool()))
+            return rpcError(id, -32602, "path is required and replaceCurrent must be boolean");
+    }
+    if (tool == "cad.get_components") {
+        if (!hasOnly({"featureId"}) && !arguments.isEmpty())
+            return rpcError(id, -32602, "get_components accepts only featureId");
+        if (arguments.contains("featureId") && !arguments.value("featureId").isString())
+            return rpcError(id, -32602, "featureId must be a string");
+    }
+    if (tool == "cad.get_component" || tool == "cad.get_component_topology") {
+        if (!hasOnly({"componentId"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty())
+            return rpcError(id, -32602, "componentId must be the only non-empty string argument");
+    }
+    if (tool == "cad.set_component_visibility") {
+        if (!hasOnly({"componentId", "mode", "isolate"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty()
+            || !arguments.value("mode").isString())
+            return rpcError(id, -32602, "componentId and mode are required");
+        const auto mode = arguments.value("mode").toString();
+        if (mode != "visible" && mode != "hidden" && mode != "ghosted")
+            return rpcError(id, -32602, "mode must be visible, hidden, or ghosted");
+        if (arguments.contains("isolate") && !arguments.value("isolate").isBool())
+            return rpcError(id, -32602, "isolate must be boolean");
+    }
+    if (tool == "cad.transform_component") {
+        if (!hasOnly({"componentId", "operation", "mode", "origin", "normal", "vector",
+                      "axisOrigin", "axisDirection", "angleDegrees", "units"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty()
+            || !arguments.value("operation").isString()
+            || !arguments.value("mode").isString())
+            return rpcError(id, -32602, "transform_component requires componentId, operation and mode");
+        const auto operation = arguments.value("operation").toString();
+        const auto mode = arguments.value("mode").toString();
+        if (!QStringList{"mirror", "translate", "rotate"}.contains(operation)
+            || !QStringList{"copy", "replace_result"}.contains(mode))
+            return rpcError(id, -32602, "Invalid component transform operation or mode");
+    }
+    if (tool == "cad.split_component") {
+        if (!hasOnly({"componentId", "origin", "normal", "units"})
+            || !arguments.value("componentId").isString()
+            || arguments.value("componentId").toString().isEmpty())
+            return rpcError(id, -32602, "split_component requires componentId, origin and normal");
+    }
+    if (tool == "cad.recover_pre_split") {
+        if (!hasOnly({"rootFeatureId"})
+            || !arguments.value("rootFeatureId").isString()
+            || arguments.value("rootFeatureId").toString().isEmpty())
+            return rpcError(id, -32602, "recover_pre_split requires rootFeatureId");
+    }
+    if ((tool == "cad.get_feature" || tool == "cad.inspect_shape")
+        && (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty()))
+        return rpcError(id, -32602, "featureId must be the only non-empty string argument");
+    const QStringList unitTools{"cad.add_rectangle", "cad.add_circle", "cad.add_line",
+        "cad.extrude", "cad.pocket", "cad.chamfer", "cad.fillet", "cad.shell",
+        "cad.add_arc", "cad.linear_pattern", "cad.path_pattern", "cad.edit_sketch_profile",
+        "cad.mirror", "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
+        "cad.transform_component", "cad.split_component"};
+    if (unitTools.contains(tool)) {
+        QString unitsError;
+        if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
+    }
+
+    const auto finishModeling = [this, &id](const cad::application::ModelingResult& operation,
+                                             const QString& name) {
+        if (!operation.success) {
+            return rpcError(id, -32020, name + " failed",
+                QJsonObject{{"operation", name}, {"message", QString::fromStdString(operation.error)}});
+        }
+        QJsonObject value = modelingResultJson(operation);
+        if (!operation.id.empty()) {
+            if (const auto feature = modeling_.body().findFeature(operation.id))
+                value.insert("feature", featureJson(*feature, false));
+        }
+        return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", value}};
+    };
+    const auto finishSolidModeling = [this, &id, &finishModeling](
+        const cad::application::ModelingResult& operation, const QString& name) {
+        if (!operation.success) return finishModeling(operation, name);
+        const auto feature = modeling_.body().findFeature(operation.id);
+        if (!feature) return rpcError(id, -32020, name + " failed",
+            QJsonObject{{"operation", name}, {"message", "Created feature is missing"}});
+        const auto inspection = shapeInspection(feature->shape());
+        if (!inspection.value("valid").toBool()
+            || inspection.value("solidCount").toInt() != 1) {
+            modeling_.undo();
+            return rpcError(id, -32020, name + " failed",
+                QJsonObject{{"operation", name},
+                    {"message", "Result must be one valid solid"}, {"inspection", inspection}});
+        }
+        refreshModelView();
+        return finishModeling(operation, name);
+    };
+
+    QJsonObject result;
+    if (tool == "cad.batch") {
+        if (!arguments.keys().contains("operations") || arguments.keys().size() != 1
+            || !arguments.value("operations").isArray())
+            return rpcError(id, -32602, "batch requires only an operations array");
+        const auto operations = arguments.value("operations").toArray();
+        if (operations.isEmpty() || operations.size() > 128)
+            return rpcError(id, -32602, "batch operations must contain between 1 and 128 items");
+        cad::application::ModelTransaction transaction(
+            modeling_.body(), modeling_.undoStack(), "MCP Batch");
+        QJsonArray results;
+        const auto resolveReferences = [&results](QJsonValue value) {
+            std::function<QJsonValue(const QJsonValue&)> resolve;
+            resolve = [&resolve, &results](const QJsonValue& current) -> QJsonValue {
+                if (current.isString()) {
+                    const QString token = current.toString();
+                    if (!token.startsWith('$')) return current;
+                    const int dot = token.indexOf('.');
+                    bool ok = false;
+                    const int index = token.mid(1, dot < 0 ? -1 : dot - 1).toInt(&ok);
+                    if (!ok || index < 0 || index >= results.size()) return current;
+                    QJsonValue resolved = results.at(index);
+                    if (dot >= 0) {
+                        for (const auto& key : token.mid(dot + 1).split('.')) {
+                            if (!resolved.isObject()) return current;
+                            resolved = resolved.toObject().value(key);
+                        }
+                    }
+                    return resolved;
+                }
+                if (current.isArray()) {
+                    QJsonArray array;
+                    for (const auto& item : current.toArray()) array.append(resolve(item));
+                    return array;
+                }
+                if (current.isObject()) {
+                    QJsonObject object;
+                    const auto source = current.toObject();
+                    for (auto iterator = source.begin(); iterator != source.end(); ++iterator)
+                        object.insert(iterator.key(), resolve(iterator.value()));
+                    return object;
+                }
+                return current;
+            };
+            return resolve(value);
+        };
+        for (int index = 0; index < operations.size(); ++index) {
+            const auto operation = operations.at(index).toObject();
+            const QString operationTool = operation.value("tool").toString();
+            if (!transactionalTools.contains(operationTool) || operationTool == "cad.batch") {
+                transaction.rollback();
+                return rpcError(id, -32602, "Tool is not eligible for transactional batching",
+                    QJsonObject{{"index", index}, {"tool", operationTool}});
+            }
+            const auto resolvedArguments = resolveReferences(operation.value("arguments"));
+            if (!resolvedArguments.isObject()) {
+                transaction.rollback();
+                return rpcError(id, -32602, "Batch operation arguments must be an object",
+                    QJsonObject{{"index", index}});
+            }
+            const auto nested = handleAutomationRequest(QJsonObject{
+                {"jsonrpc", "2.0"}, {"id", id}, {"method", "automation/call"},
+                {"params", QJsonObject{{"tool", operationTool},
+                    {"arguments", resolvedArguments.toObject()}}}});
+            if (nested.contains("error")) {
+                transaction.rollback();
+                return rpcError(id, -32020, "Batch operation failed",
+                    QJsonObject{{"index", index}, {"tool", operationTool},
+                        {"cause", nested.value("error")}, {"completed", results}});
+            }
+            results.append(nested.value("result"));
+        }
+        if (!transaction.commit())
+            return rpcError(id, -32020, "Batch commit failed",
+                QJsonObject{{"message", QString::fromStdString(modeling_.body().lastError())}});
+        refreshModelView();
+        result = QJsonObject{{"success", true}, {"operationCount", results.size()},
+            {"results", results}, {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.get_model_tree") {
+        QJsonArray features;
+        for (const auto& feature : modeling_.body().features())
+            features.append(featureJson(*feature, false));
+        result = QJsonObject{{"features", features},
+            {"featureCount", features.size()},
+            {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.get_components") {
+        const QString featureId = arguments.value("featureId").toString();
+        QJsonArray components;
+        if (!featureId.isEmpty()) {
+            for (const auto& component : cad::parametric::ComponentResolver::enumerate(
+                     modeling_.body(), featureId.toStdString()))
+                components.append(componentJson(component));
+        } else {
+            for (const auto& component : modeling_.body().components())
+                components.append(componentJson(component));
+            if (components.isEmpty()) {
+                for (const auto& feature : modeling_.body().features())
+                    for (const auto& component : cad::parametric::ComponentResolver::enumerate(
+                             modeling_.body(), feature->id()))
+                        components.append(componentJson(component));
+            }
+        }
+        result = QJsonObject{{"components", components}, {"componentCount", components.size()}};
+    } else if (tool == "cad.get_component" || tool == "cad.get_component_topology") {
+        const auto componentId = arguments.value("componentId").toString().toStdString();
+        std::string resolveError;
+        const auto resolved = cad::parametric::ComponentResolver::resolve(
+            modeling_.body(), componentId, resolveError);
+        if (!resolved)
+            return rpcError(id, -32004, "Component could not be resolved",
+                QJsonObject{{"componentId", QString::fromStdString(componentId)},
+                            {"message", QString::fromStdString(resolveError)}});
+        result = componentJson(resolved->component);
+        const auto sourceFeature = modeling_.body().findFeature(
+            resolved->component.sourceFeatureId);
+        const auto visibility = sourceFeature
+            ? visibilityManager_.effectiveComponentVisibility(
+                *sourceFeature, resolved->component, modeling_.body())
+            : cad::application::ComponentVisibilityResult{
+                cad::application::VisibilityMode::Hidden,
+                cad::application::VisibilityMode::Hidden,
+                "missing_parent_feature", false,
+                resolved->component.technicalHidden,
+                !resolved->component.replacementComponentIds.empty()};
+        result.insert("effectiveVisibility", visibilityModeString(visibility.mode));
+        result.insert("visibilityReason", QString::fromStdString(visibility.reason));
+        result.insert("parentFeatureVisibility",
+            visibilityModeString(visibility.parentFeatureMode));
+        result.insert("technicallyHidden", visibility.technicallyHidden);
+        result.insert("replaced", visibility.replaced);
+        result.insert("shape", shapeInspection(resolved->shape));
+        if (tool == "cad.get_component_topology") {
+            QJsonArray faces;
+            for (TopExp_Explorer explorer(resolved->shape, TopAbs_FACE);
+                 explorer.More(); explorer.Next())
+                faces.append(cad::topology::toJson(
+                    cad::topology::TopologicalSignatureBuilder::createReference(
+                        componentId, resolved->shape, TopoDS::Face(explorer.Current()))));
+            result.insert("topology", QJsonObject{{"faces", faces}});
+        }
+    } else if (tool == "cad.set_component_visibility") {
+        const auto componentId = arguments.value("componentId").toString().toStdString();
+        auto* component = modeling_.body().findComponent(componentId);
+        std::string resolveError;
+        if (!component) {
+            const auto resolved = cad::parametric::ComponentResolver::resolve(
+                modeling_.body(), componentId, resolveError);
+            if (!resolved)
+                return rpcError(id, -32004, "Component could not be resolved",
+                    QJsonObject{{"componentId", QString::fromStdString(componentId)},
+                                {"message", QString::fromStdString(resolveError)}});
+            auto values = modeling_.body().components();
+            const auto generated = cad::parametric::ComponentResolver::enumerate(
+                modeling_.body(), resolved->component.sourceFeatureId);
+            for (const auto& generatedComponent : generated) {
+                if (std::none_of(values.begin(), values.end(),
+                        [&generatedComponent](const auto& value) {
+                            return value.id == generatedComponent.id;
+                        })) values.push_back(generatedComponent);
+            }
+            modeling_.body().replaceComponents(std::move(values));
+            component = modeling_.body().findComponent(componentId);
+        }
+        const auto modeString = arguments.value("mode").toString();
+        const auto mode = modeString == "hidden" ? cad::application::VisibilityMode::Hidden
+            : modeString == "ghosted" ? cad::application::VisibilityMode::Ghosted
+                                       : cad::application::VisibilityMode::Visible;
+        component->visible = mode != cad::application::VisibilityMode::Hidden;
+        visibilityManager_.setComponentVisibility(componentId, mode);
+        if (arguments.value("isolate").toBool(false)) {
+            visibilityManager_.setIsolatedComponents({componentId});
+        } else {
+            visibilityManager_.clearComponentIsolation();
+        }
+        refreshVisibilityView();
+        result = QJsonObject{{"componentId", QString::fromStdString(componentId)},
+                             {"mode", modeString}, {"isolate", arguments.value("isolate").toBool(false)}};
+    } else if (tool == "cad.get_feature" || tool == "cad.inspect_shape") {
+        const QString featureId = arguments.value("featureId").toString();
+        if (featureId.isEmpty()) return rpcError(id, -32602, "featureId is required");
+        const auto feature = modeling_.body().findFeature(featureId.toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found", {{"featureId", featureId}});
+        if (tool == "cad.inspect_shape") result = shapeInspection(feature->shape());
+        else result = featureJson(*feature, true);
+    } else if (tool == "cad.inspect_model") {
+        QJsonArray invalidFeatures;
+        QJsonArray openProfiles;
+        for (const auto& feature : modeling_.body().features()) {
+            if (feature->state() == cad::parametric::FeatureState::Failed) {
+                invalidFeatures.append(QJsonObject{
+                    {"featureId", QString::fromStdString(feature->id())},
+                    {"type", QString::fromLatin1(feature->typeId())},
+                    {"message", QString::fromStdString(feature->error())}});
+            }
+            const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(feature);
+            if (sketch && !sketch->entities().empty()) {
+                try {
+                    cad::operations::SketchProfileBuilder::build(*sketch);
+                } catch (const std::exception& error) {
+                    openProfiles.append(QJsonObject{
+                        {"sketchId", QString::fromStdString(sketch->id())},
+                        {"message", QString::fromUtf8(error.what())}});
+                }
+            }
+        }
+        // Body::shape() is the result of the last ParametricFeature and may
+        // therefore represent only a component-level operation result.  For
+        // aggregate inspection use the logically active ModelComponents,
+        // excluding replaced/technical-hidden history and resolving each
+        // component independently.  This is deliberately independent of AIS
+        // presentation state.
+        std::vector<TopoDS_Shape> activeComponentShapes;
+        qint64 activeComponentCount = 0;
+        for (const auto& component : modeling_.body().components()) {
+            const auto feature = modeling_.body().findFeature(component.sourceFeatureId);
+            if (!feature) continue;
+            std::string resolveError;
+            const auto resolved = cad::parametric::ComponentResolver::resolve(
+                modeling_.body(), component.id, resolveError);
+            if (!resolved) continue;
+            const auto visibility = visibilityManager_.effectiveComponentVisibility(
+                *feature, resolved->component, modeling_.body());
+            if (visibility.mode == cad::application::VisibilityMode::Hidden) continue;
+            if (resolved->shape.IsNull()) continue;
+            activeComponentShapes.push_back(resolved->shape);
+            ++activeComponentCount;
+        }
+
+        TopoDS_Shape activeShape;
+        if (!activeComponentShapes.empty()) {
+            if (activeComponentShapes.size() == 1) {
+                activeShape = activeComponentShapes.front();
+            } else {
+                TopoDS_Compound compound;
+                BRep_Builder builder;
+                builder.MakeCompound(compound);
+                for (const auto& componentShape : activeComponentShapes)
+                    builder.Add(compound, componentShape);
+                activeShape = compound;
+            }
+        } else if (modeling_.body().components().empty()) {
+            // Backward-compatible fallback for projects without component
+            // metadata.  In that case Body::shape() remains the only safe
+            // aggregate available to MCP inspection.
+            activeShape = modeling_.body().shape();
+        }
+
+        const auto& shape = activeShape;
+        int solids = 0;
+        int components = 0;
+        bool valid = shape.IsNull();
+        QJsonObject bounds;
+        double volume = 0.0;
+        QJsonArray overlapWarnings;
+        if (!shape.IsNull()) {
+            BRepCheck_Analyzer analyzer(shape);
+            valid = analyzer.IsValid();
+            std::vector<Bnd_Box> solidBounds;
+            for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next()) ++solids;
+            if (solids <= 256) {
+                for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next()) {
+                    Bnd_Box solidBox;
+                    BRepBndLib::Add(explorer.Current(), solidBox);
+                    solidBounds.push_back(solidBox);
+                }
+                int intersectingBounds = 0;
+                for (std::size_t first = 0; first < solidBounds.size(); ++first)
+                    for (std::size_t second = first + 1; second < solidBounds.size(); ++second)
+                        if (!solidBounds[first].IsOut(solidBounds[second])) ++intersectingBounds;
+                if (intersectingBounds > 0) {
+                    overlapWarnings.append(QJsonObject{
+                        {"kind", "possible_overlapping_solids"},
+                        {"count", intersectingBounds},
+                        {"message", "Solid bounding boxes intersect; volume is not summed across history"},
+                        {"heuristic", true}});
+                }
+            } else {
+                overlapWarnings.append(QJsonObject{
+                    {"kind", "overlap_analysis_skipped"},
+                    {"message", "Solid count exceeds the bounded pairwise overlap check"},
+                    {"heuristic", true}});
+            }
+            for (TopExp_Explorer explorer(shape, TopAbs_COMPSOLID); explorer.More(); explorer.Next()) ++components;
+            if (components == 0) {
+                for (TopExp_Explorer explorer(shape, TopAbs_COMPOUND); explorer.More(); explorer.Next()) ++components;
+            }
+            if (components == 0) components = solids;
+            GProp_GProps props;
+            BRepGProp::VolumeProperties(shape, props);
+            volume = props.Mass();
+            Bnd_Box box;
+            BRepBndLib::Add(shape, box);
+            if (!box.IsVoid()) {
+                double xmin, ymin, zmin, xmax, ymax, zmax;
+                box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+                bounds = QJsonObject{{"min", QJsonArray{xmin, ymin, zmin}},
+                    {"max", QJsonArray{xmax, ymax, zmax}}};
+            }
+        }
+        qint64 modelComponentCount = static_cast<qint64>(modeling_.body().components().size());
+        if (modelComponentCount == 0) {
+            // Legacy/imported documents may not persist ModelComponent rows.
+            // Count addressable solids from each independent feature without
+            // adding intermediate feature volumes to the physical result.
+            for (const auto& feature : modeling_.body().features()) {
+                if (feature->shape().IsNull()) continue;
+                if (feature->shape().ShapeType() == TopAbs_SOLID) {
+                    ++modelComponentCount;
+                    continue;
+                }
+                for (TopExp_Explorer explorer(feature->shape(), TopAbs_SOLID);
+                     explorer.More(); explorer.Next()) ++modelComponentCount;
+            }
+        }
+        result = QJsonObject{
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())},
+            {"modelComponentCount", modelComponentCount},
+            {"activeComponentCount", activeComponentCount == 0 && !shape.IsNull()
+                ? static_cast<qint64>(solids) : activeComponentCount},
+            {"visibleComponentCount", activeComponentCount == 0 && !shape.IsNull()
+                ? static_cast<qint64>(solids) : activeComponentCount},
+            {"invalidFeatures", invalidFeatures},
+            {"openSketchProfiles", openProfiles},
+            {"solidCount", solids}, {"componentCount", components},
+            {"visibleGeometricSolidCount", solids},
+            {"totalVisibleGeometricVolume", volume},
+            {"visibleBoundingBox", bounds},
+            {"volumePolicy", "BRepGProp volume of the aggregate of logically active visible components; replaced and intermediate history components are excluded"},
+            {"aggregatePolicy", "Body::shape() is used only for legacy projects without ModelComponent metadata; AIS state is never used as geometry"},
+            {"overlapWarnings", overlapWarnings},
+            {"valid", valid}, {"volume", volume}, {"boundingBox", bounds},
+            {"lastError", QString::fromStdString(modeling_.body().lastError())},
+            {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.get_selection") {
+        QJsonArray items;
+        for (const auto& item : viewer_->selectionSnapshot().items) {
+            QString kind = "unknown";
+            switch (item.kind) {
+            case cad::application::SelectionKind::Object: kind = "object"; break;
+            case cad::application::SelectionKind::Face: kind = "face"; break;
+            case cad::application::SelectionKind::Edge: kind = "edge"; break;
+            case cad::application::SelectionKind::Vertex: kind = "vertex"; break;
+            default: break;
+            }
+            QJsonObject value{{"featureId", QString::fromStdString(item.featureId)}, {"kind", kind}};
+            if (item.subshapeIndex) value.insert("subshapeIndex", *item.subshapeIndex);
+            if (item.componentId) {
+                value.insert("componentId", QString::fromStdString(*item.componentId));
+                const auto component = modeling_.body().findComponent(*item.componentId);
+                const auto feature = component
+                    ? modeling_.body().findFeature(component->sourceFeatureId) : nullptr;
+                if (component && feature) {
+                    value.insert("effectiveVisibility", visibilityModeString(
+                        visibilityManager_.effectiveComponentVisibility(
+                            *feature, *component, modeling_.body()).mode));
+                }
+            }
+            items.append(value);
+        }
+        result = QJsonObject{{"items", items}};
+    } else if (tool == "cad.get_view_state") {
+        const auto camera = viewer_->cameraState();
+        result = QJsonObject{{"valid", camera.valid}, {"selectionMode", static_cast<int>(viewer_->selectionMode())},
+            {"displayMode", static_cast<int>(viewer_->displayMode())}, {"orbitMode", static_cast<int>(viewer_->orbitMode())},
+            {"width", viewer_->width()}, {"height", viewer_->height()}};
+        if (camera.valid) {
+            result.insert("eye", QJsonArray{camera.eye.X(), camera.eye.Y(), camera.eye.Z()});
+            result.insert("center", QJsonArray{camera.center.X(), camera.center.Y(), camera.center.Z()});
+            result.insert("up", QJsonArray{camera.up.X(), camera.up.Y(), camera.up.Z()});
+            result.insert("scale", camera.scale);
+        }
+    } else if (tool == "cad.screenshot") {
+        const QImage image = viewer_->captureImage();
+        if (image.isNull()) return rpcError(id, -32010, "Screenshot is unavailable");
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        buffer.open(QIODevice::WriteOnly);
+        image.save(&buffer, "PNG");
+        result = QJsonObject{{"mimeType", "image/png"}, {"width", image.width()},
+            {"height", image.height()}, {"data", QString::fromLatin1(bytes.toBase64())}};
+    } else if (tool == "cad.get_application_status") {
+        result = QJsonObject{{"application", "ParametricCAD"}, {"version", QCoreApplication::applicationVersion()},
+            {"pid", static_cast<qint64>(QCoreApplication::applicationPid())},
+            {"thread", QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()), 16)},
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())}, {"dirty", project_.isDirty()},
+            {"automationEnabled", automationService_ != nullptr},
+            {"featurePresentationCount", static_cast<qint64>(viewer_->featurePresentationCount())},
+            {"componentPresentationCount", static_cast<qint64>(viewer_->componentPresentationCount())},
+            {"displayedFeaturePresentationCount",
+                static_cast<qint64>(viewer_->displayedFeaturePresentationCount())},
+            {"displayedComponentPresentationCount",
+                static_cast<qint64>(viewer_->displayedComponentPresentationCount())}};
+    } else if (tool == "cad.get_operation_status") {
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+        const auto operationId = arguments.value("operationId").toString();
+        if (!operationId.isEmpty() && operationId != mcpIfcOperationId_)
+            return rpcError(id, -32004, "Operation not found", { {"operationId", operationId} });
+        result = mcpIfcOperationResult_;
+        if (result.isEmpty()) {
+            result = QJsonObject{{"operationId", mcpIfcOperationId_},
+                {"state", mcpIfcOperationId_.isEmpty() ? "idle" : mcpIfcState_}};
+        }
+#else
+        return rpcError(id, -32030, "Operation status is unavailable in this build");
+#endif
+    } else if (tool == "cad.import_ifc") {
+#if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
+        const QString path = arguments.value("path").toString();
+        const QFileInfo fileInfo(path);
+        if (!fileInfo.isAbsolute() || fileInfo.suffix().compare("ifc", Qt::CaseInsensitive) != 0
+            || !fileInfo.isFile())
+            return rpcError(id, -32602, "path must be an existing absolute .ifc file");
+        if (mcpIfcImportWatcher_.isRunning() || ifcImporting_ || projectLoading_)
+            return rpcError(id, -32030, "Another project or IFC operation is already running");
+        mcpIfcOperationId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        mcpIfcPath_ = path;
+        mcpIfcReplaceCurrent_ = arguments.value("replaceCurrent").toBool(false);
+        mcpIfcState_ = "running";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"operationId", mcpIfcOperationId_}, {"state", mcpIfcState_}, {"path", path}};
+        mcpIfcTimer_.restart();
+        const auto operationId = mcpIfcOperationId_;
+        mcpIfcImportWatcher_.setFuture(QtConcurrent::run([path]() {
+            cad::application::IfcImporter importer;
+            return std::make_shared<cad::import::IfcImportResult>(importer.prepare(path));
+        }));
+        result = QJsonObject{{"accepted", true}, {"operationId", operationId},
+            {"state", mcpIfcState_}, {"path", path}};
+#else
+        return rpcError(id, -32030, "IFC import is unavailable in this build");
+#endif
+    } else if (tool == "cad.new_project") {
+        QString unitsError;
+        if (!validUnits(arguments, unitsError, false)) return rpcError(id, -32602, unitsError);
+        project_.newProject();
+        refreshModelView();
+        result = QJsonObject{{"success", true}, {"featureCount", 0}, {"geometryRevision", 0}};
+    } else if (tool == "cad.open_project" || tool == "cad.save_project") {
+        if (!hasOnly({"path"}) || !arguments.value("path").isString())
+            return rpcError(id, -32602, "path must be the only string argument");
+        QString pathError;
+        const QString path = arguments.value("path").toString();
+        if (!validProjectPath(path, pathError)) return rpcError(id, -32602, pathError);
+        QString error;
+        QElapsedTimer projectOperationTimer;
+        projectOperationTimer.start();
+        const QString requestId = request.value("id").toVariant().toString();
+        const bool opening = tool == "cad.open_project";
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP")) {
+            qInfo().noquote() << QString("[MCP] project-%1-start id=%2 path=%3")
+                .arg(opening ? "open" : "save", requestId, path);
+        }
+        const bool success = tool == "cad.open_project"
+            ? project_.open(path, error) : project_.save(path, error);
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP")) {
+            qInfo().noquote() << QString("[MCP] project-%1-controller id=%2 elapsedMs=%3 success=%4")
+                .arg(opening ? "open" : "save", requestId)
+                .arg(projectOperationTimer.elapsed()).arg(success ? 1 : 0);
+        }
+        if (!success) return rpcError(id, -32021,
+            tool == "cad.open_project" ? "Project open failed" : "Project save failed",
+            QJsonObject{{"path", path}, {"message", error}});
+        if (tool == "cad.open_project") {
+            // A project loaded through MCP has no user camera interaction to
+            // establish a useful frame. Match the regular project-load path
+            // and fit the first presentation so geometry is immediately visible.
+            refreshModelView(true);
+        } else {
+            refreshModelView();
+        }
+        if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_MCP")) {
+            qInfo().noquote() << QString("[MCP] project-%1-finished id=%2 elapsedMs=%3")
+                .arg(opening ? "open" : "save", requestId)
+                .arg(projectOperationTimer.elapsed());
+        }
+        result = QJsonObject{{"success", true}, {"path", path},
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())},
+            {"dirty", project_.isDirty()}};
+    } else if (tool == "cad.create_sketch") {
+        if (!hasOnly({"support", "faceReference", "units"}))
+            return rpcError(id, -32602, "Unsupported create_sketch argument");
+        QString unitsError;
+        if (!validUnits(arguments, unitsError, false)) return rpcError(id, -32602, unitsError);
+        cad::application::ModelingResult operation;
+        if (arguments.contains("faceReference")) {
+            if (!arguments.value("faceReference").isObject()
+                || arguments.contains("support"))
+                return rpcError(id, -32602, "faceReference must be used without support");
+            try {
+                operation = modeling_.createSketchOnFace(
+                    cad::topology::topologicalReferenceFromJson(
+                        arguments.value("faceReference").toObject()));
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+        } else {
+            const QString support = arguments.value("support").toString("XY");
+            const auto supportType = support == "XZ"
+                ? cad::parametric::SketchSupportType::XZ
+                : support == "YZ"
+                    ? cad::parametric::SketchSupportType::YZ
+                    : support == "XY"
+                        ? cad::parametric::SketchSupportType::XY
+                        : cad::parametric::SketchSupportType::XY;
+            if (support != "XY" && support != "XZ" && support != "YZ")
+                return rpcError(id, -32602, "support must be XY, XZ or YZ");
+            operation = modeling_.createSketch(supportType);
+        }
+        if (!operation.success) return finishModeling(operation, "create_sketch");
+        refreshModelView();
+        return finishModeling(operation, "create_sketch");
+    } else if (tool == "cad.add_rectangle") {
+        if (!hasOnly({"sketchId", "x", "y", "width", "height", "units"}))
+            return rpcError(id, -32602, "Unsupported add_rectangle argument");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const double x = arguments.value("x").toDouble();
+        const double y = arguments.value("y").toDouble();
+        const double width = arguments.value("width").toDouble();
+        const double height = arguments.value("height").toDouble();
+        if (sketchId.isEmpty() || !std::isfinite(x) || !std::isfinite(y)
+            || !std::isfinite(width) || !std::isfinite(height)
+            || width <= 0.0 || height <= 0.0)
+            return rpcError(id, -32602, "Rectangle requires a sketchId and positive finite width/height");
+        if (!std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+                modeling_.body().findFeature(sketchId.toStdString())))
+            return rpcError(id, -32004, "Sketch not found", QJsonObject{{"featureId", sketchId}});
+        const int before = modeling_.undoStack().count();
+        modeling_.undoStack().beginMacro("Add Rectangle");
+        const std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>> lines{
+            {{x, y}, {x + width, y}},
+            {{x + width, y}, {x + width, y + height}},
+            {{x + width, y + height}, {x, y + height}},
+            {{x, y + height}, {x, y}}};
+        cad::application::ModelingResult operation{true, sketchId.toStdString(), {}};
+        for (const auto& line : lines) {
+            operation = modeling_.addSketchLine(sketchId.toStdString(), line.first, line.second);
+            if (!operation.success) break;
+        }
+        modeling_.undoStack().endMacro();
+        if (!operation.success && modeling_.undoStack().count() > before)
+            modeling_.undoStack().undo();
+        if (!operation.success) return finishModeling(operation, "add_rectangle");
+        refreshModelView();
+        return finishModeling(operation, "add_rectangle");
+    } else if (tool == "cad.add_circle") {
+        if (!hasOnly({"sketchId", "x", "y", "radius", "units"}))
+            return rpcError(id, -32602, "Unsupported add_circle argument");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const double radius = arguments.value("radius").toDouble();
+        if (sketchId.isEmpty() || !std::isfinite(radius) || radius <= 0.0
+            || !arguments.value("x").isDouble() || !arguments.value("y").isDouble())
+            return rpcError(id, -32602, "Circle requires finite center coordinates and positive radius");
+        const auto operation = modeling_.addSketchCircle(sketchId.toStdString(),
+            {arguments.value("x").toDouble(), arguments.value("y").toDouble()}, radius);
+        if (!operation.success) return finishModeling(operation, "add_circle");
+        refreshModelView();
+        return finishModeling(operation, "add_circle");
+    } else if (tool == "cad.extrude") {
+        if (!hasOnly({"sketchId", "distance", "reversed", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("distance").isDouble()
+            || (arguments.contains("reversed") && !arguments.value("reversed").isBool()))
+            return rpcError(id, -32602, "extrude requires sketchId, numeric distance, units and optional reversed");
+        const double distance = arguments.value("distance").toDouble();
+        if (!std::isfinite(distance) || distance <= 0.0)
+            return rpcError(id, -32602, "Extrude distance must be positive and finite");
+        const cad::application::SelectionSnapshot selection{{{
+            arguments.value("sketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        const auto operation = modeling_.createExtrudeFromSketch(selection, distance,
+            arguments.value("reversed").toBool(false));
+        if (!operation.success) return finishModeling(operation, "extrude");
+        refreshModelView();
+        return finishModeling(operation, "extrude");
+    } else if (tool == "cad.pocket") {
+        if (!hasOnly({"sketchId", "depth", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("depth").isDouble())
+            return rpcError(id, -32602, "pocket requires sketchId, numeric depth and units");
+        const double depth = arguments.value("depth").toDouble();
+        if (!std::isfinite(depth) || depth <= 0.0)
+            return rpcError(id, -32602, "Pocket depth must be positive and finite");
+        const cad::application::SelectionSnapshot selection{{{
+            arguments.value("sketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        const auto operation = modeling_.createPocketFromSketch(selection, depth);
+        if (!operation.success) return finishModeling(operation, "pocket");
+        refreshModelView();
+        return finishModeling(operation, "pocket");
+    } else if (tool == "cad.split_feature") {
+        const QStringList allowed{"featureId", "componentFeatureId", "splitCoordinate",
+            "moveNegative", "units"};
+        if (!hasOnly(allowed) || !arguments.value("featureId").isString()
+            || !arguments.value("componentFeatureId").isString()
+            || arguments.value("featureId").toString().isEmpty()
+            || arguments.value("componentFeatureId").toString().isEmpty()
+            || !arguments.value("splitCoordinate").isDouble())
+            return rpcError(id, -32602,
+                "split_feature requires featureId, componentFeatureId, splitCoordinate, moveNegative and units");
+        const auto movement = arguments.value("moveNegative").toArray();
+        if (movement.size() != 3 || !movement.at(0).isDouble()
+            || !movement.at(1).isDouble() || !movement.at(2).isDouble())
+            return rpcError(id, -32602, "moveNegative must contain three finite numbers");
+        const gp_Vec moveNegative(movement.at(0).toDouble(), movement.at(1).toDouble(),
+            movement.at(2).toDouble());
+        if (!std::isfinite(arguments.value("splitCoordinate").toDouble())
+            || !std::isfinite(moveNegative.X()) || !std::isfinite(moveNegative.Y())
+            || !std::isfinite(moveNegative.Z()))
+            return rpcError(id, -32602, "split_feature parameters must be finite");
+        const auto operation = modeling_.splitFeature(
+            arguments.value("featureId").toString().toStdString(),
+            arguments.value("componentFeatureId").toString().toStdString(),
+            arguments.value("splitCoordinate").toDouble(), moveNegative);
+        if (!operation.success) return finishModeling(operation, "split_feature");
+        refreshModelView();
+        return finishModeling(operation, "split_feature");
+    } else if (tool == "cad.transform_component") {
+        const auto vector3 = [&arguments](const char* key, double& x, double& y, double& z) {
+            const auto values = arguments.value(QLatin1String(key)).toArray();
+            if (values.size() != 3 || !values.at(0).isDouble()
+                || !values.at(1).isDouble() || !values.at(2).isDouble()) return false;
+            x = values.at(0).toDouble(); y = values.at(1).toDouble(); z = values.at(2).toDouble();
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+        };
+        const auto operationName = arguments.value("operation").toString();
+        gp_Trsf transformation;
+        cad::parametric::TransformOperation operation;
+        if (operationName == "mirror") {
+            double ox, oy, oz, nx, ny, nz;
+            if (!vector3("origin", ox, oy, oz) || !vector3("normal", nx, ny, nz)
+                || gp_Vec(nx, ny, nz).Magnitude() <= 1.0e-12)
+                return rpcError(id, -32602, "Mirror requires finite origin and non-zero normal");
+            transformation.SetMirror(gp_Ax2(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz)));
+            operation = cad::parametric::TransformOperation::Mirror;
+        } else if (operationName == "translate") {
+            double x, y, z;
+            if (!vector3("vector", x, y, z))
+                return rpcError(id, -32602, "Translate requires a finite 3D vector");
+            transformation.SetTranslation(gp_Vec(x, y, z));
+            operation = cad::parametric::TransformOperation::Translate;
+        } else {
+            double ox, oy, oz, dx, dy, dz;
+            const auto angle = arguments.value("angleDegrees");
+            if (!vector3("axisOrigin", ox, oy, oz) || !vector3("axisDirection", dx, dy, dz)
+                || gp_Vec(dx, dy, dz).Magnitude() <= 1.0e-12
+                || !angle.isDouble() || !std::isfinite(angle.toDouble())
+                || std::abs(angle.toDouble()) <= 1.0e-12
+                || std::abs(angle.toDouble()) > 360000.0)
+                return rpcError(id, -32602, "Rotate requires a valid axis and angleDegrees");
+            transformation.SetRotation(gp_Ax1(gp_Pnt(ox, oy, oz), gp_Dir(dx, dy, dz)),
+                angle.toDouble() * std::acos(-1.0) / 180.0);
+            operation = cad::parametric::TransformOperation::Rotate;
+        }
+        const auto mode = arguments.value("mode").toString() == "copy"
+            ? cad::parametric::TransformResultMode::Copy
+            : cad::parametric::TransformResultMode::ReplaceResult;
+        const auto modelingResult = modeling_.transformComponent(
+            arguments.value("componentId").toString().toStdString(), operation, mode, transformation);
+        if (!modelingResult.success) return finishModeling(modelingResult, "transform_component");
+        refreshModelView();
+        return finishModeling(modelingResult, "transform_component");
+    } else if (tool == "cad.split_component") {
+        const auto vector3 = [&arguments](const char* key, double& x, double& y, double& z) {
+            const auto values = arguments.value(QLatin1String(key)).toArray();
+            if (values.size() != 3 || !values.at(0).isDouble()
+                || !values.at(1).isDouble() || !values.at(2).isDouble()) return false;
+            x = values.at(0).toDouble(); y = values.at(1).toDouble(); z = values.at(2).toDouble();
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+        };
+        double ox, oy, oz, nx, ny, nz;
+        if (!vector3("origin", ox, oy, oz) || !vector3("normal", nx, ny, nz)
+            || gp_Vec(nx, ny, nz).Magnitude() <= 1.0e-12)
+            return rpcError(id, -32602, "split_component requires finite origin and non-zero normal");
+        const auto modelingResult = modeling_.splitComponent(
+            arguments.value("componentId").toString().toStdString(),
+            gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz));
+        if (!modelingResult.success) return finishModeling(modelingResult, "split_component");
+        refreshModelView();
+        return finishModeling(modelingResult, "split_component");
+    } else if (tool == "cad.recover_pre_split") {
+        const auto modelingResult = modeling_.recoverPreSplit(
+            arguments.value("rootFeatureId").toString().toStdString());
+        if (!modelingResult.success) return finishModeling(modelingResult, "recover_pre_split");
+        refreshModelView();
+        return finishModeling(modelingResult, "recover_pre_split");
+    } else if (tool == "cad.mirror" || tool == "cad.translate"
+               || tool == "cad.rotate" || tool == "cad.transform_model") {
+        const QString operationName = tool == "cad.mirror" ? "mirror"
+            : tool == "cad.translate" ? "translate"
+            : tool == "cad.rotate" ? "rotate"
+            : arguments.value("operation").toString();
+        const QStringList allowed{
+            "featureIds", "mode", "origin", "normal", "vector",
+            "axisOrigin", "axisDirection", "angleDegrees", "operation", "units"};
+        if (!hasOnly(allowed) || !arguments.value("featureIds").isArray()
+            || arguments.value("featureIds").toArray().isEmpty()
+            || !arguments.value("mode").isString()
+            || (arguments.value("mode").toString() != "copy"
+                && arguments.value("mode").toString() != "replace_result"))
+            return rpcError(id, -32602,
+                "Transform requires featureIds, mode and valid transform parameters");
+        if (operationName != "mirror" && operationName != "translate" && operationName != "rotate")
+            return rpcError(id, -32602, "operation must be mirror, translate or rotate");
+
+        std::vector<std::string> featureIds;
+        for (const auto& value : arguments.value("featureIds").toArray()) {
+            if (!value.isString() || value.toString().isEmpty())
+                return rpcError(id, -32602, "featureIds must contain non-empty strings");
+            featureIds.push_back(value.toString().toStdString());
+        }
+        const auto vector3 = [&arguments](const char* key, double& x, double& y, double& z) {
+            const auto values = arguments.value(QLatin1String(key)).toArray();
+            if (values.size() != 3) return false;
+            if (!values.at(0).isDouble() || !values.at(1).isDouble() || !values.at(2).isDouble())
+                return false;
+            x = values.at(0).toDouble();
+            y = values.at(1).toDouble();
+            z = values.at(2).toDouble();
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+        };
+        gp_Trsf transformation;
+        cad::parametric::TransformOperation operation;
+        if (operationName == "mirror") {
+            double ox, oy, oz, nx, ny, nz;
+            if (!vector3("origin", ox, oy, oz) || !vector3("normal", nx, ny, nz)
+                || gp_Vec(nx, ny, nz).Magnitude() <= 1.0e-12)
+                return rpcError(id, -32602, "Mirror requires finite origin and non-zero normal");
+            transformation.SetMirror(gp_Ax2(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz)));
+            operation = cad::parametric::TransformOperation::Mirror;
+        } else if (operationName == "translate") {
+            double x, y, z;
+            if (!vector3("vector", x, y, z))
+                return rpcError(id, -32602, "Translate requires a finite 3D vector");
+            transformation.SetTranslation(gp_Vec(x, y, z));
+            operation = cad::parametric::TransformOperation::Translate;
+        } else {
+            double ox, oy, oz, dx, dy, dz;
+            const auto angle = arguments.value("angleDegrees");
+            if (!vector3("axisOrigin", ox, oy, oz) || !vector3("axisDirection", dx, dy, dz)
+                || gp_Vec(dx, dy, dz).Magnitude() <= 1.0e-12
+                || !angle.isDouble() || !std::isfinite(angle.toDouble()))
+                return rpcError(id, -32602,
+                    "Rotate requires finite axis origin, non-zero direction and angleDegrees");
+            if (std::abs(angle.toDouble()) <= 1.0e-12 || std::abs(angle.toDouble()) > 360000.0)
+                return rpcError(id, -32602, "Rotate angleDegrees is out of range");
+            transformation.SetRotation(
+                gp_Ax1(gp_Pnt(ox, oy, oz), gp_Dir(dx, dy, dz)),
+                angle.toDouble() * std::acos(-1.0) / 180.0);
+            operation = cad::parametric::TransformOperation::Rotate;
+        }
+        const auto resultMode = arguments.value("mode").toString() == "copy"
+            ? cad::parametric::TransformResultMode::Copy
+            : cad::parametric::TransformResultMode::ReplaceResult;
+        const auto modelingResult = modeling_.createTransform(
+            featureIds, operation, resultMode, transformation);
+        if (!modelingResult.success) return finishModeling(modelingResult, operationName);
+        refreshModelView();
+        return finishModeling(modelingResult, operationName);
+    } else if (tool == "cad.recompute") {
+        if (!arguments.isEmpty()) return rpcError(id, -32602, "recompute does not accept arguments");
+        const bool success = modeling_.body().recompute();
+        if (!success) return rpcError(id, -32022, "Recompute failed",
+            QJsonObject{{"message", QString::fromStdString(modeling_.body().lastError())}});
+        refreshModelView();
+        result = QJsonObject{{"success", true},
+            {"geometryRevision", static_cast<qint64>(modeling_.body().geometryRevision())}};
+    } else if (tool == "cad.edit_feature") {
+        if (!hasOnly({"featureId", "property", "value", "units"})
+            || !arguments.value("featureId").isString()
+            || !arguments.value("property").isString()
+            || arguments.value("property").toString().isEmpty())
+            return rpcError(id, -32602, "edit_feature requires featureId, property and value");
+        QString unitsError;
+        if (!validUnits(arguments, unitsError, false)) return rpcError(id, -32602, unitsError);
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found",
+            QJsonObject{{"featureId", arguments.value("featureId").toString()}});
+        const QString key = arguments.value("property").toString();
+        const auto properties = feature->properties();
+        const auto property = std::find_if(properties.begin(), properties.end(),
+            [&key](const auto& candidate) { return QString::fromStdString(candidate.key) == key; });
+        if (property == properties.end() || !property->editable)
+            return rpcError(id, -32602, "Property is not editable",
+                QJsonObject{{"property", key}});
+        cad::parametric::PropertyValue value;
+        const auto input = arguments.value("value");
+        if (std::holds_alternative<bool>(property->value)) {
+            if (!input.isBool()) return rpcError(id, -32602, "Property requires a boolean value");
+            value = input.toBool();
+        } else if (std::holds_alternative<double>(property->value)) {
+            if (!input.isDouble() || !std::isfinite(input.toDouble()))
+                return rpcError(id, -32602, "Property requires a finite numeric value");
+            value = input.toDouble();
+        } else if (std::holds_alternative<int>(property->value)) {
+            if (!input.isDouble() || input.toDouble() != std::floor(input.toDouble()))
+                return rpcError(id, -32602, "Property requires an integer value");
+            value = static_cast<int>(input.toDouble());
+        } else {
+            if (!input.isString()) return rpcError(id, -32602, "Property requires a string value");
+            value = input.toString().toStdString();
+        }
+        const auto operation = modeling_.setFeatureProperty(
+            feature->id(), key.toStdString(), value);
+        if (!operation.success) return finishModeling(operation, "edit_feature");
+        refreshModelView();
+        return finishModeling(operation, "edit_feature");
+    } else if (tool == "cad.undo" || tool == "cad.redo") {
+        if (!arguments.isEmpty()) return rpcError(id, -32602, "undo/redo does not accept arguments");
+        if (tool == "cad.undo") modeling_.undo();
+        else modeling_.redo();
+        refreshModelView();
+        result = QJsonObject{{"success", true}, {"canUndo", modeling_.undoStack().canUndo()},
+            {"canRedo", modeling_.undoStack().canRedo()},
+            {"featureCount", static_cast<qint64>(modeling_.body().features().size())}};
+    } else if (tool == "cad.get_sketch_entities") {
+        if (!hasOnly({"sketchId"}) || !arguments.value("sketchId").isString()
+            || arguments.value("sketchId").toString().isEmpty())
+            return rpcError(id, -32602, "sketchId must be the only non-empty string argument");
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(arguments.value("sketchId").toString().toStdString()));
+        if (!sketch) return rpcError(id, -32004, "Sketch not found",
+            QJsonObject{{"featureId", arguments.value("sketchId").toString()}});
+        QJsonArray entities;
+        for (const auto& entity : sketch->entities()) entities.append(sketchEntityJson(entity));
+        result = QJsonObject{{"sketchId", arguments.value("sketchId").toString()},
+            {"entityCount", entities.size()}, {"entities", entities},
+            {"constraintCount", static_cast<qint64>(sketch->constraintCount())},
+            {"supportType", sketchSupportName(sketch->supportType())}};
+    } else if (tool == "cad.add_line") {
+        if (!hasOnly({"sketchId", "x1", "y1", "x2", "y2", "construction", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("x1").isDouble() || !arguments.value("y1").isDouble()
+            || !arguments.value("x2").isDouble() || !arguments.value("y2").isDouble()
+            || (arguments.contains("construction") && !arguments.value("construction").isBool()))
+            return rpcError(id, -32602, "add_line requires sketchId, x1/y1/x2/y2, units and optional construction");
+        const gp_Pnt2d start(arguments.value("x1").toDouble(), arguments.value("y1").toDouble());
+        const gp_Pnt2d end(arguments.value("x2").toDouble(), arguments.value("y2").toDouble());
+        if (!std::isfinite(start.X()) || !std::isfinite(start.Y())
+            || !std::isfinite(end.X()) || !std::isfinite(end.Y())
+            || start.Distance(end) <= 1.0e-9)
+            return rpcError(id, -32602, "Sketch Line endpoints must be finite and distinct");
+        const auto operation = modeling_.addSketchLine(
+            arguments.value("sketchId").toString().toStdString(), start, end,
+            arguments.value("construction").toBool(false));
+        if (!operation.success) return finishModeling(operation, "add_line");
+        refreshModelView();
+        return finishModeling(operation, "add_line");
+    } else if (tool == "cad.edit_sketch_entity") {
+        if (!hasOnly({"sketchId", "entityId", "x1", "y1", "x2", "y2", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("entityId").isString()
+            || !arguments.value("x1").isDouble() || !arguments.value("y1").isDouble()
+            || !arguments.value("x2").isDouble() || !arguments.value("y2").isDouble())
+            return rpcError(id, -32602, "edit_sketch_entity currently edits Lines with x1/y1/x2/y2");
+        const auto operation = modeling_.editSketchLine(
+            arguments.value("sketchId").toString().toStdString(),
+            arguments.value("entityId").toString().toStdString(),
+            {arguments.value("x1").toDouble(), arguments.value("y1").toDouble()},
+            {arguments.value("x2").toDouble(), arguments.value("y2").toDouble()});
+        if (!operation.success) return finishModeling(operation, "edit_sketch_entity");
+        refreshModelView();
+        return finishModeling(operation, "edit_sketch_entity");
+    } else if (tool == "cad.edit_sketch_profile") {
+        if (!hasOnly({"sketchId", "segments", "units"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("segments").isArray())
+            return rpcError(id, -32602, "edit_sketch_profile requires sketchId, segments and units");
+        const auto rawSegments = arguments.value("segments").toArray();
+        if (rawSegments.size() < 3)
+            return rpcError(id, -32602, "edit_sketch_profile requires at least three segments");
+        std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>> segments;
+        segments.reserve(rawSegments.size());
+        for (const auto& raw : rawSegments) {
+            const auto segment = raw.toObject();
+            if (!segment.contains("x1") || !segment.contains("y1")
+                || !segment.contains("x2") || !segment.contains("y2")
+                || !segment.value("x1").isDouble() || !segment.value("y1").isDouble()
+                || !segment.value("x2").isDouble() || !segment.value("y2").isDouble())
+                return rpcError(id, -32602, "Each profile segment requires numeric x1, y1, x2 and y2");
+            segments.emplace_back(
+                gp_Pnt2d(segment.value("x1").toDouble(), segment.value("y1").toDouble()),
+                gp_Pnt2d(segment.value("x2").toDouble(), segment.value("y2").toDouble()));
+        }
+        const auto operation = modeling_.replaceSketchProfile(
+            arguments.value("sketchId").toString().toStdString(), segments);
+        if (!operation.success) return finishModeling(operation, "edit_sketch_profile");
+        refreshModelView();
+        return finishModeling(operation, "edit_sketch_profile");
+    } else if (tool == "cad.remove_sketch_entity") {
+        if (!hasOnly({"sketchId", "entityId"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("entityId").isString())
+            return rpcError(id, -32602, "remove_sketch_entity requires sketchId and entityId");
+        const auto operation = modeling_.removeSketchEntity(
+            arguments.value("sketchId").toString().toStdString(),
+            arguments.value("entityId").toString().toStdString());
+        if (!operation.success) return finishModeling(operation, "remove_sketch_entity");
+        refreshModelView();
+        return finishModeling(operation, "remove_sketch_entity");
+    } else if (tool == "cad.get_topology") {
+        if (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty())
+            return rpcError(id, -32602, "featureId must be the only non-empty string argument");
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found",
+            QJsonObject{{"featureId", arguments.value("featureId").toString()}});
+        result = topologyJson(*feature);
+        result.insert("featureId", arguments.value("featureId").toString());
+    } else if (tool == "cad.find_topology") {
+        if (!arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty())
+            return rpcError(id, -32602, "find_topology requires featureId");
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found",
+            QJsonObject{{"featureId", arguments.value("featureId").toString()}});
+        const double tolerance = arguments.value("tolerance").toDouble(1.0e-6);
+        if (!std::isfinite(tolerance) || tolerance < 0.0)
+            return rpcError(id, -32602, "tolerance must be finite and non-negative");
+        const auto rawTopology = topologyJson(*feature);
+        QJsonArray candidates;
+        const auto matches = [&arguments, tolerance](const QJsonObject& candidate) {
+            if (arguments.contains("kind")
+                && candidate.value("kind").toString() != arguments.value("kind").toString()) return false;
+            const auto signature = candidate.value("signature").toObject();
+            if (arguments.contains("surfaceKind")
+                && signature.value("surfaceKind").toString() != arguments.value("surfaceKind").toString()) return false;
+            if (arguments.contains("curveKind")
+                && signature.value("curveKind").toString() != arguments.value("curveKind").toString()) return false;
+            if (arguments.contains("area")
+                && std::abs(signature.value("area").toDouble() - arguments.value("area").toDouble()) > tolerance) return false;
+            if (arguments.contains("length")
+                && std::abs(signature.value("length").toDouble() - arguments.value("length").toDouble()) > tolerance) return false;
+            const auto compareVector = [tolerance](const QJsonArray& actual, const QJsonArray& expected) {
+                if (actual.size() != expected.size()) return false;
+                for (int index = 0; index < actual.size(); ++index)
+                    if (std::abs(actual.at(index).toDouble() - expected.at(index).toDouble()) > tolerance) return false;
+                return true;
+            };
+            if (arguments.contains("normal") && !compareVector(
+                    signature.value("normal").toArray(), arguments.value("normal").toArray())) return false;
+            if (arguments.contains("location")) {
+                const auto location = arguments.value("location").toArray();
+                const auto point = signature.contains("centroid")
+                    ? signature.value("centroid").toArray()
+                    : signature.value("midpoint").toArray();
+                if (!compareVector(point, location)) return false;
+            }
+            return true;
+        };
+        for (const char* kind : {"faces", "edges", "vertices"}) {
+            for (const auto& value : rawTopology.value(kind).toArray()) {
+                const auto candidate = value.toObject();
+                if (matches(candidate)) candidates.append(candidate);
+            }
+        }
+        if (candidates.size() != 1) {
+            return rpcError(id, -32005, candidates.isEmpty()
+                ? "No topology reference matches the supplied filters"
+                : "Topology reference is ambiguous",
+                QJsonObject{{"candidateCount", candidates.size()}, {"candidates", candidates}});
+        }
+        result = QJsonObject{{"featureId", arguments.value("featureId")},
+            {"reference", candidates.first()}, {"candidateCount", 1}};
+    } else if (tool == "cad.chamfer") {
+        if (!hasOnly({"sketchId", "corners", "featureId", "edgeReferences", "distance", "units"})
+            || !arguments.value("distance").isDouble())
+            return rpcError(id, -32602, "chamfer requires distance and either sketch corners or edgeReferences");
+        const double distance = arguments.value("distance").toDouble();
+        if (!std::isfinite(distance) || distance <= 0.0)
+            return rpcError(id, -32602, "Chamfer distance must be positive and finite");
+        cad::application::ModelingResult operation;
+        if (arguments.contains("sketchId")) {
+            if (!arguments.value("sketchId").isString()
+                || !arguments.value("corners").isArray())
+                return rpcError(id, -32602, "Sketch chamfer requires sketchId and corners array");
+            std::vector<cad::application::ModelingController::SketchChamferCorner> corners;
+            for (const auto& value : arguments.value("corners").toArray()) {
+                const auto corner = value.toObject();
+                if (!corner.value("firstLineId").isString()
+                    || !corner.value("secondLineId").isString())
+                    return rpcError(id, -32602, "Each chamfer corner requires two line IDs");
+                corners.emplace_back(corner.value("firstLineId").toString().toStdString(),
+                    corner.value("secondLineId").toString().toStdString());
+            }
+            operation = modeling_.chamferSketchCorners(
+                arguments.value("sketchId").toString().toStdString(), corners,
+                cad::parametric::SketchChamferMode::EqualDistance, distance);
+        } else {
+            if (!arguments.value("featureId").isString()
+                || !arguments.value("edgeReferences").isArray())
+                return rpcError(id, -32602, "3D chamfer requires featureId and edgeReferences array");
+            std::vector<cad::topology::TopologicalReference> references;
+            try {
+                for (const auto& value : arguments.value("edgeReferences").toArray())
+                    references.push_back(cad::topology::topologicalReferenceFromJson(value.toObject()));
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+            operation = modeling_.createChamfer(references, distance);
+        }
+        if (!operation.success) return finishModeling(operation, "chamfer");
+        refreshModelView();
+        return finishModeling(operation, "chamfer");
+    } else if (tool == "cad.boolean") {
+        if (!hasOnly({"leftFeatureId", "rightFeatureId", "operation"})
+            || !arguments.value("leftFeatureId").isString()
+            || !arguments.value("rightFeatureId").isString()
+            || !arguments.value("operation").isString())
+            return rpcError(id, -32602, "boolean requires leftFeatureId, rightFeatureId and operation");
+        const QString leftId = arguments.value("leftFeatureId").toString();
+        const QString rightId = arguments.value("rightFeatureId").toString();
+        const QString operationName = arguments.value("operation").toString();
+        if (leftId.isEmpty() || rightId.isEmpty() || leftId == rightId
+            || (operationName != "Fuse" && operationName != "Cut" && operationName != "Common"))
+            return rpcError(id, -32602, "Boolean operands and operation are invalid");
+        const auto left = modeling_.body().findFeature(leftId.toStdString());
+        const auto right = modeling_.body().findFeature(rightId.toStdString());
+        if (!left || !right) return rpcError(id, -32004, "Boolean operand feature not found");
+        const auto leftInspection = shapeInspection(left->shape());
+        const auto rightInspection = shapeInspection(right->shape());
+        if (!leftInspection.value("valid").toBool() || !rightInspection.value("valid").toBool()
+            || leftInspection.value("solidCount").toInt() != 1
+            || rightInspection.value("solidCount").toInt() != 1)
+            return rpcError(id, -32602, "Boolean operands must each be one valid solid",
+                QJsonObject{{"left", leftInspection}, {"right", rightInspection}});
+        const auto kind = operationName == "Fuse" ? cad::application::BooleanKind::Fuse
+            : operationName == "Cut" ? cad::application::BooleanKind::Cut
+            : cad::application::BooleanKind::Common;
+        return finishSolidModeling(modeling_.createBoolean(
+            kind, {leftId.toStdString(), rightId.toStdString()}), "boolean");
+    } else if (tool == "cad.fillet" || tool == "cad.shell") {
+        const bool fillet = tool == "cad.fillet";
+        const QStringList allowed = fillet
+            ? QStringList{"featureId", "edgeReferences", "radius", "units"}
+            : QStringList{"featureId", "openingFaces", "thickness", "units"};
+        if (!hasOnly(allowed) || !arguments.value("featureId").isString())
+            return rpcError(id, -32602, tool + " requires featureId and topology references");
+        const QString sourceId = arguments.value("featureId").toString();
+        const QString refsKey = fillet ? "edgeReferences" : "openingFaces";
+        const QString valueKey = fillet ? "radius" : "thickness";
+        if (!arguments.value(refsKey).isArray() || arguments.value(refsKey).toArray().isEmpty()
+            || !arguments.value(valueKey).isDouble())
+            return rpcError(id, -32602, tool + " requires non-empty topology references and a value");
+        const double value = arguments.value(valueKey).toDouble();
+        if (!std::isfinite(value) || value <= 0.0)
+            return rpcError(id, -32602, "Modeling distance must be positive and finite");
+        cad::application::SelectionSnapshot selection;
+        if (!fillet) selection.items.push_back({sourceId.toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt});
+        try {
+            for (const auto& raw : arguments.value(refsKey).toArray()) {
+                const auto reference = cad::topology::topologicalReferenceFromJson(raw.toObject());
+                if (reference.featureId != sourceId.toStdString()
+                    || reference.kind != (fillet ? cad::topology::TopologicalKind::Edge
+                        : cad::topology::TopologicalKind::Face)
+                    || !reference.transientIndex || *reference.transientIndex <= 0)
+                    return rpcError(id, -32602, "Topology reference has the wrong feature, kind, or index");
+                selection.items.push_back({sourceId.toStdString(),
+                    fillet ? cad::application::SelectionKind::Edge
+                           : cad::application::SelectionKind::Face,
+                    reference.transientIndex});
+            }
+        } catch (const std::exception& error) {
+            return rpcError(id, -32602, QString::fromUtf8(error.what()));
+        }
+        const auto operation = fillet
+            ? modeling_.createFillet(selection, value)
+            : modeling_.createShell(selection, value);
+        return finishSolidModeling(operation, tool.mid(4));
+    } else if (tool == "cad.revolve") {
+        if (!hasOnly({"sketchId", "axis", "angleDegrees"})
+            || !arguments.value("sketchId").isString()
+            || !arguments.value("axis").isObject()
+            || !arguments.value("angleDegrees").isDouble())
+            return rpcError(id, -32602, "revolve requires sketchId, axis and angleDegrees");
+        const auto axisJson = arguments.value("axis").toObject();
+        const QString axisType = axisJson.value("type").toString();
+        cad::parametric::RevolveAxisDefinition axis;
+        if (axisType == "GlobalX") axis.type = cad::parametric::RevolveAxisType::GlobalX;
+        else if (axisType == "GlobalY") axis.type = cad::parametric::RevolveAxisType::GlobalY;
+        else if (axisType == "GlobalZ") axis.type = cad::parametric::RevolveAxisType::GlobalZ;
+        else if (axisType == "SketchLine") {
+            if (!axisJson.value("lineId").isString())
+                return rpcError(id, -32602, "SketchLine axis requires lineId");
+            axis.type = cad::parametric::RevolveAxisType::SketchLine;
+            axis.sketchFeatureId = arguments.value("sketchId").toString().toStdString();
+            axis.sketchLineId = axisJson.value("lineId").toString().toStdString();
+        } else if (axisType == "ModelEdge") {
+            if (!axisJson.value("edgeReference").isObject())
+                return rpcError(id, -32602, "ModelEdge axis requires edgeReference");
+            try {
+                axis.edgeReference = cad::topology::topologicalReferenceFromJson(
+                    axisJson.value("edgeReference").toObject());
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+            axis.type = cad::parametric::RevolveAxisType::ModelEdge;
+            axis.edgeFeatureId = axis.edgeReference->featureId;
+        } else return rpcError(id, -32602, "Unsupported revolve axis type");
+        const double angle = arguments.value("angleDegrees").toDouble();
+        if (!std::isfinite(angle) || std::abs(angle) <= 1.0e-9 || std::abs(angle) > 360.0)
+            return rpcError(id, -32602, "Revolve angle must be between -360 and 360 degrees");
+        const cad::application::SelectionSnapshot selection{{{
+            arguments.value("sketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        return finishSolidModeling(modeling_.createRevolve(selection, axis, angle), "revolve");
+    } else if (tool == "cad.sweep") {
+        if (!hasOnly({"profileSketchId", "pathSketchId", "pathReference"})
+            || !arguments.value("profileSketchId").isString())
+            return rpcError(id, -32602, "sweep requires profileSketchId and a path");
+        cad::application::SelectionSnapshot path;
+        if (arguments.value("pathSketchId").isString()) {
+            path.items.push_back({arguments.value("pathSketchId").toString().toStdString(),
+                cad::application::SelectionKind::Object, std::nullopt});
+        } else if (arguments.value("pathReference").isObject()) {
+            try {
+                const auto reference = cad::topology::topologicalReferenceFromJson(
+                    arguments.value("pathReference").toObject());
+                if (reference.kind != cad::topology::TopologicalKind::Edge
+                    || !reference.transientIndex)
+                    return rpcError(id, -32602, "Sweep pathReference must be an Edge with transientIndex");
+                path.items.push_back({reference.featureId, cad::application::SelectionKind::Edge,
+                    reference.transientIndex});
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+        } else return rpcError(id, -32602, "Sweep requires pathSketchId or pathReference");
+        const cad::application::SelectionSnapshot profile{{{
+            arguments.value("profileSketchId").toString().toStdString(),
+            cad::application::SelectionKind::Object, std::nullopt}}};
+        return finishSolidModeling(modeling_.createSweep(profile, path), "sweep");
+    } else if (tool == "cad.delete_feature") {
+        if (!hasOnly({"featureId"}) || !arguments.value("featureId").isString()
+            || arguments.value("featureId").toString().isEmpty())
+            return rpcError(id, -32602, "delete_feature requires featureId");
+        const auto operation = modeling_.deleteFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!operation.success) return finishModeling(operation, "delete_feature");
+        refreshModelView();
+        return finishModeling(operation, "delete_feature");
+    } else if (tool == "cad.add_arc") {
+        if (!hasOnly({"sketchId", "center", "start", "end", "units"})
+            || !arguments.value("sketchId").isString())
+            return rpcError(id, -32602, "add_arc requires sketchId, center, start, end and units");
+        const auto center = arguments.value("center").toArray();
+        const auto start = arguments.value("start").toArray();
+        const auto end = arguments.value("end").toArray();
+        if (center.size() != 2 || start.size() != 2 || end.size() != 2)
+            return rpcError(id, -32602, "Arc points must be [x,y] arrays");
+        const auto operation = modeling_.addSketchArc(arguments.value("sketchId").toString().toStdString(),
+            {center.at(0).toDouble(), center.at(1).toDouble()},
+            {start.at(0).toDouble(), start.at(1).toDouble()},
+            {end.at(0).toDouble(), end.at(1).toDouble()});
+        if (!operation.success) return finishModeling(operation, "add_arc");
+        refreshModelView();
+        return finishModeling(operation, "add_arc");
+    } else if (tool == "cad.get_constraints") {
+        if (!hasOnly({"sketchId"}) || !arguments.value("sketchId").isString())
+            return rpcError(id, -32602, "get_constraints requires sketchId");
+        const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+            modeling_.body().findFeature(arguments.value("sketchId").toString().toStdString()));
+        if (!sketch) return rpcError(id, -32004, "Sketch not found");
+        const auto serialized = sketch->serialize();
+        result = QJsonObject{{"sketchId", arguments.value("sketchId").toString()},
+            {"constraintCount", static_cast<qint64>(sketch->constraints().size())},
+            {"constraints", serialized.value("constraints")}};
+    } else if (tool == "cad.get_feature_dependencies") {
+        if (!hasOnly({"featureId"}) || !arguments.value("featureId").isString())
+            return rpcError(id, -32602, "get_feature_dependencies requires featureId");
+        const auto feature = modeling_.body().findFeature(
+            arguments.value("featureId").toString().toStdString());
+        if (!feature) return rpcError(id, -32004, "Feature not found");
+        QJsonArray dependencies;
+        for (const auto& weak : feature->dependencies())
+            if (const auto dependency = weak.lock()) dependencies.append(QString::fromStdString(dependency->id()));
+        result = QJsonObject{{"featureId", arguments.value("featureId").toString()},
+            {"dependencies", dependencies}};
+    } else if (tool == "cad.add_constraint") {
+        if (!arguments.value("sketchId").isString() || !arguments.value("type").isString())
+            return rpcError(id, -32602, "add_constraint requires sketchId and type");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const QString type = arguments.value("type").toString();
+        const bool anchor = arguments.value("anchorStart").toBool(true);
+        const auto text = [&arguments](const char* key) { return arguments.value(key).toString().toStdString(); };
+        cad::application::ModelingResult operation;
+        if (type == "Horizontal") operation = modeling_.addSketchHorizontal(sketchId.toStdString(), text("entityId"), anchor);
+        else if (type == "Vertical") operation = modeling_.addSketchVertical(sketchId.toStdString(), text("entityId"), anchor);
+        else if (type == "Distance") operation = modeling_.addSketchDistance(sketchId.toStdString(), text("entityId"), arguments.value("value").toDouble(), anchor);
+        else if (type == "Radius") operation = modeling_.addSketchRadius(sketchId.toStdString(), text("entityId"), arguments.value("value").toDouble());
+        else if (type == "Parallel") operation = modeling_.addSketchParallel(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"), anchor);
+        else if (type == "Perpendicular") operation = modeling_.addSketchPerpendicular(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"), anchor);
+        else if (type == "Tangent") operation = modeling_.addSketchTangent(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"));
+        else if (type == "Equal") operation = modeling_.addSketchEqual(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"));
+        else if (type == "Angle") operation = modeling_.addSketchAngle(sketchId.toStdString(), text("entityId"), arguments.value("radians").toDouble(), anchor);
+        else if (type == "AngleBetweenLines") operation = modeling_.addSketchAngleBetweenLines(sketchId.toStdString(), text("firstEntityId"), text("secondEntityId"), arguments.value("radians").toDouble(), anchor);
+        else if (type == "HorizontalDistance" || type == "VerticalDistance") {
+            const auto parsePoint = [](const QJsonObject& object) {
+                const auto role = object.value("role").toString();
+                const auto mapped = role == "LineEnd" ? cad::parametric::SketchPointRole::LineEnd
+                    : role == "ArcStart" ? cad::parametric::SketchPointRole::ArcStart
+                    : role == "ArcEnd" ? cad::parametric::SketchPointRole::ArcEnd
+                    : role == "CircleCenter" ? cad::parametric::SketchPointRole::CircleCenter
+                    : role == "ArcCenter" ? cad::parametric::SketchPointRole::ArcCenter
+                    : cad::parametric::SketchPointRole::LineStart;
+                return cad::parametric::SketchPointRef{object.value("entityId").toString().toStdString(), mapped};
+            };
+            if (!arguments.value("first").isObject() || !arguments.value("second").isObject())
+                return rpcError(id, -32602, "Point distance requires first and second point references");
+            const auto first = parsePoint(arguments.value("first").toObject());
+            const auto second = parsePoint(arguments.value("second").toObject());
+            operation = type == "HorizontalDistance"
+                ? modeling_.addSketchHorizontalDistance(sketchId.toStdString(), first, second, arguments.value("value").toDouble())
+                : modeling_.addSketchVerticalDistance(sketchId.toStdString(), first, second, arguments.value("value").toDouble());
+        } else return rpcError(id, -32602, "Unsupported Sketch constraint type");
+        if (!operation.success) return finishModeling(operation, "add_constraint");
+        refreshModelView();
+        return finishModeling(operation, "add_constraint");
+    } else if (tool == "cad.edit_constraint") {
+        if (!arguments.value("sketchId").isString() || !arguments.value("constraintId").isString()
+            || !arguments.value("type").isString())
+            return rpcError(id, -32602, "edit_constraint requires sketchId, constraintId and type");
+        const QString sketchId = arguments.value("sketchId").toString();
+        const auto cid = arguments.value("constraintId").toString().toStdString();
+        const QString type = arguments.value("type").toString();
+        const double value = arguments.value("value").toDouble();
+        cad::application::ModelingResult operation;
+        if (type == "Distance") operation = modeling_.updateSketchDistance(sketchId.toStdString(), cid, value);
+        else if (type == "Radius") operation = modeling_.updateSketchRadius(sketchId.toStdString(), cid, value);
+        else if (type == "HorizontalDistance") operation = modeling_.updateSketchHorizontalDistance(sketchId.toStdString(), cid, value);
+        else if (type == "VerticalDistance") operation = modeling_.updateSketchVerticalDistance(sketchId.toStdString(), cid, value);
+        else if (type == "Angle") operation = modeling_.updateSketchAngle(sketchId.toStdString(), cid, arguments.value("radians").toDouble());
+        else if (type == "AngleBetweenLines") operation = modeling_.updateSketchAngleBetweenLines(sketchId.toStdString(), cid, arguments.value("radians").toDouble());
+        else if (type == "Chamfer") operation = modeling_.updateSketchChamfer(sketchId.toStdString(), cid,
+            arguments.value("firstDistance").toDouble(), arguments.value("secondDistance").toDouble(), arguments.value("angleRadians").toDouble());
+        else return rpcError(id, -32602, "Unsupported editable constraint type");
+        if (!operation.success) return finishModeling(operation, "edit_constraint");
+        refreshModelView();
+        return finishModeling(operation, "edit_constraint");
+    } else if (tool == "cad.remove_constraint") {
+        if (!hasOnly({"sketchId", "constraintId"}) || !arguments.value("sketchId").isString()
+            || !arguments.value("constraintId").isString())
+            return rpcError(id, -32602, "remove_constraint requires sketchId and constraintId");
+        const auto operation = modeling_.removeSketchConstraint(
+            arguments.value("sketchId").toString().toStdString(),
+            arguments.value("constraintId").toString().toStdString());
+        if (!operation.success) return finishModeling(operation, "remove_constraint");
+        refreshModelView();
+        return finishModeling(operation, "remove_constraint");
+    } else if (tool == "cad.linear_pattern") {
+        if (!hasOnly({"featureId", "direction", "spacing", "count", "includeSource", "units"})
+            || !arguments.value("featureId").isString() || !arguments.value("direction").isArray()
+            || !arguments.value("spacing").isDouble() || !arguments.value("count").isDouble())
+            return rpcError(id, -32602, "linear_pattern arguments are invalid");
+        const auto direction = arguments.value("direction").toArray();
+        if (direction.size() != 3 || arguments.value("spacing").toDouble() <= 0.0
+            || arguments.value("count").toInt() < 1)
+            return rpcError(id, -32602, "linear_pattern direction, spacing or count is invalid");
+        const auto operation = modeling_.createLinearPattern({arguments.value("featureId").toString().toStdString()},
+            {direction.at(0).toDouble(), direction.at(1).toDouble(), direction.at(2).toDouble()},
+            arguments.value("spacing").toDouble(), arguments.value("count").toInt(),
+            arguments.value("includeSource").toBool(true));
+        if (!operation.success) return finishModeling(operation, "linear_pattern");
+        refreshModelView();
+        return finishModeling(operation, "linear_pattern");
+    } else if (tool == "cad.path_pattern") {
+        if (!hasOnly({"featureId", "pathFeatureId", "spacing", "count", "distribution", "orientation", "startOffset", "endOffset", "includeSource", "units"})
+            || !arguments.value("featureId").isString() || !arguments.value("pathFeatureId").isString()
+            || !arguments.value("spacing").isDouble() || !arguments.value("count").isDouble())
+            return rpcError(id, -32602, "path_pattern arguments are invalid");
+        const auto distribution = arguments.value("distribution").toString("FitCount") == "FixedSpacing"
+            ? cad::parametric::PathPatternDistribution::FixedSpacing : cad::parametric::PathPatternDistribution::FitCount;
+        const auto orientation = arguments.value("orientation").toString("Fixed") == "Tangent"
+            ? cad::parametric::PathPatternOrientation::Tangent : cad::parametric::PathPatternOrientation::Fixed;
+        const auto operation = modeling_.createPathPattern(
+            {arguments.value("featureId").toString().toStdString(), arguments.value("pathFeatureId").toString().toStdString()},
+            arguments.value("spacing").toDouble(), arguments.value("count").toInt(), distribution, orientation,
+            arguments.value("startOffset").toDouble(0.0), arguments.value("endOffset").toDouble(0.0),
+            arguments.value("includeSource").toBool(true));
+        if (!operation.success) return finishModeling(operation, "path_pattern");
+        refreshModelView();
+        return finishModeling(operation, "path_pattern");
+    }
+    return QJsonObject{{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
 }
 
 void MainWindow::createParametricPanel()
@@ -899,6 +2619,544 @@ void MainWindow::createBimPanel()
     refreshBimNavigation();
 }
 
+void MainWindow::createSimulationPanel()
+{
+    meshInspectorDock_ = new QDockWidget("Mesh Inspector", this);
+    meshInspectorDock_->setObjectName("MeshInspectorDock");
+    meshInspectorDock_->setMinimumWidth(ModelPanelWidth);
+    auto* panel = new QWidget(meshInspectorDock_);
+    auto* layout = new QVBoxLayout(panel);
+    auto* form = new QFormLayout();
+    meshMinimumSize_ = new QDoubleSpinBox(panel);
+    meshMinimumSize_->setRange(0.001, 1.0e6);
+    meshMinimumSize_->setValue(1.0);
+    meshMinimumSize_->setDecimals(3);
+    meshMaximumSize_ = new QDoubleSpinBox(panel);
+    meshMaximumSize_->setRange(0.001, 1.0e6);
+    meshMaximumSize_->setValue(10.0);
+    meshMaximumSize_->setDecimals(3);
+    form->addRow("Minimum element", meshMinimumSize_);
+    form->addRow("Maximum element", meshMaximumSize_);
+    layout->addLayout(form);
+    meshDisplayMode_ = new QComboBox(panel);
+    meshDisplayMode_->addItems({"Geometry", "Mesh", "Geometry + Mesh"});
+    form->addRow("Display", meshDisplayMode_);
+    connect(meshDisplayMode_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [this](const int index) {
+            viewer_->setMeshDisplayMode(static_cast<CadViewer::MeshDisplayMode>(index));
+            updateMeshInspector();
+        });
+    meshStatisticsLabel_ = new QLabel("No mesh generated", panel);
+    meshStatisticsLabel_->setWordWrap(true);
+    layout->addWidget(meshStatisticsLabel_);
+    meshGenerateButton_ = new QPushButton("Generate Mesh", panel);
+    meshRegenerateButton_ = new QPushButton("Regenerate Mesh", panel);
+    meshCancelButton_ = new QPushButton("Cancel", panel);
+    meshShowButton_ = new QPushButton("Show Mesh", panel);
+    meshHideButton_ = new QPushButton("Hide Mesh", panel);
+    meshDeleteButton_ = new QPushButton("Delete Mesh", panel);
+    for (auto* button : {meshGenerateButton_, meshRegenerateButton_, meshCancelButton_, meshShowButton_,
+                         meshHideButton_, meshDeleteButton_}) layout->addWidget(button);
+    auto* boundaryTitle = new QLabel("Electrostatic boundaries", panel);
+    layout->addWidget(boundaryTitle);
+    boundaryList_ = new QListWidget(panel);
+    boundaryList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    layout->addWidget(boundaryList_);
+    auto* electrostaticForm = new QFormLayout();
+    relativePermittivity_ = new QDoubleSpinBox(panel);
+    relativePermittivity_->setRange(1.0e-6, 1.0e6);
+    relativePermittivity_->setValue(1.0);
+    relativePermittivity_->setDecimals(6);
+    chargeDensity_ = new QDoubleSpinBox(panel);
+    chargeDensity_->setRange(-1.0e12, 1.0e12);
+    chargeDensity_->setDecimals(6);
+    electrostaticForm->addRow("Relative permittivity", relativePermittivity_);
+    electrostaticForm->addRow("Charge density C/m3", chargeDensity_);
+    layout->addLayout(electrostaticForm);
+    electrostaticStatisticsLabel_ = new QLabel("Electrostatics not solved", panel);
+    electrostaticStatisticsLabel_->setWordWrap(true);
+    layout->addWidget(electrostaticStatisticsLabel_);
+    auto* addVoltageButton = new QPushButton("Add Voltage Boundary", panel);
+    auto* addGroundButton = new QPushButton("Add Ground Boundary", panel);
+    removeBoundaryButton_ = new QPushButton("Remove Boundary", panel);
+    editBoundaryButton_ = new QPushButton("Edit Boundary", panel);
+    auto* solveButton = new QPushButton("Solve Electrostatics", panel);
+    auto* showPotentialButton = new QPushButton("Show Potential", panel);
+    auto* showFieldButton = new QPushButton("Show Electric Field", panel);
+    auto* clearResultButton = new QPushButton("Clear Results", panel);
+    for (auto* button : {addVoltageButton, addGroundButton, removeBoundaryButton_,
+                         editBoundaryButton_,
+                         solveButton, showPotentialButton, showFieldButton, clearResultButton})
+        layout->addWidget(button);
+    connect(addVoltageButton, &QPushButton::clicked, this, &MainWindow::addVoltageBoundary);
+    connect(addGroundButton, &QPushButton::clicked, this, &MainWindow::addGroundBoundary);
+    connect(removeBoundaryButton_, &QPushButton::clicked, this, &MainWindow::removeBoundary);
+    connect(boundaryList_, &QListWidget::itemSelectionChanged, this, [this]() {
+        const bool hasSelection = boundaryList_ && boundaryList_->currentItem();
+        if (removeBoundaryButton_) removeBoundaryButton_->setEnabled(hasSelection);
+        if (editBoundaryButton_) editBoundaryButton_->setEnabled(hasSelection);
+    });
+    connect(editBoundaryButton_, &QPushButton::clicked, this, &MainWindow::editBoundary);
+    connect(solveButton, &QPushButton::clicked, this, &MainWindow::solveElectrostatics);
+    connect(showPotentialButton, &QPushButton::clicked, this, &MainWindow::showPotentialResult);
+    connect(showFieldButton, &QPushButton::clicked, this, &MainWindow::showElectricFieldResult);
+    connect(clearResultButton, &QPushButton::clicked, this, &MainWindow::clearElectrostaticResult);
+    layout->addStretch();
+    meshInspectorDock_->setWidget(panel);
+    addDockWidget(Qt::RightDockWidgetArea, meshInspectorDock_);
+    meshInspectorAction_ = meshInspectorDock_->toggleViewAction();
+    meshInspectorAction_->setText("Mesh Inspector");
+    connect(meshGenerateButton_, &QPushButton::clicked, this, &MainWindow::generateMesh);
+    connect(meshRegenerateButton_, &QPushButton::clicked, this, &MainWindow::regenerateMesh);
+    connect(meshCancelButton_, &QPushButton::clicked, this, &MainWindow::cancelMeshGeneration);
+    connect(meshShowButton_, &QPushButton::clicked, this, [this]() {
+        viewer_->showMesh(simulation_.study().mesh);
+        viewer_->setMeshDisplayMode(CadViewer::MeshDisplayMode::GeometryAndMesh);
+        meshDisplayMode_->setCurrentIndex(2);
+        updateMeshInspector();
+    });
+    connect(meshHideButton_, &QPushButton::clicked, this, [this]() {
+        viewer_->hideMesh();
+        viewer_->setMeshDisplayMode(CadViewer::MeshDisplayMode::Geometry);
+        meshDisplayMode_->setCurrentIndex(0);
+        updateMeshInspector();
+    });
+    connect(meshDeleteButton_, &QPushButton::clicked, this, [this]() {
+        traceCae("mesh-delete-button", QString("clicked studyId=%1 feature=%2")
+            .arg(QString::fromStdString(simulation_.study().studyId))
+            .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
+        if (meshGenerating_) cancelMeshGeneration();
+        simulation_.deleteMesh();
+        viewer_->deleteMeshPresentation();
+        viewer_->clearCaeResultPresentation();
+        updateMeshInspector();
+        updateElectrostaticPanel();
+    });
+    updateMeshInspector();
+    updateElectrostaticPanel();
+    for (auto* action : menuBar()->actions()) {
+        auto* menu = action->menu();
+        if (menu && menu->title() == QStringLiteral("&View")) {
+            menu->addSeparator();
+            menu->addAction(meshInspectorAction_);
+            break;
+        }
+    }
+}
+
+void MainWindow::updateMeshInspector()
+{
+    if (!meshStatisticsLabel_) return;
+    const auto& study = simulation_.study();
+    traceCae("mesh-inspector", QString("studyId=%1 meshStatus=%2 solutionStatus=%3 geometryRevision=%4 meshRevision=%5 solvedMeshRevision=%6 boundaries=%7")
+        .arg(QString::fromStdString(study.studyId))
+        .arg(static_cast<int>(study.status))
+        .arg(static_cast<int>(study.solutionStatus))
+        .arg(static_cast<qulonglong>(study.geometryRevision))
+        .arg(static_cast<qulonglong>(study.meshRevision))
+        .arg(static_cast<qulonglong>(study.solvedMeshRevision))
+        .arg(static_cast<qulonglong>(study.boundaryConditions.size())));
+    if (study.status == cad::application::SimulationStatus::Generating) {
+        meshStatisticsLabel_->setText("Mesh Status: Generating...");
+    } else if (study.status == cad::application::SimulationStatus::Failed) {
+        meshStatisticsLabel_->setText("Mesh Status: Failed\n"
+            + QString::fromStdString(study.diagnostic)
+            + (study.mesh.tetrahedra.empty()
+                ? QString()
+                : QString("\nPrevious mesh retained; regenerate to replace it")));
+    } else if (study.status == cad::application::SimulationStatus::Outdated) {
+        meshStatisticsLabel_->setText("Mesh Status: Outdated\n"
+            "Regenerate after geometry changes");
+    } else if (study.statistics.tetrahedronCount == 0) {
+        meshStatisticsLabel_->setText("Mesh Status: NotGenerated\nNo mesh generated");
+    } else {
+        meshStatisticsLabel_->setText(QString("Mesh Status: Ready\nNodes: %1\nTetrahedra: %2\nVolume: %3\nMin quality: %4\nAverage quality: %5")
+            .arg(static_cast<qulonglong>(study.statistics.nodeCount))
+            .arg(static_cast<qulonglong>(study.statistics.tetrahedronCount))
+            .arg(study.statistics.volume, 0, 'f', 3)
+            .arg(study.statistics.minimumQuality, 0, 'f', 4)
+            .arg(study.statistics.averageQuality, 0, 'f', 4));
+    }
+    const auto solutionStatusName = [](const auto status) {
+        switch (status) {
+        case cad::application::ElectrostaticSolutionStatus::NotSolved: return "NotSolved";
+        case cad::application::ElectrostaticSolutionStatus::Solving: return "Solving";
+        case cad::application::ElectrostaticSolutionStatus::Ready: return "Ready";
+        case cad::application::ElectrostaticSolutionStatus::Outdated: return "Outdated";
+        case cad::application::ElectrostaticSolutionStatus::Failed: return "Failed";
+        }
+        return "Unknown";
+    };
+    meshStatisticsLabel_->setText(meshStatisticsLabel_->text()
+        + QString("\nSolution Status: %1\nGeometry Revision: %2\nMesh Revision: %3")
+            .arg(solutionStatusName(study.solutionStatus))
+            .arg(static_cast<qulonglong>(study.geometryRevision))
+            .arg(static_cast<qulonglong>(study.meshRevision)));
+    if (meshCancelButton_) meshCancelButton_->setEnabled(meshGenerating_);
+    if (meshGenerateButton_) meshGenerateButton_->setEnabled(!meshGenerating_);
+    if (meshRegenerateButton_)
+        meshRegenerateButton_->setEnabled(!meshGenerating_ && !study.sourceFeatureId.empty());
+    if (meshShowButton_) meshShowButton_->setEnabled(!study.mesh.tetrahedra.empty());
+    if (meshHideButton_) meshHideButton_->setEnabled(viewer_ && viewer_->meshVisible());
+    if (meshDeleteButton_) meshDeleteButton_->setEnabled(!study.mesh.tetrahedra.empty());
+}
+
+void MainWindow::updateElectrostaticPanel()
+{
+    if (!boundaryList_) return;
+    boundaryList_->clear();
+    const auto& study = simulation_.study();
+    for (const auto& boundary : study.boundaryConditions) {
+        auto* item = new QListWidgetItem(
+            QString::fromStdString(boundary.name)
+            + QString(" = %1 V (%2 faces, %3 nodes)%4")
+                .arg(boundary.potential, 0, 'g', 8)
+                .arg(static_cast<qulonglong>(boundary.faces.size()))
+                .arg(static_cast<qulonglong>(boundary.meshNodes.size()))
+                .arg(boundary.valid ? QString() : " [invalid]"), boundaryList_);
+        item->setData(Qt::UserRole, QString::fromStdString(boundary.id));
+        if (!boundary.valid) item->setToolTip(QString::fromStdString(boundary.diagnostic));
+    }
+    const bool hasSelection = boundaryList_->currentItem() != nullptr;
+    if (removeBoundaryButton_) removeBoundaryButton_->setEnabled(hasSelection);
+    if (editBoundaryButton_) editBoundaryButton_->setEnabled(hasSelection);
+    if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Solving) {
+        electrostaticStatisticsLabel_->setText("Solution Status: Solving...");
+    } else if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Failed) {
+        electrostaticStatisticsLabel_->setText("Solution Status: Failed\n"
+            + QString::fromStdString(study.solutionDiagnostic));
+    } else if (study.solutionStatus == cad::application::ElectrostaticSolutionStatus::Outdated) {
+        electrostaticStatisticsLabel_->setText("Solution Status: Outdated");
+    } else if (study.solutionStatus != cad::application::ElectrostaticSolutionStatus::Ready) {
+        electrostaticStatisticsLabel_->setText("Solution Status: NotSolved");
+    } else {
+        const auto& result = study.electrostaticResult;
+        const auto potentialRange = std::minmax_element(
+            result.nodalPotential.begin(), result.nodalPotential.end());
+        double minimumField = 0.0;
+        double maximumField = 0.0;
+        if (!result.elementElectricField.empty()) {
+            minimumField = std::numeric_limits<double>::max();
+            for (const auto& field : result.elementElectricField) {
+                const auto magnitude = std::sqrt(field[0] * field[0]
+                    + field[1] * field[1] + field[2] * field[2]);
+                minimumField = std::min(minimumField, magnitude);
+                maximumField = std::max(maximumField, magnitude);
+            }
+        }
+        electrostaticStatisticsLabel_->setText(QString("Solution Status: Ready\nCG iterations: %1\nResidual: %2\nPotential: %3 .. %4 V\nField: %5 .. %6 V/m")
+            .arg(static_cast<qulonglong>(result.iterations))
+            .arg(result.relativeResidual, 0, 'e', 3)
+            .arg(potentialRange.first == result.nodalPotential.end() ? 0.0 : *potentialRange.first, 0, 'g', 8)
+            .arg(potentialRange.first == result.nodalPotential.end() ? 0.0 : *potentialRange.second, 0, 'g', 8)
+            .arg(minimumField, 0, 'g', 8).arg(maximumField, 0, 'g', 8));
+    }
+}
+
+void MainWindow::addVoltageBoundary()
+{
+    bool accepted = false;
+    const auto potential = QInputDialog::getDouble(this, "Voltage Boundary",
+        "Potential (V):", 100.0, -1.0e12, 1.0e12, 6, &accepted);
+    if (!accepted) return;
+    const auto faces = viewer_->captureTopologySelection(modeling_.body());
+    std::vector<cad::topology::TopologicalReference> faceReferences;
+    for (const auto& face : faces)
+        if (face.kind == cad::topology::TopologicalKind::Face) faceReferences.push_back(face);
+    std::string diagnostic;
+    if (!simulation_.addVoltageBoundary("Voltage Boundary", potential, faceReferences, diagnostic))
+        statusBar()->showMessage(QString::fromStdString(diagnostic), 5000);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::addGroundBoundary()
+{
+    const auto faces = viewer_->captureTopologySelection(modeling_.body());
+    std::vector<cad::topology::TopologicalReference> faceReferences;
+    for (const auto& face : faces)
+        if (face.kind == cad::topology::TopologicalKind::Face) faceReferences.push_back(face);
+    std::string diagnostic;
+    if (!simulation_.addVoltageBoundary("Ground Boundary", 0.0, faceReferences, diagnostic))
+        statusBar()->showMessage(QString::fromStdString(diagnostic), 5000);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::removeBoundary()
+{
+    const auto item = boundaryList_ ? boundaryList_->currentItem() : nullptr;
+    if (!item) {
+        statusBar()->showMessage("Select a boundary condition first", 3000);
+        return;
+    }
+    const auto id = item->data(Qt::UserRole).toString().toStdString();
+    const bool removed = simulation_.removeBoundary(id);
+    if (!removed) {
+        statusBar()->showMessage("Selected boundary condition no longer exists", 3000);
+        updateElectrostaticPanel();
+        return;
+    }
+    viewer_->clearCaeResultPresentation();
+    viewer_->showMesh(simulation_.study().mesh);
+    statusBar()->showMessage(QString("Boundary removed: %1").arg(QString::fromStdString(id)), 3000);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::editBoundary()
+{
+    const auto item = boundaryList_ ? boundaryList_->currentItem() : nullptr;
+    if (!item) return;
+    const auto id = item->data(Qt::UserRole).toString().toStdString();
+    bool accepted = false;
+    const auto potential = QInputDialog::getDouble(this, "Edit Boundary",
+        "Potential (V):", 0.0, -1.0e12, 1.0e12, 6, &accepted);
+    if (!accepted) return;
+    if (!simulation_.updateBoundary(id, "Electrostatic Boundary", potential))
+        statusBar()->showMessage("Boundary could not be updated", 5000);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::solveElectrostatics()
+{
+    traceCae("solve-action", QString("studyId=%1 feature=%2")
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
+    if (electrostaticSolving_) {
+        traceCae("solve-reject", "code=SOLVE_ALREADY_RUNNING");
+        statusBar()->showMessage("Another electrostatic solve is running", 4000);
+        return;
+    }
+    const auto& study = simulation_.study();
+    if (study.status != cad::application::SimulationStatus::Ready) {
+        traceCae("solve-reject", QString("code=%1 meshStatus=%2")
+            .arg(study.status == cad::application::SimulationStatus::Outdated
+                ? "STUDY_GEOMETRY_OUTDATED" : "MESH_NOT_READY")
+            .arg(static_cast<int>(study.status)));
+        statusBar()->showMessage(
+            study.status == cad::application::SimulationStatus::Outdated
+                ? "Study geometry is outdated; regenerate the mesh first"
+                : "Mesh is not ready; generate a valid mesh first", 4000);
+        return;
+    }
+    if (study.boundaryConditions.empty()) {
+        traceCae("solve-reject", "code=MISSING_DIRICHLET_BOUNDARIES");
+        statusBar()->showMessage("Missing required Dirichlet boundary conditions", 5000);
+        return;
+    }
+    for (const auto& boundary : study.boundaryConditions) {
+        if (!boundary.valid) {
+            traceCae("solve-reject", QString("code=BOUNDARY_INVALID name=%1 diagnostic=%2")
+                .arg(QString::fromStdString(boundary.name))
+                .arg(QString::fromStdString(boundary.diagnostic)));
+            statusBar()->showMessage(QString::fromStdString(boundary.diagnostic), 5000);
+            return;
+        }
+    }
+    simulation_.setMaterial({relativePermittivity_->value(), chargeDensity_->value()});
+    simulation_.clearElectrostaticResult();
+    electrostaticSolveRequestId_ = simulation_.beginElectrostaticSolve();
+    electrostaticSolving_ = true;
+    updateElectrostaticPanel();
+    electrostaticSolveRevision_ = simulation_.study().meshRevision;
+    std::size_t dirichletNodes = 0;
+    for (const auto& boundary : study.boundaryConditions)
+        dirichletNodes += boundary.meshNodes.size();
+    traceCae("solve-start", QString("requestId=%1 studyId=%2 geometryRevision=%3 meshRevision=%4 boundaries=%5 dirichletNodes=%6")
+        .arg(static_cast<qulonglong>(electrostaticSolveRequestId_))
+        .arg(QString::fromStdString(study.studyId))
+        .arg(static_cast<qulonglong>(study.geometryRevision))
+        .arg(static_cast<qulonglong>(study.meshRevision))
+        .arg(static_cast<qulonglong>(study.boundaryConditions.size()))
+        .arg(static_cast<qulonglong>(dirichletNodes)));
+    const auto problem = simulation_.study().electrostaticProblem;
+    electrostaticWatcher_.setFuture(QtConcurrent::run([problem]() {
+        return std::make_shared<cad::cae::ElectrostaticResult>(
+            cad::cae::solveElectrostatic(problem));
+    }));
+}
+
+void MainWindow::finishElectrostaticSolve()
+{
+    electrostaticSolving_ = false;
+    const auto result = electrostaticWatcher_.result();
+    const bool current = result
+        && electrostaticSolveRequestId_ == simulation_.study().pendingSolveRequestId
+        && electrostaticSolveRevision_ == simulation_.study().geometryRevision
+        && electrostaticSolveRevision_ == simulation_.study().meshRevision;
+    traceCae("solve-finish", QString("requestId=%1 result=%2 current=%3 status=%4 diagnostic=%5")
+        .arg(static_cast<qulonglong>(electrostaticSolveRequestId_))
+        .arg(result ? 1 : 0).arg(current ? 1 : 0)
+        .arg(result ? static_cast<int>(result->convergenceStatus) : -1)
+        .arg(result ? QString::fromStdString(result->diagnostic) : "no result"));
+    if (result && current) simulation_.adoptElectrostaticResult(
+        *result, electrostaticSolveRevision_, electrostaticSolveRequestId_);
+    else if (result
+        && electrostaticSolveRequestId_ == simulation_.study().pendingSolveRequestId)
+        simulation_.study().solutionStatus =
+            cad::application::ElectrostaticSolutionStatus::Outdated;
+    traceCae("solve-apply", QString("requestId=%1 applied=%2 meshStatus=%3 solutionStatus=%4 solvedMeshRevision=%5")
+        .arg(static_cast<qulonglong>(electrostaticSolveRequestId_))
+        .arg(current ? 1 : 0)
+        .arg(static_cast<int>(simulation_.study().status))
+        .arg(static_cast<int>(simulation_.study().solutionStatus))
+        .arg(static_cast<qulonglong>(simulation_.study().solvedMeshRevision)));
+    updateElectrostaticPanel();
+    if (!result || result->convergenceStatus != cad::cae::ElectrostaticConvergenceStatus::Converged) {
+        statusBar()->showMessage(result ? QString::fromStdString(result->diagnostic)
+                                        : "Electrostatic solve failed", 5000);
+        return;
+    }
+    statusBar()->showMessage("Electrostatics solved", 3000);
+}
+
+void MainWindow::showPotentialResult()
+{
+    const auto& study = simulation_.study();
+    if (study.solutionStatus != cad::application::ElectrostaticSolutionStatus::Ready) return;
+    viewer_->showPotential(study.mesh, study.electrostaticResult.nodalPotential);
+}
+
+void MainWindow::showElectricFieldResult()
+{
+    const auto& study = simulation_.study();
+    if (study.solutionStatus != cad::application::ElectrostaticSolutionStatus::Ready) return;
+    viewer_->showElectricField(study.mesh, study.electrostaticResult.elementElectricField);
+}
+
+void MainWindow::clearElectrostaticResult()
+{
+    simulation_.clearElectrostaticResult();
+    viewer_->showMesh(simulation_.study().mesh);
+    updateElectrostaticPanel();
+}
+
+void MainWindow::generateMesh()
+{
+    const auto ids = selectedIds();
+    traceCae("mesh-generate-request", QString("selectionCount=%1 studyId=%2 studyFeature=%3")
+        .arg(ids.size())
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
+    if (ids.size() != 1) {
+        statusBar()->showMessage("Select one closed solid first", 3000);
+        return;
+    }
+    startMeshGeneration(ids.front());
+}
+
+void MainWindow::regenerateMesh()
+{
+    const auto featureId = simulation_.study().sourceFeatureId;
+    traceCae("mesh-regenerate-request", QString("studyId=%1 feature=%2")
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(featureId)));
+    if (featureId.empty()) {
+        statusBar()->showMessage("No source feature is associated with this study", 4000);
+        return;
+    }
+    startMeshGeneration(featureId);
+}
+
+bool MainWindow::startMeshGeneration(const std::string& featureId)
+{
+    const auto feature = modeling_.body().findFeature(featureId);
+    if (!feature || feature->shape().ShapeType() != TopAbs_SOLID
+        || !BRepCheck_Analyzer(feature->shape()).IsValid()) {
+        statusBar()->showMessage("Study source feature is not a valid closed solid", 4000);
+        return false;
+    }
+    const cad::cae::MeshSettings settings{
+        meshMinimumSize_->value(), meshMaximumSize_->value()};
+    const auto geometryRevision = feature->geometryRevision();
+    traceCae("mesh-action", QString("feature=%1 revision=%2 studyId=%3 studyFeature=%4")
+        .arg(QString::fromStdString(featureId))
+        .arg(static_cast<qulonglong>(geometryRevision))
+        .arg(QString::fromStdString(simulation_.study().studyId))
+        .arg(QString::fromStdString(simulation_.study().sourceFeatureId)));
+    meshGenerationId_ = simulation_.beginMeshGeneration(
+        featureId, geometryRevision);
+    if (meshGenerationId_ == 0) {
+        statusBar()->showMessage("Mesh generation is already active", 3000);
+        return false;
+    }
+    meshSourceFeatureId_ = QString::fromStdString(featureId);
+    meshGenerationRevision_ = geometryRevision;
+    meshCancelRequested_ = std::make_shared<std::atomic_bool>(false);
+    meshGenerating_ = true;
+    traceCae("mesh-worker-launch", QString("generationId=%1 feature=%2 revision=%3")
+        .arg(static_cast<qulonglong>(meshGenerationId_))
+        .arg(meshSourceFeatureId_)
+        .arg(static_cast<qulonglong>(meshGenerationRevision_)));
+    updateMeshInspector();
+    const auto shape = feature->shape();
+    const auto cancel = meshCancelRequested_;
+    meshWatcher_.setFuture(QtConcurrent::run([shape, settings, cancel]() {
+        cad::cae::GmshMeshGenerator generator;
+        return std::make_shared<cad::cae::MeshGenerationResult>(
+            generator.generate(shape, settings, cancel.get()));
+    }));
+    return true;
+}
+
+void MainWindow::cancelMeshGeneration()
+{
+    if (meshCancelRequested_) meshCancelRequested_->store(true, std::memory_order_relaxed);
+}
+
+void MainWindow::finishMeshGeneration()
+{
+    meshGenerating_ = false;
+    const auto result = meshWatcher_.result();
+    auto& study = simulation_.study();
+    traceCae("mesh-finish", QString("generationId=%1 result=%2 studyId=%3 feature=%4 geometryRevision=%5 meshRevision=%6")
+        .arg(static_cast<qulonglong>(meshGenerationId_))
+        .arg(result ? 1 : 0)
+        .arg(QString::fromStdString(study.studyId))
+        .arg(QString::fromStdString(study.sourceFeatureId))
+        .arg(static_cast<qulonglong>(study.geometryRevision))
+        .arg(static_cast<qulonglong>(study.meshRevision)));
+    study.settings = {meshMinimumSize_->value(), meshMaximumSize_->value()};
+    if (result && simulation_.acceptMeshResult(
+            *result, meshGenerationRevision_, meshGenerationId_)) {
+        std::string remapDiagnostic;
+        const auto feature = modeling_.body().findFeature(meshSourceFeatureId_.toStdString());
+        const bool remapped = feature
+            && simulation_.remapBoundaries(feature->shape(), remapDiagnostic);
+        if (!feature && remapDiagnostic.empty()) {
+            remapDiagnostic = "Source CAD feature is no longer available";
+        }
+        viewer_->showMesh(simulation_.study().mesh);
+        std::size_t validBoundaries = 0;
+        std::size_t dirichletNodes = 0;
+        for (const auto& boundary : study.boundaryConditions) {
+            if (boundary.valid) ++validBoundaries;
+            dirichletNodes += boundary.meshNodes.size();
+        }
+        traceCae("mesh-apply", QString("generationId=%1 accepted=1 remapped=%2 meshStatus=%3 solutionStatus=%4 geometryRevision=%5 meshRevision=%6 boundaries=%7 validBoundaries=%8 dirichletNodes=%9 diagnostic=%10")
+            .arg(static_cast<qulonglong>(meshGenerationId_))
+            .arg(remapped ? 1 : 0)
+            .arg(static_cast<int>(study.status))
+            .arg(static_cast<int>(study.solutionStatus))
+            .arg(static_cast<qulonglong>(study.geometryRevision))
+            .arg(static_cast<qulonglong>(study.meshRevision))
+            .arg(static_cast<qulonglong>(study.boundaryConditions.size()))
+            .arg(static_cast<qulonglong>(validBoundaries))
+            .arg(static_cast<qulonglong>(dirichletNodes))
+            .arg(QString::fromStdString(remapDiagnostic)));
+        statusBar()->showMessage(remapped
+            ? "Mesh generated"
+            : QString("Mesh generated; boundary remapping failed: %1")
+                .arg(QString::fromStdString(remapDiagnostic)), 5000);
+    } else {
+        if (!result) {
+            study.diagnostic = "Mesh generation failed";
+            study.status = cad::application::SimulationStatus::Failed;
+        }
+        statusBar()->showMessage(QString::fromStdString(study.diagnostic), 4000);
+    }
+    updateMeshInspector();
+    updateElectrostaticPanel();
+}
+
 void MainWindow::refreshBimNavigation()
 {
     if (!bimNavigationPanel_) return;
@@ -964,6 +3222,18 @@ void MainWindow::commitVisibilityConfiguration(
 void MainWindow::refreshModelView(const bool fitView)
 {
     const auto result = presenter_->refreshModel();
+    if (!meshSourceFeatureId_.isEmpty()) {
+        const auto currentGeometryRevision = modeling_.body().featureGeometryRevision(
+            meshSourceFeatureId_.toStdString());
+        if (currentGeometryRevision != simulation_.study().geometryRevision)
+            simulation_.markGeometryChanged(
+                meshSourceFeatureId_.toStdString(), currentGeometryRevision);
+        if (simulation_.study().status == cad::application::SimulationStatus::Outdated) {
+            viewer_->deleteMeshPresentation();
+            updateMeshInspector();
+            updateElectrostaticPanel();
+        }
+    }
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());
@@ -1596,7 +3866,22 @@ void MainWindow::createActions()
     });
 
     auto* modelingMenu = menuBar()->addMenu("&Modeling");
+    auto* simulationMenu = menuBar()->addMenu("&Simulation");
     auto* viewMenu = menuBar()->addMenu("&View");
+    generateMeshAction_ = simulationMenu->addAction("Generate Mesh");
+    connect(generateMeshAction_, &QAction::triggered, this, &MainWindow::generateMesh);
+    addVoltageBoundaryAction_ = simulationMenu->addAction("Add Voltage Boundary");
+    connect(addVoltageBoundaryAction_, &QAction::triggered, this, &MainWindow::addVoltageBoundary);
+    addGroundBoundaryAction_ = simulationMenu->addAction("Add Ground Boundary");
+    connect(addGroundBoundaryAction_, &QAction::triggered, this, &MainWindow::addGroundBoundary);
+    solveElectrostaticsAction_ = simulationMenu->addAction("Solve Electrostatics");
+    connect(solveElectrostaticsAction_, &QAction::triggered, this, &MainWindow::solveElectrostatics);
+    showPotentialAction_ = simulationMenu->addAction("Show Potential");
+    connect(showPotentialAction_, &QAction::triggered, this, &MainWindow::showPotentialResult);
+    showElectricFieldAction_ = simulationMenu->addAction("Show Electric Field");
+    connect(showElectricFieldAction_, &QAction::triggered, this, &MainWindow::showElectricFieldResult);
+    clearElectrostaticResultAction_ = simulationMenu->addAction("Clear Results");
+    connect(clearElectrostaticResultAction_, &QAction::triggered, this, &MainWindow::clearElectrostaticResult);
 
     auto* spatialHiddenAction = viewMenu->addAction("Activate Spatial Visibility");
     connect(spatialHiddenAction, &QAction::triggered, this,
@@ -4642,6 +6927,78 @@ void MainWindow::finishIfcImport()
     ifcImportCancelRequested_.reset();
 }
 
+void MainWindow::finishMcpIfcImport()
+{
+    const auto result = mcpIfcImportWatcher_.result();
+    const auto operationId = mcpIfcOperationId_;
+    const auto path = mcpIfcPath_;
+    const auto importStart = mcpIfcTimer_.isValid() ? mcpIfcTimer_.elapsed() : 0;
+    if (!result || result->cancelled || result->fatal || result->products.empty()) {
+        mcpIfcState_ = "failed";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"success", false}, {"operationId", operationId}, {"state", mcpIfcState_},
+            {"path", path}, {"message", result && result->cancelled
+                ? "IFC import was cancelled"
+                : result && !result->diagnostics.empty()
+                    ? result->diagnostics.front().message
+                    : "IFC import produced no geometry"},
+            {"totalMs", importStart}};
+        return;
+    }
+
+    QElapsedTimer featureTimer;
+    featureTimer.start();
+    cad::application::IfcImporter importer;
+    std::vector<cad::parametric::ParametricFeature::Ptr> features;
+    try {
+        features = importer.makeFeatures(*result, path, modeling_.body());
+    } catch (const std::exception& error) {
+        mcpIfcState_ = "failed";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"success", false}, {"operationId", operationId}, {"state", mcpIfcState_},
+            {"path", path}, {"message", QString::fromUtf8(error.what())},
+            {"totalMs", mcpIfcTimer_.elapsed()}};
+        return;
+    }
+    const auto featureMilliseconds = featureTimer.elapsed();
+
+    if (mcpIfcReplaceCurrent_) project_.newProject();
+    QElapsedTimer insertionTimer;
+    insertionTimer.start();
+    const auto modelingResult = modeling_.importFeatures(std::move(features));
+    const auto insertionMilliseconds = insertionTimer.elapsed();
+    if (!modelingResult.success) {
+        mcpIfcState_ = "failed";
+        mcpIfcOperationResult_ = QJsonObject{
+            {"success", false}, {"operationId", operationId}, {"state", mcpIfcState_},
+            {"path", path}, {"message", QString::fromStdString(modelingResult.error)},
+            {"totalMs", mcpIfcTimer_.elapsed()}};
+        return;
+    }
+
+    QElapsedTimer presentationTimer;
+    presentationTimer.start();
+    refreshModelView(true);
+    const auto presentationMilliseconds = presentationTimer.elapsed();
+    const auto& stats = result->statistics;
+    mcpIfcState_ = "completed";
+    mcpIfcOperationResult_ = QJsonObject{
+        {"success", true}, {"operationId", operationId}, {"state", mcpIfcState_},
+        {"path", path}, {"schema", stats.schema},
+        {"consideredCount", stats.consideredCount},
+        {"productsWithGeometry", stats.productsWithGeometry},
+        {"importedCount", stats.importedCount}, {"skippedCount", stats.skippedCount},
+        {"failedCount", stats.failedCount}, {"featureCount", static_cast<qint64>(
+            modeling_.body().features().size())},
+        {"parseMs", stats.parseMilliseconds}, {"geometryMs", stats.geometryMilliseconds},
+        {"featureConstructionMs", featureMilliseconds},
+        {"bulkInsertionMs", insertionMilliseconds},
+        {"recomputeMs", 0}, {"presentationMs", presentationMilliseconds},
+        {"importerTotalMs", stats.totalMilliseconds},
+        {"totalMs", mcpIfcTimer_.elapsed()},
+        {"recomputeNote", "ImportedFeature geometry is already constructed; no additional Body recompute was required"}};
+}
+
 void MainWindow::abortIfcImport(const QString& error)
 {
     ifcImportProgressTimer_.stop();
@@ -4743,7 +7100,11 @@ void MainWindow::processProjectLoadRecomputeChunk()
         && (projectLoadRecomputeIndex_ == startIndex
             || chunkTimer.elapsed() < ProjectLoadTimeBudgetMs)) {
         if (!projectLoadResult_->body.recomputeFeature(projectLoadRecomputeIndex_)) {
-            abortProjectLoad(QString::fromStdString(projectLoadResult_->body.lastError()));
+            const auto error = QString::fromStdString(projectLoadResult_->body.lastError());
+            // recomputeFeature() is an incremental primitive.  The failed
+            // load must close that scope before discarding the candidate body.
+            projectLoadResult_->body.finishIncrementalRecompute();
+            abortProjectLoad(error);
             return;
         }
         ++projectLoadRecomputeIndex_;
@@ -4815,21 +7176,22 @@ void MainWindow::processProjectLoadPresentationChunk()
         return;
     }
 
-    QStringList presentedIds;
-    for (const auto& feature : body.features()) {
-        if (feature->state() == cad::parametric::FeatureState::UpToDate
-            && !feature->shape().IsNull()) {
-            presentedIds.append(QString::fromStdString(feature->id()));
-        }
-    }
     QElapsedTimer finalSyncTimer;
     finalSyncTimer.start();
-    viewer_->beginBulkUpdate();
-    viewer_->retainFeatures(presentedIds);
-    viewer_->restoreSelection(body, {}, {});
-    viewer_->endBulkUpdate();
-    visibilityManager_.updateBoundingBoxes(body);
-    presenter_->refreshVisibility();
+    // The chunked loader above creates temporary feature-level AIS objects so
+    // the GUI remains responsive while features are being recomputed.  A
+    // visibility-only refresh is not sufficient here: it cannot replace a
+    // feature presentation with the component presentations required by
+    // ModelComponent replacement semantics.  Reconcile through the same
+    // ModelPresenter path used by Undo/Redo; otherwise historical feature
+    // AIS objects can remain displayed alongside active components after
+    // project load.
+    viewer_->clear();
+    const auto finalPresentation = presenter_->refreshModel();
+    if (!finalPresentation.rebuilt && !finalPresentation.error.empty()) {
+        qWarning().noquote() << "Project load presentation reconciliation failed:"
+                             << QString::fromStdString(finalPresentation.error);
+    }
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setVisibilityGroups(visibilityManager_.groups());
     featureEditorPanel_->setVisibilityFilters(visibilityManager_.filters());

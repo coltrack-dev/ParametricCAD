@@ -15,6 +15,44 @@ endif()
 
 add_test(NAME geometry_tests COMMAND geometry_tests)
 
+add_executable(cae_mesh_tests
+    cae_mesh_tests.cpp
+)
+target_include_directories(cae_mesh_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(cae_mesh_tests PRIVATE ParametricCAD::CAECore)
+add_test(NAME cae_mesh_tests COMMAND cae_mesh_tests)
+
+add_executable(cae_fem_tests
+    cae_fem_tests.cpp
+)
+target_include_directories(cae_fem_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(cae_fem_tests PRIVATE ParametricCAD::CAECore)
+add_test(NAME cae_fem_tests COMMAND cae_fem_tests)
+
+if(PARAMETRIC_CAD_BUILD_BENCHMARKS)
+    add_test(NAME cae_benchmarks_smoke
+        COMMAND cae_benchmarks --case smoke --repetitions 1
+            --output "${CMAKE_CURRENT_BINARY_DIR}/cae_benchmarks_smoke.csv")
+endif()
+
+find_program(PARAMETRIC_CAD_GMSH_EXECUTABLE gmsh)
+if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
+    add_executable(gmsh_mesh_tests
+        gmsh_mesh_tests.cpp
+        ../src/cae/GmshMeshGenerator.cpp
+    )
+    target_include_directories(gmsh_mesh_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(gmsh_mesh_tests PRIVATE
+        Qt6::Core
+        ParametricCAD::CAECore
+        ParametricCAD::OCCTModeling)
+    add_test(NAME gmsh_mesh_tests COMMAND gmsh_mesh_tests)
+    set_tests_properties(gmsh_mesh_tests PROPERTIES
+        ENVIRONMENT "PARAMETRIC_CAD_GMSH_EXECUTABLE=${PARAMETRIC_CAD_GMSH_EXECUTABLE}")
+else()
+    message(STATUS "Gmsh not found: gmsh_mesh_tests will not be built")
+endif()
+
 add_executable(push_pull_drag_tests
     push_pull_drag_tests.cpp
     ../src/viewer/PushPullDrag.cpp
@@ -23,6 +61,7 @@ add_executable(push_pull_drag_tests
     ../src/model/TopologicalReference.cpp
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
+    ../src/model/ModelComponent.cpp
     ../src/model/ShapePayload.cpp
     ../src/viewer/TransformGizmoPicking.cpp
 )
@@ -48,11 +87,26 @@ add_test(NAME selection_tests COMMAND selection_tests)
 
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+add_executable(mcp_protocol_tests mcp_protocol_tests.cpp)
+target_link_libraries(mcp_protocol_tests PRIVATE Qt6::Test)
+add_test(NAME mcp_protocol_tests COMMAND mcp_protocol_tests)
+
+add_executable(mcp_modeling_integration_tests mcp_modeling_integration_tests.cpp)
+target_link_libraries(mcp_modeling_integration_tests PRIVATE Qt6::Test Qt6::Network)
+target_compile_definitions(mcp_modeling_integration_tests PRIVATE
+    PARAMETRICCAD_APP_PATH="$<TARGET_FILE:ParametricCAD>"
+    PARAMETRICCAD_MCP_PATH="$<TARGET_FILE:parametriccad-mcp>"
+    PARAMETRICCAD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+add_dependencies(mcp_modeling_integration_tests ParametricCAD parametriccad-mcp)
+add_test(NAME mcp_modeling_integration_tests COMMAND mcp_modeling_integration_tests)
+
 add_library(model_test_support STATIC
     ../src/application/ModelingController.cpp
     ../src/application/SelectionResolver.cpp
     ../src/application/ProjectController.cpp
     ../src/application/IfcImporter.cpp
+    ../src/application/SimulationController.cpp
+    ../src/application/ElectrostaticBoundaryCondition.cpp
     ../src/application/BimNavigationModel.cpp
     ../src/application/VisibilityManager.cpp
     ../src/model/ProjectFile.cpp
@@ -63,6 +117,7 @@ add_library(model_test_support STATIC
     ../src/model/Feature.cpp
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
+    ../src/model/ModelComponent.cpp
     ../src/model/ShapePayload.cpp
     ../src/model/TopologicalReference.cpp
     ../src/operations/BoxFeature.cpp
@@ -80,17 +135,51 @@ add_library(model_test_support STATIC
     ../src/operations/ImportedFeature.cpp
     ../src/import/IfcOpenShellAdapter090.cpp
     ../src/import/IfcMetadata.cpp
+    ../src/cae/GmshMeshGenerator.cpp
 )
 target_include_directories(model_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(model_test_support PUBLIC Qt6::Core Qt6::Gui
     ${PARAMETRIC_CAD_MINIZIP_TARGET}
     ParametricCAD::OCCTModeling
-    ParametricCAD::OCCTVisualization)
+    ParametricCAD::OCCTVisualization
+    ParametricCAD::CAECore)
+
+add_executable(model_component_tests model_component_tests.cpp)
+target_include_directories(model_component_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(model_component_tests PRIVATE model_test_support
+    ParametricCAD::OCCTModeling)
+add_test(NAME model_component_tests COMMAND model_component_tests)
+
+add_executable(electrostatic_boundary_tests
+    electrostatic_boundary_tests.cpp
+)
+target_include_directories(electrostatic_boundary_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(electrostatic_boundary_tests PRIVATE model_test_support)
+add_test(NAME electrostatic_boundary_tests COMMAND electrostatic_boundary_tests)
+
+if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
+    add_executable(cae_resolve_integration_tests
+        cae_resolve_integration_tests.cpp
+    )
+    target_include_directories(cae_resolve_integration_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(cae_resolve_integration_tests PRIVATE model_test_support)
+    add_test(NAME cae_resolve_integration_tests COMMAND cae_resolve_integration_tests)
+    set_tests_properties(cae_resolve_integration_tests PROPERTIES
+        ENVIRONMENT "PARAMETRIC_CAD_GMSH_EXECUTABLE=${PARAMETRIC_CAD_GMSH_EXECUTABLE}")
+endif()
+
+add_executable(simulation_state_tests
+    simulation_state_tests.cpp
+)
+target_include_directories(simulation_state_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(simulation_state_tests PRIVATE model_test_support)
+add_test(NAME simulation_state_tests COMMAND simulation_state_tests)
 
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(model_test_support PUBLIC
         PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
-        PARAMETRIC_CAD_IFCOPENSHELL_090=1)
+        PARAMETRIC_CAD_IFCOPENSHELL_090=1
+        PARAMETRIC_CAD_IFCOPENSHELL_PLUGIN_DIR="${PARAMETRIC_CAD_IFC_PLUGIN_DIR}")
     target_include_directories(model_test_support SYSTEM PUBLIC ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
     target_link_libraries(model_test_support PUBLIC
         ${PARAMETRIC_CAD_IFC_GEOM_LIBRARY}
@@ -170,6 +259,8 @@ set(_main_window_test_support_sources
     "${PROJECT_SOURCE_DIR}/src/resources/toolbar_icons.qrc"
     "${PROJECT_SOURCE_DIR}/src/viewer/MainWindow.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/MainWindow.h"
+    "${PROJECT_SOURCE_DIR}/src/automation/CadAutomationService.cpp"
+    "${PROJECT_SOURCE_DIR}/src/automation/CadAutomationService.h"
     "${PROJECT_SOURCE_DIR}/src/viewer/ModelPresenter.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/PushPullDrag.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/TransformMath.cpp"
@@ -182,13 +273,14 @@ set(_main_window_test_support_sources
     "${PROJECT_SOURCE_DIR}/src/viewer/BimInspectorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/CadViewer.cpp"
     "${PROJECT_SOURCE_DIR}/src/viewer/SketchEntityPicker.cpp"
+    "${PROJECT_SOURCE_DIR}/src/model/ModelComponent.cpp"
 )
 add_library(main_window_test_support STATIC ${_main_window_test_support_sources})
 unset(_main_window_test_support_sources)
 target_include_directories(main_window_test_support PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(main_window_test_support PUBLIC
     model_test_support Qt6::Test Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets
-    Qt6::Concurrent ParametricCAD::OCCTVisualization)
+    Qt6::Concurrent Qt6::Network ParametricCAD::OCCTVisualization)
 
 add_executable(main_window_tests main_window_tests.cpp)
 target_link_libraries(main_window_tests PRIVATE main_window_test_support)
@@ -200,6 +292,32 @@ add_executable(controller_tests controller_tests.cpp)
 target_link_libraries(controller_tests PRIVATE model_test_support Qt6::Test)
 add_test(NAME controller_tests COMMAND controller_tests)
 
+add_executable(release_regression_tests release_regression_tests.cpp)
+target_link_libraries(release_regression_tests PRIVATE model_test_support Qt6::Test)
+add_test(NAME release_regression_tests COMMAND release_regression_tests)
+set_tests_properties(release_regression_tests PROPERTIES
+    LABELS "integration;regression"
+    ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM=offscreen")
+
 add_executable(sketch_trim_tests sketch_trim_tests.cpp)
 target_link_libraries(sketch_trim_tests PRIVATE model_test_support)
 add_test(NAME sketch_trim_tests COMMAND sketch_trim_tests)
+
+set_tests_properties(
+    geometry_tests cae_mesh_tests cae_fem_tests push_pull_drag_tests
+    interactive_operation_tests selection_tests model_tests bim_navigation_tests
+    sketch_face_tests boolean_cut_tests undo_tests undo_panel_tests
+    main_window_tests controller_tests sketch_trim_tests
+    PROPERTIES LABELS "unit;regression")
+set_tests_properties(
+    project_file_tests project_archive_tests release_regression_tests
+    electrostatic_boundary_tests simulation_state_tests
+    PROPERTIES LABELS "integration;regression")
+if(PARAMETRIC_CAD_GMSH_EXECUTABLE)
+    set_tests_properties(gmsh_mesh_tests cae_resolve_integration_tests
+        PROPERTIES LABELS "integration;regression;slow")
+endif()
+if(PARAMETRIC_CAD_ENABLE_IFC)
+    set_tests_properties(ifc_import_tests ifc_workflow_tests ifc_building_acceptance
+        PROPERTIES LABELS "integration;regression;ifc;slow")
+endif()

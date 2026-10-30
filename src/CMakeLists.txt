@@ -1,6 +1,8 @@
 set(PARAMETRIC_CAD_SOURCES
     resources/toolbar_icons.qrc
     app/main.cpp
+    automation/CadAutomationService.cpp
+    automation/CadAutomationService.h
     application/ModelingController.cpp
     application/ModelingController.h
     application/Selection.h
@@ -13,6 +15,10 @@ set(PARAMETRIC_CAD_SOURCES
     application/VisibilityManager.h
     application/IfcImporter.cpp
     application/IfcImporter.h
+    application/SimulationController.cpp
+    application/SimulationController.h
+    application/ElectrostaticBoundaryCondition.cpp
+    application/ElectrostaticBoundaryCondition.h
     application/BimNavigationModel.cpp
     application/BimNavigationModel.h
     import/IfcOpenShellAdapter090.cpp
@@ -58,6 +64,7 @@ set(PARAMETRIC_CAD_SOURCES
     model/Feature.cpp
     model/Feature.h
     model/ParametricFeature.cpp
+    model/ModelComponent.cpp
     model/ParametricFeature.h
     model/TopologicalReference.cpp
     model/TopologicalReference.h
@@ -95,9 +102,20 @@ set(PARAMETRIC_CAD_SOURCES
     operations/ImportedFeature.h
     geometry/Point3D.h
     geometry/Vector3D.h
+    cae/MeshGenerator.h
+    cae/GmshMeshGenerator.cpp
+    cae/GmshMeshGenerator.h
 )
 
 add_executable(ParametricCAD ${PARAMETRIC_CAD_SOURCES})
+
+add_executable(parametriccad-mcp mcp/main.cpp)
+target_link_libraries(parametriccad-mcp PRIVATE Qt6::Core Qt6::Network)
+if(MSVC)
+    target_compile_options(parametriccad-mcp PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(parametriccad-mcp PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 if(APPLE)
     set_target_properties(ParametricCAD PROPERTIES
@@ -121,7 +139,8 @@ endif()
 if(PARAMETRIC_CAD_ENABLE_IFC)
     target_compile_definitions(ParametricCAD PRIVATE
         PARAMETRIC_CAD_HAS_IFCOPENSHELL=1
-        PARAMETRIC_CAD_IFCOPENSHELL_090=1)
+        PARAMETRIC_CAD_IFCOPENSHELL_090=1
+        PARAMETRIC_CAD_IFCOPENSHELL_PLUGIN_DIR="${PARAMETRIC_CAD_IFC_PLUGIN_DIR}")
     target_include_directories(ParametricCAD SYSTEM PRIVATE ${PARAMETRIC_CAD_IFC_INCLUDE_DIR})
 endif()
 
@@ -133,9 +152,11 @@ target_link_libraries(ParametricCAD
         Qt6::OpenGL
         Qt6::OpenGLWidgets
         Qt6::Concurrent
+        Qt6::Network
         ${PARAMETRIC_CAD_MINIZIP_TARGET}
         ParametricCAD::OCCTModeling
         ParametricCAD::OCCTVisualization
+        ParametricCAD::CAECore
 )
 
 if(PARAMETRIC_CAD_ENABLE_IFC)

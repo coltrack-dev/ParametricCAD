@@ -19,6 +19,7 @@
 namespace cad::parametric {
 class Body;
 class ParametricFeature;
+struct ModelComponent;
 enum class FeatureRole;
 }
 
@@ -57,6 +58,16 @@ struct VisibilityUpdate
 {
     std::vector<VisibilityChange> changes;
     std::size_t evaluatedFeatureCount{0};
+};
+
+struct ComponentVisibilityResult
+{
+    VisibilityMode mode{VisibilityMode::Visible};
+    VisibilityMode parentFeatureMode{VisibilityMode::Visible};
+    std::string reason{"visible"};
+    bool parentFeatureVisible{true};
+    bool technicallyHidden{false};
+    bool replaced{false};
 };
 
 struct VisibilityGroup
@@ -141,6 +152,11 @@ public:
     void setIsolatedFeatures(const std::vector<std::string>& featureIds);
     void clearIsolation();
     bool isolationActive() const noexcept;
+    void setIsolatedComponents(const std::vector<std::string>& componentIds);
+    void clearComponentIsolation();
+    bool componentIsolationActive() const noexcept;
+    void setComponentVisibility(const std::string& componentId, VisibilityMode mode);
+    VisibilityMode componentVisibilityMode(const std::string& componentId) const noexcept;
     void ghostOthers(const std::vector<std::string>& selectedIds);
     void clearGhosting();
     void setSpatialRule(const SpatialVisibilityRule& rule);
@@ -211,6 +227,10 @@ public:
     VisibilityMode effectiveMode(
         const cad::parametric::ParametricFeature& feature,
         const cad::parametric::Body& body) const;
+    ComponentVisibilityResult effectiveComponentVisibility(
+        const cad::parametric::ParametricFeature& feature,
+        const cad::parametric::ModelComponent& component,
+        const cad::parametric::Body& body) const;
     VisibilityProjection projection(const cad::parametric::Body& body) const;
     VisibilityUpdate evaluate(const cad::parametric::Body& body);
     std::size_t lastVisibilityEvaluationCount() const noexcept;
@@ -235,7 +255,9 @@ private:
         const cad::parametric::ParametricFeature& feature) const;
 
     std::set<std::string> isolatedFeatureIds_;
+    std::set<std::string> isolatedComponentIds_;
     std::set<std::string> ghostedSelectionIds_;
+    std::unordered_map<std::string, VisibilityMode> componentModes_;
     std::unordered_map<std::string, VisibilityGroup> groups_;
     VisibilityFilterState filters_;
     std::unordered_map<std::string, VisibilityPreset> presets_;

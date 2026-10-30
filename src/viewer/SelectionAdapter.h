@@ -22,10 +22,18 @@ public:
         const Handle(AIS_InteractiveContext)& context,
         const std::map<QString, Handle(AIS_Shape)>& featureObjects
     );
+    OcctSelectionAdapter(
+        const Handle(AIS_InteractiveContext)& context,
+        const std::map<QString, Handle(AIS_Shape)>& featureObjects,
+        const std::map<QString, Handle(AIS_Shape)>& componentObjects,
+        const std::map<QString, QString>& componentFeatures
+    );
 
     std::optional<QString> featureIdFor(
         const Handle(AIS_InteractiveObject)& presentation
     ) const;
+    std::optional<QString> componentIdFor(
+        const Handle(AIS_InteractiveObject)& presentation) const;
 
     void moveTo(
         const QPoint& position,
@@ -40,6 +48,10 @@ public:
     std::optional<SelectionHit> validatedSelectedFaceHit() const;
 
     std::optional<SelectionHit> validatedSelectedObjectHit() const;
+
+    // Remove only selected owners belonging to one presentation. This keeps
+    // selections on unrelated features intact when an AIS_Shape is rebuilt.
+    void clearSelectedPresentation(const Handle(AIS_InteractiveObject)& presentation) const;
 
     bool isValidObjectHit(const SelectionHit& hit) const;
 
@@ -59,6 +71,8 @@ private:
 
     Handle(AIS_InteractiveContext) context_;
     const std::map<QString, Handle(AIS_Shape)>& featureObjects_;
+    const std::map<QString, Handle(AIS_Shape)>& componentObjects_;
+    const std::map<QString, QString>& componentFeatures_;
 };
 
 } // namespace cad::viewer

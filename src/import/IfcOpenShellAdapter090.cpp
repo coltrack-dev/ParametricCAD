@@ -1,16 +1,24 @@
 #include "import/IfcOpenShellAdapter.h"
 
+#include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QDebug>
+#include <QThread>
 
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #if defined(PARAMETRIC_CAD_HAS_IFCOPENSHELL)
 #include <BRepBuilderAPI_Transform.hxx>
 #include <gp_Trsf.hxx>
+#include <ifcgeom/abstract_mapping.h>
 #include <ifcgeom/conversion_settings.h>
 #include <ifcgeom/iterator.h>
 #include <ifcgeom/kernels/opencascade/opencascade_conversion_result.h>
@@ -18,6 +26,12 @@
 #include <ifcparse/express.h>
 #include <ifcparse/file.h>
 #include <ifcparse/instance_data.h>
+#include <plugin/plugin.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 #endif
 
 namespace cad::import {
@@ -27,6 +41,127 @@ namespace {
 
 using IfcBase = express::base;
 using IfcEntity = express::entity;
+
+QString traceThreadId()
+{
+    return QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()), 16);
+}
+
+void traceStage(const QString& stage)
+{
+    qInfo().noquote() << QStringLiteral("[IfcOpenShell][thread=%1] %2")
+                             .arg(traceThreadId(), stage);
+}
+
+void traceRuntimeContext()
+{
+    traceStage(QStringLiteral("runtime context"));
+    const auto* application = QCoreApplication::instance();
+    qInfo().noquote() << QStringLiteral("[IfcOpenShell] executable=%1")
+                             .arg(application ? application->applicationFilePath()
+                                              : QStringLiteral("<no QCoreApplication>"));
+    const auto searchPaths = ifcopenshell::plugin::search_paths();
+    if (searchPaths.empty()) {
+        qInfo().noquote() << QStringLiteral("[IfcOpenShell] plugin search paths=<empty>");
+    } else {
+        for (const auto& searchPath : searchPaths) {
+            qInfo().noquote() << QStringLiteral("[IfcOpenShell] plugin search path=%1")
+                                     .arg(QString::fromStdString(searchPath));
+        }
+    }
+    qInfo().noquote() << QStringLiteral("[IfcOpenShell] DYLD_LIBRARY_PATH=%1")
+                             .arg(qEnvironmentVariable("DYLD_LIBRARY_PATH", QStringLiteral("<unset>")));
+    qInfo().noquote() << QStringLiteral("[IfcOpenShell] DYLD_FALLBACK_LIBRARY_PATH=%1")
+                             .arg(qEnvironmentVariable("DYLD_FALLBACK_LIBRARY_PATH", QStringLiteral("<unset>")));
+}
+
+void tracePlugin(const char* requestedName)
+{
+    ifcopenshell::plugin::manager manager;
+    for (const auto& searchPath : ifcopenshell::plugin::search_paths())
+        manager.add_search_path(searchPath);
+
+    const auto candidates = manager.discover_exact(requestedName);
+    qInfo().noquote() << QStringLiteral("[IfcOpenShell][thread=%1] plugin requested=%2 candidates=%3")
+                             .arg(traceThreadId())
+                             .arg(QString::fromUtf8(requestedName))
+                             .arg(static_cast<qlonglong>(candidates.size()));
+    if (candidates.empty()) {
+        qWarning().noquote() << QStringLiteral("[IfcOpenShell] plugin requested=%1 resolved=<none>")
+                                    .arg(QString::fromUtf8(requestedName));
+        return;
+    }
+
+    for (const auto& candidate : candidates) {
+        const auto resolved = std::filesystem::absolute(candidate).string();
+        qInfo().noquote() << QStringLiteral("[IfcOpenShell] plugin requested=%1 resolved=%2")
+                                 .arg(QString::fromUtf8(requestedName), QString::fromStdString(resolved));
+#if defined(_WIN32)
+        const auto handle = LoadLibraryW(std::filesystem::path(resolved).wstring().c_str());
+        if (!handle) {
+            qWarning().noquote() << QStringLiteral("[IfcOpenShell] plugin dlopen=failed error=%1")
+                                        .arg(static_cast<unsigned long>(GetLastError()));
+        } else {
+            qInfo().noquote() << QStringLiteral("[IfcOpenShell] plugin dlopen=success");
+            FreeLibrary(handle);
+        }
+#else
+        dlerror();
+        void* handle = dlopen(resolved.c_str(), RTLD_NOW | RTLD_LOCAL);
+        const char* error = dlerror();
+        if (!handle) {
+            qWarning().noquote() << QStringLiteral("[IfcOpenShell] plugin dlopen=failed dlerror=%1")
+                                        .arg(QString::fromUtf8(error ? error : "<none>"));
+        } else {
+            qInfo().noquote() << QStringLiteral("[IfcOpenShell] plugin dlopen=success dlerror=%1")
+                                     .arg(QString::fromUtf8(error ? error : "<none>"));
+            dlclose(handle);
+        }
+#endif
+        try {
+            const auto module = manager.load(candidate);
+            qInfo().noquote() << QStringLiteral(
+                "[IfcOpenShell] plugin manager.load=success id=%1 schema=%2")
+                                     .arg(QString::fromStdString(module.meta().id),
+                                          QString::fromStdString(module.meta().schema));
+        } catch (const std::exception& exception) {
+            qWarning().noquote() << QStringLiteral("[IfcOpenShell] plugin manager.load=failed error=%1")
+                                        .arg(QString::fromUtf8(exception.what()));
+        }
+    }
+}
+
+void traceRequiredPlugins()
+{
+    tracePlugin("parse_schema_ifc2x3");
+    tracePlugin("parse_schema_ifc4");
+    tracePlugin("geometry_mapping_ifc2x3");
+    tracePlugin("geometry_mapping_ifc4");
+    tracePlugin("geometry_kernel_opencascade");
+}
+
+void configurePluginSearchPath()
+{
+    traceStage(QStringLiteral("before plugin manager initialization"));
+    static const bool configured = [] {
+        std::vector<std::string> searchPaths = {
+            PARAMETRIC_CAD_IFCOPENSHELL_PLUGIN_DIR};
+#if defined(__APPLE__)
+        if (const auto* application = QCoreApplication::instance()) {
+            const auto applicationDirectory = application->applicationDirPath();
+            searchPaths.push_back((applicationDirectory + QStringLiteral("/../PlugIns")).toStdString());
+            searchPaths.push_back((applicationDirectory + QStringLiteral("/../Frameworks")).toStdString());
+            searchPaths.push_back(applicationDirectory.toStdString());
+        }
+#endif
+        ifcopenshell::plugin::set_search_paths(searchPaths);
+        return true;
+    }();
+    Q_UNUSED(configured);
+    traceStage(QStringLiteral("after plugin manager initialization"));
+    traceRuntimeContext();
+    traceRequiredPlugins();
+}
 
 bool excluded(const QString& type)
 {
@@ -317,7 +452,7 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
     Q_UNUSED(progress);
     Q_UNUSED(cancellation);
     result.diagnostics.push_back({ImportSeverity::Error, {}, {},
-        QStringLiteral("IfcOpenShell support is disabled. Configure IfcOpenShell 0.9.0 with "
+        QStringLiteral("IfcOpenShell support is disabled. Configure IfcOpenShell 0.9.x with "
                        "PARAMETRIC_CAD_ENABLE_IFC=ON.")});
     result.fatal = true;
     result.statistics.failedCount = 1;
@@ -325,15 +460,21 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
     return result;
 #else
     try {
+        configurePluginSearchPath();
         if (progress) progress({IfcImportStage::Opening, 0, 0});
         if (cancellation && cancellation()) { result.cancelled = true; return result; }
         QElapsedTimer parse;
         parse.start();
         if (progress) progress({IfcImportStage::Parsing, 0, 0});
         auto file = std::make_unique<ifcopenshell::file>(ifcopenshell::uninitialized_tag{});
-        if (!file->initialize(path.toStdString()) || !file->good()) {
+        traceStage(QStringLiteral("before schema load"));
+        const bool initialized = file->initialize(path.toStdString());
+        traceStage(QStringLiteral("after schema load: initialize=%1 good=%2")
+                       .arg(initialized ? QStringLiteral("true") : QStringLiteral("false"))
+                       .arg(file->good() ? QStringLiteral("true") : QStringLiteral("false")));
+        if (!initialized || !file->good()) {
             result.diagnostics.push_back({ImportSeverity::Error, {}, {},
-                QStringLiteral("IfcOpenShell 0.9.0 could not open the IFC file")});
+                QStringLiteral("IfcOpenShell 0.9.x could not open the IFC file")});
             result.fatal = true;
             result.statistics.failedCount = 1;
             return result;
@@ -341,7 +482,9 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
         result.statistics.schema = QString::fromStdString(file->schema()->name());
         result.statistics.parseMilliseconds = parse.elapsed();
 
+        traceStage(QStringLiteral("before geometry settings construction"));
         ifcopenshell::geom::settings settings;
+        traceStage(QStringLiteral("after geometry settings construction"));
         settings.get<ifcopenshell::geom::settings::UseWorldCoords>().value = true;
         settings.get<ifcopenshell::geom::settings::ConvertBackUnits>().value = false;
         settings.get<ifcopenshell::geom::settings::UseElementHierarchy>().value = true;
@@ -350,15 +493,45 @@ IfcImportResult IfcOpenShellAdapter::importFile(const QString& path,
         QElapsedTimer geometry;
         geometry.start();
         ifcopenshell::logger logger;
+        traceStage(QStringLiteral("before OpenCASCADE kernel load"));
         auto kernel = ifcopenshell::geom::kernels::construct(file.get(), "opencascade", settings, logger);
-        ifcopenshell::geom::iterator iterator(std::move(kernel), settings, file.get(), logger);
+        traceStage(QStringLiteral("after OpenCASCADE kernel load"));
+        traceStage(QStringLiteral("before mapping factory lookup"));
+        auto& mappingFactory = ifcopenshell::geom::impl::mapping_implementations();
+        Q_UNUSED(mappingFactory);
+        traceStage(QStringLiteral("after mapping factory lookup"));
+        std::allocator<ifcopenshell::geom::iterator> iteratorAllocator;
+        traceStage(QStringLiteral("before iterator object allocation"));
+        auto* iteratorMemory = iteratorAllocator.allocate(1);
+        traceStage(QStringLiteral("after iterator object allocation"));
+        const auto iteratorDeleter = [&iteratorAllocator](ifcopenshell::geom::iterator* object) {
+            if (!object) return;
+            std::destroy_at(object);
+            iteratorAllocator.deallocate(object, 1);
+        };
+        std::unique_ptr<ifcopenshell::geom::iterator, decltype(iteratorDeleter)>
+            iteratorGuard(nullptr, iteratorDeleter);
+        traceStage(QStringLiteral("before iterator constructor / mapping instance creation"));
+        ifcopenshell::geom::iterator* iteratorObject = nullptr;
+        try {
+            iteratorObject = std::construct_at(iteratorMemory,
+                std::move(kernel), settings, file.get(), logger);
+        } catch (...) {
+            iteratorAllocator.deallocate(iteratorMemory, 1);
+            throw;
+        }
+        iteratorGuard.reset(iteratorObject);
+        traceStage(QStringLiteral("after iterator constructor / mapping instance creation"));
+        auto& iterator = *iteratorObject;
+        traceStage(QStringLiteral("before iterator initialize"));
         if (!iterator.initialize()) {
             result.diagnostics.push_back({ImportSeverity::Error, {}, {},
-                QStringLiteral("IfcOpenShell 0.9.0 could not initialize the OCCT geometry kernel")});
+                QStringLiteral("IfcOpenShell 0.9.x could not initialize the OCCT geometry kernel")});
             result.fatal = true;
             result.statistics.failedCount = 1;
             return result;
         }
+        traceStage(QStringLiteral("after iterator initialize"));
         const auto containment = spatialIndex(*file);
         const auto semantics = semanticIndex(*file);
         std::size_t processed = 0;

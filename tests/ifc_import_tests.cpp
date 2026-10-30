@@ -133,6 +133,16 @@ int main()
         check(result.statistics.skippedCount == 71, "Duplex skipped count changed");
         check(result.statistics.failedCount == 0, "Duplex geometry failures");
         check(!unavailableBody.features().empty(), "Duplex import");
+        cad::parametric::Body sequentialBody;
+        const auto sequential = importer.importIntoBody(
+            QStringLiteral(PARAMETRIC_CAD_SOURCE_DIR) + "/examples/ifc/Duplex_A_20110505.ifc",
+            sequentialBody);
+        check(sequential.statistics.schema == "IFC2X3", "Sequential Duplex schema");
+        check(sequential.statistics.importedCount == result.statistics.importedCount,
+              "Sequential Duplex import count changed");
+        check(sequential.statistics.failedCount == 0, "Sequential Duplex geometry failures");
+        check(sequentialBody.features().size() == unavailableBody.features().size(),
+              "Sequential Duplex import feature count");
         std::cout << "Duplex IFC import\n"
                   << "  schema: " << result.statistics.schema.toStdString() << '\n'
                   << "  considered: " << result.statistics.consideredCount << '\n'

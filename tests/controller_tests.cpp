@@ -123,6 +123,10 @@ private slots:
         ModelingController controller;
         const auto sketch = controller.createSketch();
         QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
 
         auto state = controller.actionState({sketch.id});
         QVERIFY(state.canCreateFace);
@@ -259,6 +263,10 @@ private slots:
         ModelingController extrudeController;
         const auto sketch = extrudeController.createSketch();
         QVERIFY(sketch.success);
+        QVERIFY(extrudeController.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(extrudeController.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(extrudeController.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(extrudeController.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
         const SelectionSnapshot sketchSelection{{
             {sketch.id, SelectionKind::Object, std::nullopt}}};
         const auto extrude = extrudeController.createExtrudeFromSketch(sketchSelection, 25.0);
@@ -267,7 +275,7 @@ private slots:
         QVERIFY(extruded && !extruded->shape().IsNull());
         QVERIFY(volume(extruded->shape()) > 100.0);
         QVERIFY(extruded->dependencies().size() == 1);
-        QVERIFY(std::abs(volume(extruded->shape()) - 150000.0) < 1e-7);
+        QVERIFY(std::abs(volume(extruded->shape()) - 5000.0) < 1e-7);
         extrudeController.undo();
         QVERIFY(!extrudeController.body().findFeature(extrude.id));
         extrudeController.redo();
@@ -275,7 +283,7 @@ private slots:
         QVERIFY(!extruded->shape().IsNull());
         QVERIFY(extrudeController.setFeatureProperty(
             extrude.id, "distance", 30.0).success);
-        QVERIFY(std::abs(volume(extruded->shape()) - 180000.0) < 1e-7);
+        QVERIFY(std::abs(volume(extruded->shape()) - 6000.0) < 1e-7);
         QVERIFY(extrudeController.setFeatureProperty(
             extrude.id, "reversed", true).success);
         extrudeController.undo();
@@ -1500,6 +1508,10 @@ private slots:
         ModelingController controller;
         const auto sketch = controller.createSketch();
         QVERIFY(sketch.success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0, 0}, {20, 0}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20, 0}, {20, 10}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {20, 10}, {0, 10}).success);
+        QVERIFY(controller.addSketchLine(sketch.id, {0, 10}, {0, 0}).success);
         const SelectionSnapshot selection{{
             {sketch.id, SelectionKind::Object, std::nullopt}}};
         QVERIFY(controller.actionState(selection).canRevolve);
@@ -2285,6 +2297,7 @@ private slots:
 
         const auto path = controller.createSketch();
         QVERIFY(path.success);
+        QVERIFY(controller.addSketchLine(path.id, {0, 0}, {100, 0}).success);
         const auto pathPattern = controller.createPathPattern({box.id, path.id});
         QVERIFY(pathPattern.success);
         const auto pathFeature = controller.body().findFeature(pathPattern.id);

@@ -7,6 +7,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -14,9 +15,13 @@
 #include <BRep_Builder.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <TopExp.hxx>
@@ -40,6 +45,7 @@
 #include <cstdlib>
 
 #include <stdexcept>
+#include <unordered_set>
 #include <string>
 #include <utility>
 
@@ -72,6 +78,24 @@ void traceSweep(const char* event, const std::string& details)
     if (!sweepTraceEnabled()) return;
     std::fprintf(stderr, "[SWEEP] %s %s\n", event, details.c_str());
     std::fflush(stderr);
+}
+
+bool dependsTransitively(
+    const ParametricFeature::Ptr& feature,
+    const ParametricFeature::Ptr& possibleAncestor,
+    std::unordered_set<const ParametricFeature*>& visited)
+{
+    if (!feature || !possibleAncestor) return false;
+    if (!visited.insert(feature.get()).second) return false;
+    for (const auto& weakDependency : feature->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        if (!dependency) continue;
+        if (dependency == possibleAncestor
+            || dependsTransitively(dependency, possibleAncestor, visited)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const char* revolveAxisTypeName(const RevolveAxisType type)
@@ -181,6 +205,75 @@ FeatureProperty textProperty(
 )
 {
     return {key, label, std::move(value), std::nullopt, std::nullopt, false};
+}
+
+FeatureProperty componentNumberProperty(const char* key, const char* label, const double value,
+                                       const bool editable)
+{
+    return {key, label, value, -1'000'000'000.0, 1'000'000'000.0, editable};
+}
+
+FeatureProperty componentTextProperty(const char* key, const char* label,
+                                      std::string value)
+{
+    return {key, label, std::move(value), std::nullopt, std::nullopt, false};
+}
+
+FeatureProperty componentEditableTextProperty(const char* key, const char* label,
+                                              std::string value)
+{
+    return {key, label, std::move(value), std::nullopt, std::nullopt, true};
+}
+
+std::string componentDependenciesText(const ParametricFeature::Ptr& source)
+{
+    if (!source || source->dependencies().empty()) return "none";
+    std::string result;
+    for (const auto& weakDependency : source->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        if (!dependency) continue;
+        if (!result.empty()) result += ", ";
+        result += dependency->id();
+    }
+    return result.empty() ? "none" : result;
+}
+
+std::string componentUpstreamSketchText(const ParametricFeature::Ptr& source)
+{
+    if (!source) return "none";
+    std::unordered_set<std::string> visited;
+    std::vector<ParametricFeature::Ptr> pending{source};
+    while (!pending.empty()) {
+        auto current = pending.back();
+        pending.pop_back();
+        if (!current || !visited.insert(current->id()).second) continue;
+        if (current->role() == FeatureRole::Sketch) return current->id();
+        for (const auto& weakDependency : current->dependencies()) {
+            if (auto dependency = weakDependency.lock()) pending.push_back(std::move(dependency));
+        }
+    }
+    return "none";
+}
+
+std::string componentBoundsText(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return "unavailable";
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) return "empty";
+    Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
+    bounds.Get(minX, minY, minZ, maxX, maxY, maxZ);
+    return std::to_string(minX) + ", " + std::to_string(minY) + ", "
+        + std::to_string(minZ) + " .. " + std::to_string(maxX) + ", "
+        + std::to_string(maxY) + ", " + std::to_string(maxZ);
+}
+
+std::string componentVolumeText(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return "unavailable";
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    return std::to_string(properties.Mass());
 }
 
 SketchFrame globalSketchFrame(const SketchSupportType support)
@@ -871,11 +964,14 @@ TopoDS_Shape SketchFeature::build() const
             throw std::runtime_error("Sketch support face could not be resolved: " + resolved.error);
         }
         frame = frameForFace(TopoDS::Face(*resolved.shape));
-    } else if (entities_.empty()) {
-        return cad::modeling::BasicFeatures::rectangleWire(width_, height_);
     }
 
     if (entities_.empty()) {
+        if (supportType_ != SketchSupportType::Face
+            && (!std::isfinite(width_) || !std::isfinite(height_)
+                || width_ <= 0.0 || height_ <= 0.0)) {
+            throw std::invalid_argument("Sketch dimensions must be positive and finite");
+        }
         TopoDS_Compound compound;
         BRep_Builder builder;
         builder.MakeCompound(compound);
@@ -3205,6 +3301,562 @@ ParametricFeature::Ptr SweepFeature::clone(std::string newId) const
         : (pathFeature_
             ? std::make_shared<SweepFeature>(std::move(newId), pathFeature_, profile_)
             : std::make_shared<SweepFeature>(std::move(newId), path_, profile_));
+    copyPlacementTo(copy);
+    return copy;
+}
+
+TransformFeature::TransformFeature(
+    std::string id,
+    std::vector<Ptr> sources,
+    const TransformOperation operation,
+    const TransformResultMode resultMode,
+    const gp_Trsf transformation
+)
+    : ParametricFeature(std::move(id), "Transform"),
+      operation_(operation), resultMode_(resultMode), transformation_(transformation)
+{
+    if (sources.empty()) throw std::invalid_argument("Transform requires at least one source");
+    sourceIds_.reserve(sources.size());
+    sources_.reserve(sources.size());
+    for (const auto& source : sources) {
+        if (!source) throw std::invalid_argument("Transform source must not be null");
+        sourceIds_.push_back(source->id());
+        sources_.push_back(source);
+        addDependency(source);
+    }
+}
+
+std::vector<std::string> TransformFeature::effectiveSourceIds() const
+{
+    std::vector<std::string> effective;
+    effective.reserve(sources_.size());
+    for (std::size_t index = 0; index < sources_.size(); ++index) {
+        const auto source = sources_[index].lock();
+        if (!source) continue;
+        bool hasSelectedDescendant = false;
+        for (std::size_t candidateIndex = 0; candidateIndex < sources_.size(); ++candidateIndex) {
+            if (candidateIndex == index) continue;
+            const auto candidate = sources_[candidateIndex].lock();
+            std::unordered_set<const ParametricFeature*> visited;
+            if (dependsTransitively(candidate, source, visited)) {
+                hasSelectedDescendant = true;
+                break;
+            }
+        }
+        if (!hasSelectedDescendant) effective.push_back(source->id());
+    }
+    return effective;
+}
+
+TopoDS_Shape TransformFeature::build() const
+{
+    std::vector<Ptr> effectiveSources;
+    effectiveSources.reserve(sources_.size());
+    for (std::size_t index = 0; index < sources_.size(); ++index) {
+        const auto source = sources_[index].lock();
+        if (!source) throw std::runtime_error("Transform source no longer exists");
+        bool hasSelectedDescendant = false;
+        for (std::size_t candidateIndex = 0; candidateIndex < sources_.size(); ++candidateIndex) {
+            if (candidateIndex == index) continue;
+            const auto candidate = sources_[candidateIndex].lock();
+            std::unordered_set<const ParametricFeature*> visited;
+            if (dependsTransitively(candidate, source, visited)) {
+                hasSelectedDescendant = true;
+                break;
+            }
+        }
+        if (!hasSelectedDescendant) effectiveSources.push_back(source);
+    }
+
+    std::vector<TopoDS_Shape> transformed;
+    transformed.reserve(effectiveSources.size());
+    for (const auto& source : effectiveSources) {
+        if (source->shape().IsNull())
+            throw std::runtime_error("Transform source has no valid shape");
+        BRepBuilderAPI_Transform builder(source->shape(), transformation_, Standard_True);
+        if (!builder.IsDone()) throw std::runtime_error("OCCT transform failed");
+        const auto result = builder.Shape();
+        if (result.IsNull()) throw std::runtime_error("OCCT transform returned a null shape");
+        transformed.push_back(result);
+    }
+    if (transformed.size() == 1) return transformed.front();
+
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const auto& shape : transformed) builder.Add(compound, shape);
+    return compound;
+}
+
+void TransformFeature::writeParameters(QJsonObject& object) const
+{
+    QJsonArray sourceIds;
+    for (const auto& sourceId : sourceIds_)
+        sourceIds.append(QString::fromStdString(sourceId));
+    object.insert("sourceIds", sourceIds);
+    QJsonArray effectiveSourceIdsJson;
+    for (const auto& sourceId : effectiveSourceIds())
+        effectiveSourceIdsJson.append(QString::fromStdString(sourceId));
+    object.insert("effectiveSourceIds", effectiveSourceIdsJson);
+    object.insert("operation", operation_ == TransformOperation::Mirror ? "Mirror"
+        : operation_ == TransformOperation::Translate ? "Translate" : "Rotate");
+    object.insert("resultMode", resultMode_ == TransformResultMode::Copy
+        ? "copy" : "replace_result");
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(transformation_.Value(row, column));
+    object.insert("transformation", matrix);
+}
+
+ParametricFeature::Ptr TransformFeature::clone(std::string newId) const
+{
+    std::vector<Ptr> sources;
+    sources.reserve(sources_.size());
+    for (const auto& weakSource : sources_) {
+        const auto source = weakSource.lock();
+        if (!source) return {};
+        sources.push_back(source);
+    }
+    auto copy = std::make_shared<TransformFeature>(std::move(newId), sources,
+        operation_, resultMode_, transformation_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+namespace {
+
+bool componentMetricMatches(const TopoDS_Shape& shape, const cad::parametric::ModelComponent& component)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) return false;
+    Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
+    bounds.Get(minX, minY, minZ, maxX, maxY, maxZ);
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    const auto close = [](double left, double right) {
+        return std::abs(left - right) <= 1.0e-6
+            * std::max({1.0, std::abs(left), std::abs(right)});
+    };
+    return close(minX, component.minX) && close(minY, component.minY)
+        && close(minZ, component.minZ) && close(maxX, component.maxX)
+        && close(maxY, component.maxY) && close(maxZ, component.maxZ)
+        && close(properties.Mass(), component.volume);
+}
+
+TopoDS_Shape resolveComponentShape(const TopoDS_Shape& source,
+                                   const cad::parametric::ModelComponent& component)
+{
+    if (source.IsNull()) throw std::runtime_error("Component source has no valid shape");
+    if (source.ShapeType() == TopAbs_SOLID) {
+        if (componentMetricMatches(source, component)) return source;
+        throw std::runtime_error("Component reference no longer resolves uniquely");
+    }
+    TopoDS_Shape match;
+    for (TopExp_Explorer explorer(source, TopAbs_SOLID); explorer.More(); explorer.Next()) {
+        if (!componentMetricMatches(explorer.Current(), component)) continue;
+        if (!match.IsNull()) throw std::runtime_error("Component reference is ambiguous");
+        match = explorer.Current();
+    }
+    if (match.IsNull()) throw std::runtime_error("Component reference no longer resolves");
+    return match;
+}
+
+QJsonArray componentBounds(const cad::parametric::ModelComponent& component)
+{
+    return QJsonArray{component.minX, component.minY, component.minZ,
+        component.maxX, component.maxY, component.maxZ, component.volume};
+}
+
+} // namespace
+
+ComponentTransformFeature::ComponentTransformFeature(
+    std::string id, const Ptr& source, ModelComponent component,
+    const TransformOperation operation, const TransformResultMode resultMode,
+    const gp_Trsf transformation)
+    : ParametricFeature(std::move(id), "Component Transform"),
+      sourceFeatureId_(source ? source->id() : std::string{}),
+      sourceComponentId_(component.id), source_(source), component_(std::move(component)),
+      operation_(operation), resultMode_(resultMode), transformation_(transformation)
+{
+    if (!source) throw std::invalid_argument("Component transform source must not be null");
+    if (sourceComponentId_.empty()) throw std::invalid_argument("Component id must not be empty");
+    addDependency(source);
+}
+
+std::vector<FeatureProperty> ComponentTransformFeature::properties() const
+{
+    const auto translation = transformation_.TranslationPart();
+    const bool translate = operation_ == TransformOperation::Translate;
+    std::vector<FeatureProperty> result{
+        componentTextProperty("sourceFeatureId", "Parent Feature", sourceFeatureId_),
+        componentTextProperty("sourceComponentId", "Component ID", sourceComponentId_),
+        componentTextProperty("dependencies", "Dependencies", componentDependenciesText(source_)),
+        componentTextProperty("upstreamSketch", "Upstream Sketch", componentUpstreamSketchText(source_)),
+        componentTextProperty("operation", "Operation",
+            operation_ == TransformOperation::Mirror ? "Mirror"
+                : operation_ == TransformOperation::Translate ? "Translate" : "Rotate"),
+        componentTextProperty("resultMode", "Result mode",
+            resultMode_ == TransformResultMode::Copy ? "copy" : "replace_result"),
+        componentNumberProperty("translationX", "Translate X", translation.X(), translate),
+        componentNumberProperty("translationY", "Translate Y", translation.Y(), translate),
+        componentNumberProperty("translationZ", "Translate Z", translation.Z(), translate),
+        componentTextProperty("boundingBox", "Bounding box", componentBoundsText(shape())),
+        componentTextProperty("volume", "Volume (mm^3)", componentVolumeText(shape())),
+        componentTextProperty("validity", "B-Rep validity",
+            !shape().IsNull() && BRepCheck_Analyzer(shape()).IsValid() ? "valid" : "invalid"),
+        componentTextProperty("recomputeStatus", "Recompute status",
+            state() == FeatureState::UpToDate ? "up_to_date"
+                : state() == FeatureState::Failed ? "failed" : "dirty"),
+        componentTextProperty("effectiveVisibility", "Effective visibility",
+            userVisible() && component_.visible ? "visible" : "hidden")};
+    if (!translate) {
+        result.push_back(componentTextProperty("editorNote", "Editing",
+            operation_ == TransformOperation::Rotate
+                ? "Rotate axis and angle are read-only for this legacy transform; recreate the operation to change them."
+                : "Mirror plane is read-only for this legacy transform; recreate the operation to change it."));
+    }
+    return result;
+}
+
+bool ComponentTransformFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (operation_ != TransformOperation::Translate || !std::isfinite(value)) return false;
+    if (key != "translationX" && key != "translationY" && key != "translationZ") return false;
+    gp_Vec translation(transformation_.TranslationPart());
+    if (key == "translationX") translation.SetX(value);
+    else if (key == "translationY") translation.SetY(value);
+    else translation.SetZ(value);
+    transformation_.SetTranslationPart(translation);
+    markDirty();
+    return true;
+}
+
+bool ComponentTransformFeature::setProperty(const std::string& key,
+                                            const PropertyValue& value)
+{
+    return ParametricFeature::setProperty(key, value);
+}
+
+TopoDS_Shape ComponentTransformFeature::build() const
+{
+    const auto sourceShape = resolveComponentShape(source_->shape(), component_);
+    BRepBuilderAPI_Transform builder(sourceShape, transformation_, Standard_True);
+    if (!builder.IsDone() || builder.Shape().IsNull())
+        throw std::runtime_error("OCCT component transform failed");
+    BRepCheck_Analyzer analyzer(builder.Shape());
+    if (!analyzer.IsValid()) throw std::runtime_error("Component transform B-Rep is invalid");
+    return builder.Shape();
+}
+
+void ComponentTransformFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("sourceComponentId", QString::fromStdString(sourceComponentId_));
+    object.insert("componentSignature", componentBounds(component_));
+    object.insert("operation", operation_ == TransformOperation::Mirror ? "Mirror"
+        : operation_ == TransformOperation::Translate ? "Translate" : "Rotate");
+    object.insert("resultMode", resultMode_ == TransformResultMode::Copy
+        ? "copy" : "replace_result");
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(transformation_.Value(row, column));
+    object.insert("transformation", matrix);
+}
+
+ParametricFeature::Ptr ComponentTransformFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ComponentTransformFeature>(std::move(newId), source_, component_,
+        operation_, resultMode_, transformation_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+namespace {
+
+TopoDS_Shape transformSplitSource(const TopoDS_Shape& source, const gp_Trsf& transform)
+{
+    if (source.IsNull()) throw std::runtime_error("Split source has no valid shape");
+    BRepBuilderAPI_Transform builder(source, transform, Standard_True);
+    if (!builder.IsDone() || builder.Shape().IsNull())
+        throw std::runtime_error("OCCT transform failed while preparing split source");
+    return builder.Shape();
+}
+
+TopoDS_Shape clipSplitShape(const TopoDS_Shape& source, const double coordinate,
+                            const SplitSide side)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(source, bounds);
+    if (bounds.IsVoid()) throw std::runtime_error("Cannot split an empty shape");
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double margin = std::max({1.0, xmax - xmin, ymax - ymin, zmax - zmin}) + 1.0;
+    const double lowX = side == SplitSide::Negative ? xmin - margin : coordinate;
+    const double highX = side == SplitSide::Negative ? coordinate : xmax + margin;
+    if (!(highX > lowX)) throw std::runtime_error("Split plane does not intersect the source shape");
+    const auto box = BRepPrimAPI_MakeBox(
+        gp_Pnt(lowX, ymin - margin, zmin - margin),
+        gp_Pnt(highX, ymax + margin, zmax + margin)).Shape();
+    if (box.IsNull()) throw std::runtime_error("Failed to construct split half-space");
+    BRepAlgoAPI_Common common(source, box);
+    common.Build();
+    if (!common.IsDone() || common.Shape().IsNull())
+        throw std::runtime_error("OCCT split intersection failed");
+    return common.Shape();
+}
+
+bool sameSolidBounds(const TopoDS_Shape& left, const TopoDS_Shape& right)
+{
+    Bnd_Box leftBounds;
+    Bnd_Box rightBounds;
+    BRepBndLib::Add(left, leftBounds);
+    BRepBndLib::Add(right, rightBounds);
+    if (leftBounds.IsVoid() || rightBounds.IsVoid()) return false;
+    Standard_Real lx, ly, lz, lX, lY, lZ, rx, ry, rz, rX, rY, rZ;
+    leftBounds.Get(lx, ly, lz, lX, lY, lZ);
+    rightBounds.Get(rx, ry, rz, rX, rY, rZ);
+    constexpr double tolerance = 1.0e-6;
+    return std::abs(lx - rx) <= tolerance && std::abs(ly - ry) <= tolerance
+        && std::abs(lz - rz) <= tolerance && std::abs(lX - rX) <= tolerance
+        && std::abs(lY - rY) <= tolerance && std::abs(lZ - rZ) <= tolerance;
+}
+
+} // namespace
+
+SplitSegmentFeature::SplitSegmentFeature(std::string id, const Ptr& source,
+    gp_Trsf sourceTransform, const double splitCoordinate, const SplitSide side)
+    : ParametricFeature(std::move(id), "Split Segment"),
+      sourceFeatureId_(source ? source->id() : std::string{}), source_(source),
+      sourceTransform_(std::move(sourceTransform)), splitCoordinate_(splitCoordinate), side_(side)
+{
+    if (!source) throw std::invalid_argument("Split segment source must not be null");
+    if (!std::isfinite(splitCoordinate_)) throw std::invalid_argument("Split coordinate must be finite");
+    addDependency(source);
+}
+
+TopoDS_Shape SplitSegmentFeature::build() const
+{
+    const auto transformed = transformSplitSource(source_->shape(), sourceTransform_);
+    const auto result = clipSplitShape(transformed, splitCoordinate_, side_);
+    BRepCheck_Analyzer analyzer(result);
+    if (!analyzer.IsValid()) throw std::runtime_error("Split segment B-Rep is invalid");
+    return result;
+}
+
+void SplitSegmentFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("splitCoordinate", splitCoordinate_);
+    object.insert("side", side_ == SplitSide::Negative ? "negative" : "positive");
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(sourceTransform_.Value(row, column));
+    object.insert("sourceTransform", matrix);
+}
+
+ParametricFeature::Ptr SplitSegmentFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<SplitSegmentFeature>(std::move(newId), source_, sourceTransform_,
+        splitCoordinate_, side_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+ComponentSplitFeature::ComponentSplitFeature(
+    std::string id, const Ptr& source, ModelComponent component, const gp_Pnt origin,
+    const gp_Dir normal, const ComponentSplitSide side)
+    : ParametricFeature(std::move(id), "Component Split"),
+      sourceFeatureId_(source ? source->id() : std::string{}),
+      sourceComponentId_(component.id), source_(source), component_(std::move(component)),
+      origin_(origin), normal_(normal), side_(side)
+{
+    if (!source) throw std::invalid_argument("Component split source must not be null");
+    if (sourceComponentId_.empty()) throw std::invalid_argument("Component id must not be empty");
+    addDependency(source);
+}
+
+std::vector<FeatureProperty> ComponentSplitFeature::properties() const
+{
+    const auto normal = normal_.XYZ();
+    return {
+        componentTextProperty("sourceFeatureId", "Parent Feature", sourceFeatureId_),
+        componentTextProperty("sourceComponentId", "Component ID", sourceComponentId_),
+        componentTextProperty("dependencies", "Dependencies", componentDependenciesText(source_)),
+        componentTextProperty("upstreamSketch", "Upstream Sketch", componentUpstreamSketchText(source_)),
+        componentNumberProperty("planeOriginX", "Split origin X", origin_.X(), true),
+        componentNumberProperty("planeOriginY", "Split origin Y", origin_.Y(), true),
+        componentNumberProperty("planeOriginZ", "Split origin Z", origin_.Z(), true),
+        componentNumberProperty("planeNormalX", "Split normal X", normal.X(), true),
+        componentNumberProperty("planeNormalY", "Split normal Y", normal.Y(), true),
+        componentNumberProperty("planeNormalZ", "Split normal Z", normal.Z(), true),
+        componentEditableTextProperty("side", "Segment side",
+            side_ == ComponentSplitSide::Negative ? "negative" : "positive"),
+        componentTextProperty("boundingBox", "Bounding box", componentBoundsText(shape())),
+        componentTextProperty("volume", "Volume (mm^3)", componentVolumeText(shape())),
+        componentTextProperty("validity", "B-Rep validity",
+            !shape().IsNull() && BRepCheck_Analyzer(shape()).IsValid() ? "valid" : "invalid"),
+        componentTextProperty("recomputeStatus", "Recompute status",
+            state() == FeatureState::UpToDate ? "up_to_date"
+                : state() == FeatureState::Failed ? "failed" : "dirty"),
+        componentTextProperty("effectiveVisibility", "Effective visibility",
+            userVisible() && component_.visible ? "visible" : "hidden")};
+}
+
+bool ComponentSplitFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (!std::isfinite(value)) return false;
+    if (key == "planeOriginX") origin_.SetX(value);
+    else if (key == "planeOriginY") origin_.SetY(value);
+    else if (key == "planeOriginZ") origin_.SetZ(value);
+    else if (key == "planeNormalX" || key == "planeNormalY" || key == "planeNormalZ") {
+        auto normal = normal_.XYZ();
+        if (key == "planeNormalX") normal.SetX(value);
+        else if (key == "planeNormalY") normal.SetY(value);
+        else normal.SetZ(value);
+        if (normal.SquareModulus() <= 1.0e-12) return false;
+        try { normal_ = gp_Dir(normal); }
+        catch (...) { return false; }
+    } else return false;
+    markDirty();
+    return true;
+}
+
+bool ComponentSplitFeature::setProperty(const std::string& key,
+                                        const PropertyValue& value)
+{
+    if (key == "side" && std::holds_alternative<std::string>(value)) {
+        const auto& side = std::get<std::string>(value);
+        if (side == "negative") side_ = ComponentSplitSide::Negative;
+        else if (side == "positive") side_ = ComponentSplitSide::Positive;
+        else return false;
+        markDirty();
+        return true;
+    }
+    return ParametricFeature::setProperty(key, value);
+}
+
+TopoDS_Shape ComponentSplitFeature::build() const
+{
+    const auto sourceShape = resolveComponentShape(source_->shape(), component_);
+    Bnd_Box bounds;
+    BRepBndLib::Add(sourceShape, bounds);
+    if (bounds.IsVoid()) throw std::runtime_error("Cannot split an empty component");
+    Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
+    bounds.Get(minX, minY, minZ, maxX, maxY, maxZ);
+    const double extent = std::max({maxX - minX, maxY - minY, maxZ - minZ, 1.0}) + 1.0;
+    const auto plane = BRepBuilderAPI_MakeFace(
+        gp_Pln(origin_, normal_), -extent, extent, -extent, extent).Face();
+    if (plane.IsNull()) throw std::runtime_error("Failed to construct split plane");
+    gp_Vec sideOffset(normal_);
+    sideOffset *= side_ == ComponentSplitSide::Negative ? -extent : extent;
+    gp_Pnt reference = origin_;
+    reference.Translate(sideOffset);
+    BRepPrimAPI_MakeHalfSpace halfSpace(plane, reference);
+    if (!halfSpace.IsDone()) throw std::runtime_error("Failed to construct split half-space");
+    BRepAlgoAPI_Common common(sourceShape, halfSpace.Solid());
+    common.Build();
+    if (!common.IsDone() || common.Shape().IsNull())
+        throw std::runtime_error("OCCT component split failed");
+    int solids = 0;
+    for (TopExp_Explorer explorer(common.Shape(), TopAbs_SOLID); explorer.More(); explorer.Next()) ++solids;
+    if (solids != 1) throw std::runtime_error("Component split must produce exactly one solid per segment");
+    BRepCheck_Analyzer analyzer(common.Shape());
+    if (!analyzer.IsValid()) throw std::runtime_error("Component split B-Rep is invalid");
+    return common.Shape();
+}
+
+void ComponentSplitFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("sourceComponentId", QString::fromStdString(sourceComponentId_));
+    object.insert("componentSignature", componentBounds(component_));
+    object.insert("planeOrigin", QJsonArray{origin_.X(), origin_.Y(), origin_.Z()});
+    object.insert("planeNormal", QJsonArray{normal_.X(), normal_.Y(), normal_.Z()});
+    object.insert("side", side_ == ComponentSplitSide::Negative ? "negative" : "positive");
+}
+
+ParametricFeature::Ptr ComponentSplitFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<ComponentSplitFeature>(std::move(newId), source_, component_,
+        origin_, normal_, side_);
+    copyPlacementTo(copy);
+    return copy;
+}
+
+SplitAssemblyFeature::SplitAssemblyFeature(std::string id, const Ptr& wholeSource,
+    const Ptr& componentSource, const Ptr& negativeSegment, const Ptr& positiveSegment,
+    const Ptr& movedSegment, gp_Trsf componentTransform, const double splitCoordinate)
+    : ParametricFeature(std::move(id), "Split Assembly"),
+      wholeSourceId_(wholeSource ? wholeSource->id() : std::string{}),
+      componentSourceId_(componentSource ? componentSource->id() : std::string{}),
+      wholeSource_(wholeSource), componentSource_(componentSource),
+      negativeSegment_(negativeSegment), positiveSegment_(positiveSegment),
+      movedSegment_(movedSegment),
+      componentTransform_(std::move(componentTransform)), splitCoordinate_(splitCoordinate)
+{
+    if (!wholeSource || !componentSource || !negativeSegment || !positiveSegment || !movedSegment)
+        throw std::invalid_argument("Split assembly requires all source features");
+    addDependency(wholeSource);
+    addDependency(componentSource);
+    addDependency(negativeSegment);
+    addDependency(positiveSegment);
+    addDependency(movedSegment);
+}
+
+TopoDS_Shape SplitAssemblyFeature::build() const
+{
+    const auto whole = wholeSource_->shape();
+    const auto target = transformSplitSource(componentSource_->shape(), componentTransform_);
+    std::vector<TopoDS_Shape> components;
+    TopExp_Explorer explorer(whole, TopAbs_SOLID);
+    bool removed = false;
+    for (; explorer.More(); explorer.Next()) {
+        const auto solid = explorer.Current();
+        if (!removed && sameSolidBounds(solid, target)) {
+            removed = true;
+            continue;
+        }
+        components.push_back(solid);
+    }
+    if (!removed)
+        throw std::runtime_error("Split target component was not found in the selected result");
+    components.push_back(movedSegment_->shape());
+    components.push_back(positiveSegment_->shape());
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (const auto& component : components) {
+        if (component.IsNull()) throw std::runtime_error("Split assembly contains a null segment");
+        builder.Add(compound, component);
+    }
+    BRepCheck_Analyzer analyzer(compound);
+    if (!analyzer.IsValid()) throw std::runtime_error("Split assembly B-Rep is invalid");
+    return compound;
+}
+
+void SplitAssemblyFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("wholeSourceFeatureId", QString::fromStdString(wholeSourceId_));
+    object.insert("componentSourceFeatureId", QString::fromStdString(componentSourceId_));
+    object.insert("negativeSegmentFeatureId", QString::fromStdString(negativeSegment_->id()));
+    object.insert("positiveSegmentFeatureId", QString::fromStdString(positiveSegment_->id()));
+    object.insert("movedSegmentFeatureId", QString::fromStdString(movedSegment_->id()));
+    object.insert("splitCoordinate", splitCoordinate_);
+    QJsonArray matrix;
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            matrix.append(componentTransform_.Value(row, column));
+    object.insert("componentTransform", matrix);
+}
+
+ParametricFeature::Ptr SplitAssemblyFeature::clone(std::string newId) const
+{
+    auto copy = std::make_shared<SplitAssemblyFeature>(std::move(newId), wholeSource_, componentSource_,
+        negativeSegment_, positiveSegment_, movedSegment_, componentTransform_, splitCoordinate_);
     copyPlacementTo(copy);
     return copy;
 }

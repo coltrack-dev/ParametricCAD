@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QPointF>
+#include <QImage>
 #include <QStringList>
 #include <array>
 #include <map>
@@ -38,12 +39,14 @@
 #include "application/VisibilityManager.h"
 #include "operations/ParametricFeatures.h"
 #include "model/TopologicalReference.h"
+#include "cae/Mesh.h"
 
 namespace cad::parametric {
 class Body;
 }
 
 class QAction;
+class AIS_Triangulation;
 class QLabel;
 class QToolBar;
 class QKeyEvent;
@@ -79,6 +82,13 @@ public:
         Shaded,
         ShadedWithEdges,
         Wireframe
+    };
+
+    enum class MeshDisplayMode
+    {
+        Geometry,
+        Mesh,
+        GeometryAndMesh
     };
 
     enum class SectionAxis
@@ -123,6 +133,8 @@ public:
     std::int64_t lastViewerUpdateMilliseconds() const noexcept;
     std::int64_t lastSelectionActivationMilliseconds() const noexcept;
     void updateFeature(const TopoDS_Shape& shape, const QString& featureId);
+    void updateComponent(const TopoDS_Shape& shape, const QString& componentId,
+                         const QString& featureId);
     void updateSketchConstructionGeometry(
         const cad::parametric::SketchFeature& sketch, const QString& featureId);
     void selectFeatures(const QStringList& featureIds);
@@ -144,9 +156,29 @@ public:
     void restoreCamera(const CameraState& state);
     cad::application::VisibilityMode featureVisibilityMode(const QString& featureId) const noexcept;
     void retainFeatures(const QStringList& featureIds);
+    void retainComponents(const QStringList& componentIds);
+    void setComponentVisibility(const QString& componentId,
+                                cad::application::VisibilityMode mode);
+    cad::application::VisibilityMode componentVisibilityMode(
+        const QString& componentId) const noexcept;
     void clear();
     bool hasDisplayedShapes() const;
+    std::size_t featurePresentationCount() const noexcept { return featureObjects_.size(); }
+    std::size_t componentPresentationCount() const noexcept { return componentObjects_.size(); }
+    std::size_t displayedFeaturePresentationCount() const noexcept;
+    std::size_t displayedComponentPresentationCount() const noexcept;
+    QImage captureImage();
     void fitAll();
+    void showMesh(const cad::cae::VolumeMesh& mesh);
+    void hideMesh();
+    void deleteMeshPresentation();
+    bool meshVisible() const noexcept;
+    void showPotential(const cad::cae::VolumeMesh&, const std::vector<double>& nodalPotential);
+    void showElectricField(
+        const cad::cae::VolumeMesh&, const std::vector<std::array<double, 3>>& elementField);
+    void clearCaeResultPresentation();
+    void setMeshDisplayMode(MeshDisplayMode mode);
+    MeshDisplayMode meshDisplayMode() const noexcept;
     QAction* objectSelectionAction() const noexcept { return selectObjectAction_; }
     QAction* faceSelectionAction() const noexcept { return selectFaceAction_; }
     QAction* edgeSelectionAction() const noexcept { return selectEdgeAction_; }
@@ -167,7 +199,8 @@ public:
     void restoreSelection(
         const cad::parametric::Body& body,
         const std::vector<cad::topology::TopologicalReference>& topology,
-        const std::vector<std::string>& objectFeatureIds);
+        const std::vector<std::string>& objectFeatureIds,
+        const std::vector<std::string>& componentIds = {});
     void clearSelection();
     void enterSketchMode(const gp_Pnt& origin, const gp_Dir& xDirection,
                          const gp_Dir& yDirection, const gp_Dir& normal,
@@ -241,6 +274,7 @@ private:
     friend class MainWindowTests;
     void traceSelectionLifecycle(const QString& message) const;
     void initializeOcc();
+    void synchronizeOccViewport(const char* reason);
     void notifyFeatureSelection();
     void setupToolBar();
     void syncToolBarState();
@@ -274,6 +308,7 @@ private:
     void applyDisplayMode(const Handle(AIS_Shape)& object,
                           const TopoDS_Shape& shape) const;
     void applySelectionMode();
+    void removeFeaturePresentation(const QString& featureId);
     void releaseManagedSelection(const QString& featureId);
     void updateManagedShape(const QString& featureId,
                             const Handle(AIS_Shape)& object,
@@ -332,6 +367,9 @@ private:
     double orbitAzimuth_{0.0};
     double orbitElevation_{0.0};
     bool initialized_{false};
+    bool occViewportSynchronized_{false};
+    Standard_Integer lastOccWindowWidth_{0};
+    Standard_Integer lastOccWindowHeight_{0};
     SelectionMode selectionMode_{SelectionMode::Object};
     bool selectionActivationDirty_{true};
     mutable std::uint64_t selectionTraceSequence_{0};
@@ -342,14 +380,26 @@ private:
     QPoint detectedCyclePosition_;
     std::vector<Handle(AIS_Shape)> displayedShapes_;
     std::map<QString, Handle(AIS_Shape)> featureObjects_;
+    std::map<QString, Handle(AIS_Shape)> componentObjects_;
+    std::map<QString, QString> componentFeatures_;
+    std::size_t perfAisCreated_{0};
+    std::size_t perfAisReused_{0};
+    std::size_t perfViewerUpdates_{0};
+    std::size_t perfViewRedraws_{0};
     std::map<QString, Handle(AIS_Shape)> sketchConstructionObjects_;
     std::map<QString, Standard_Integer> managedSelectionModes_;
     bool selectionTraceEnabled_{false};
     std::map<QString, cad::application::VisibilityMode> featureVisibility_;
+    std::map<QString, cad::application::VisibilityMode> componentVisibility_;
     Handle(AIS_Shape) spatialBoxObject_;
     Handle(AIS_Shape) sectionPlaneObject_;
     Handle(AIS_Shape) sectionHandleObject_;
     Handle(AIS_Shape) sectionNormalObject_;
+    Handle(AIS_Triangulation) meshObject_;
+    bool meshVisible_{false};
+    MeshDisplayMode meshDisplayMode_{MeshDisplayMode::Geometry};
+    std::map<QString, bool> geometryVisibilityBeforeMeshOnly_;
+    void showMeshScalar(const cad::cae::VolumeMesh&, const std::vector<double>& values);
     Handle(Graphic3d_ClipPlane) sectionClipPlane_;
     SectionState sectionState_;
     Bnd_Box sectionBounds_;

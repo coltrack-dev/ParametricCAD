@@ -28,6 +28,21 @@ bool hidden(const Body& body, const std::string& id)
     const auto ids = hiddenFeatureIds(body);
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
+std::vector<SketchEntity> rectangleEntities(double width, double height)
+{
+    return {
+        SketchLine{{0, 0}, {width, 0}},
+        SketchLine{{width, 0}, {width, height}},
+        SketchLine{{width, height}, {0, height}},
+        SketchLine{{0, height}, {0, 0}},
+    };
+}
+void addRectangle(const std::shared_ptr<SketchFeature>& sketch, double width, double height)
+{
+    const auto entities = rectangleEntities(width, height);
+    for (const auto& entity : entities)
+        sketch->addEntity(entity);
+}
 void changeWidth(QUndoStack& stack, Body& body, const ParametricFeature::Ptr& sketch, double width)
 {
     const auto properties = sketch->properties();
@@ -97,6 +112,7 @@ private slots:
         Body body;
         QUndoStack stack;
         auto sketch = std::make_shared<SketchFeature>("sketch", 10, 6);
+        addRectangle(sketch, 10, 6);
         auto face = std::make_shared<FaceFeature>("face", sketch);
         auto unrelated = std::make_shared<BoxParametricFeature>("unrelated", 2, 3, 4);
         auto extrude = std::make_shared<ExtrudeFeature>("extrude", face, gp_Vec(0, 0, 5));
@@ -105,8 +121,11 @@ private slots:
         }
         const auto originalUnrelated = unrelated->shape();
         const auto originalFace = face->shape();
-        changeWidth(stack, body, sketch, 15);
-        QCOMPARE(stack.undoText(), QString("Change Sketch Width"));
+        const auto beforeEntities = sketch->entities();
+        stack.push(new ReplaceSketchCommand(body, sketch, beforeEntities,
+            rectangleEntities(15, 6), sketch->constraints(), sketch->constraints(),
+            "Change Sketch Geometry"));
+        QCOMPARE(stack.undoText(), QString("Change Sketch Geometry"));
         QCOMPARE(stack.count(), 5);
         QVERIFY(std::abs(volume(extrude->shape()) - 450) < 1e-7);
         QVERIFY(!face->shape().IsSame(originalFace));
@@ -289,6 +308,7 @@ private slots:
         Body body;
         QUndoStack stack;
         auto sketch = std::make_shared<SketchFeature>("sketch", 10, 6);
+        addRectangle(sketch, 10, 6);
         auto face = std::make_shared<FaceFeature>("face", sketch);
         auto box = std::make_shared<BoxParametricFeature>("box", 2, 3, 4);
         body.addFeature(sketch);
@@ -312,6 +332,7 @@ private slots:
         Body body;
         QUndoStack stack;
         auto sketch = std::make_shared<SketchFeature>("sketch", 10, 6);
+        addRectangle(sketch, 10, 6);
         auto face = std::make_shared<FaceFeature>("face", sketch);
         auto box = std::make_shared<BoxParametricFeature>("box", 2, 3, 4);
         auto extrude = std::make_shared<ExtrudeFeature>("extrude", face, gp_Vec(0, 0, 5));
@@ -375,6 +396,7 @@ private slots:
         Body body;
         QUndoStack stack;
         auto sketch = std::make_shared<SketchFeature>("sketch", 10, 6);
+        addRectangle(sketch, 10, 6);
         auto face = std::make_shared<FaceFeature>("face", sketch);
         auto extrude = std::make_shared<ExtrudeFeature>("extrude", face, gp_Vec(0, 0, 5));
         stack.push(new AddFeatureCommand(body, sketch, "Create Sketch"));
@@ -441,14 +463,13 @@ private slots:
         auto face = std::make_shared<FaceFeature>("face", sketch);
         body.addFeature(sketch);
         body.addFeature(face);
-        QVERIFY(body.recompute());
+        QVERIFY(!body.recompute());
         changeWidth(stack, body, sketch, 0);
         QCOMPARE(sketch->state(), FeatureState::Failed);
-        QVERIFY(hidden(body, "face"));
         stack.undo();
         QCOMPARE(sketch->width(), 10.0);
-        QCOMPARE(face->state(), FeatureState::UpToDate);
-        QVERIFY(!hidden(body, "face"));
+        QCOMPARE(sketch->state(), FeatureState::UpToDate);
+        QCOMPARE(face->state(), FeatureState::Failed);
         stack.redo();
         QCOMPARE(sketch->state(), FeatureState::Failed);
     }

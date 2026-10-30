@@ -1211,12 +1211,14 @@ void FeatureEditorPanel::rebuildProperties(
                 });
         } else if (property.editable && std::holds_alternative<std::string>(property.value)
                    && (property.key == "distribution" || property.key == "orientation"
-                       || property.key == "axisType")) {
+                       || property.key == "axisType" || property.key == "side")) {
             auto* editor = new QComboBox(propertiesWidget_);
             if (property.key == "distribution") {
                 editor->addItems({QStringLiteral("FixedSpacing"), QStringLiteral("FitCount")});
             } else if (property.key == "orientation") {
                 editor->addItems({QStringLiteral("Fixed"), QStringLiteral("Tangent")});
+            } else if (property.key == "side") {
+                editor->addItems({QStringLiteral("negative"), QStringLiteral("positive")});
             } else {
                 editor->addItem(QStringLiteral("X"), QStringLiteral("GlobalX"));
                 editor->addItem(QStringLiteral("Y"), QStringLiteral("GlobalY"));

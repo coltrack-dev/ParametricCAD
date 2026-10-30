@@ -452,6 +452,24 @@ gp_Trsf rigidPlacement(const double* values)
     return placement;
 }
 
+gp_Trsf transformValue(const QJsonObject& object)
+{
+    const auto values = object.value("transformation").toArray();
+    require(values.size() == 12, "Invalid Transform matrix");
+    double matrix[12]{};
+    for (int index = 0; index < 12; ++index) {
+        require(values.at(index).isDouble() && std::isfinite(values.at(index).toDouble()),
+            "Invalid Transform matrix value");
+        matrix[index] = values.at(index).toDouble();
+    }
+    gp_Trsf transformation;
+    transformation.SetValues(
+        matrix[0], matrix[1], matrix[2], matrix[3],
+        matrix[4], matrix[5], matrix[6], matrix[7],
+        matrix[8], matrix[9], matrix[10], matrix[11]);
+    return transformation;
+}
+
 std::vector<cad::topology::TopologicalReference> topologicalReferences(
     const QJsonObject& o, const char* key, const std::string& sourceId)
 {
@@ -617,6 +635,75 @@ QJsonObject encode(const ParametricFeature::Ptr& feature, const Body& preceding)
                 "Feature references a missing or forward dependency");
     }
     return feature->serialize();
+}
+
+QJsonArray encodeComponents(const Body& body)
+{
+    QJsonArray result;
+    for (const auto& component : body.components()) {
+        QJsonObject object{
+            {"id", QString::fromStdString(component.id)},
+            {"name", QString::fromStdString(component.name)},
+            {"role", QString::fromStdString(component.role)},
+            {"sourceFeatureId", QString::fromStdString(component.sourceFeatureId)},
+            {"min", QJsonArray{component.minX, component.minY, component.minZ}},
+            {"max", QJsonArray{component.maxX, component.maxY, component.maxZ}},
+            {"volume", component.volume}, {"visible", component.visible},
+            {"technicalHidden", component.technicalHidden}};
+        if (component.parentComponentId)
+            object.insert("parentComponentId", QString::fromStdString(*component.parentComponentId));
+        if (!component.replacementComponentIds.empty()) {
+            QJsonArray replacements;
+            for (const auto& id : component.replacementComponentIds)
+                replacements.append(QString::fromStdString(id));
+            object.insert("replacementComponentIds", replacements);
+        }
+        result.append(object);
+    }
+    return result;
+}
+
+std::vector<ModelComponent> decodeComponents(const QJsonObject& root)
+{
+    std::vector<ModelComponent> result;
+    const auto value = root.value("components");
+    if (value.isUndefined()) return result;
+    require(value.isArray(), "Invalid component metadata");
+    for (const auto& entry : value.toArray()) {
+        require(entry.isObject(), "Invalid component metadata entry");
+        const auto object = entry.toObject();
+        const auto min = object.value("min").toArray();
+        const auto max = object.value("max").toArray();
+        require(min.size() == 3 && max.size() == 3, "Invalid component bounds");
+        ModelComponent component;
+        component.id = string(object, "id");
+        component.name = string(object, "name");
+        component.role = string(object, "role");
+        component.sourceFeatureId = string(object, "sourceFeatureId");
+        component.minX = min.at(0).toDouble(); component.minY = min.at(1).toDouble();
+        component.minZ = min.at(2).toDouble(); component.maxX = max.at(0).toDouble();
+        component.maxY = max.at(1).toDouble(); component.maxZ = max.at(2).toDouble();
+        component.volume = number(object, "volume");
+        if (object.contains("visible")) component.visible = boolean(object, "visible");
+        if (object.contains("technicalHidden"))
+            component.technicalHidden = boolean(object, "technicalHidden");
+        if (object.contains("parentComponentId"))
+            component.parentComponentId = string(object, "parentComponentId");
+        if (object.contains("replacementComponentIds")) {
+            require(object.value("replacementComponentIds").isArray(),
+                "Invalid component replacement metadata");
+            for (const auto& replacement : object.value("replacementComponentIds").toArray()) {
+                require(replacement.isString() && !replacement.toString().isEmpty(),
+                    "Invalid component replacement id");
+                component.replacementComponentIds.push_back(replacement.toString().toStdString());
+            }
+            // Files written before technicalHidden was persisted encoded
+            // replacement state by the replacement list itself.
+            component.technicalHidden = true;
+        }
+        result.push_back(std::move(component));
+    }
+    return result;
 }
 
 using FeatureFactory = std::function<ParametricFeature::Ptr(const QJsonObject&, const Body&)>;
@@ -877,6 +964,99 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 static_cast<int>(number(o, "count")), distribution, orientation,
                 number(o, "startOffset"), number(o, "endOffset"), boolean(o, "includeSource"));
         }},
+        {"Transform", [](const QJsonObject& o, const Body& body) {
+            std::vector<ParametricFeature::Ptr> sources;
+            for (const auto& sourceId : strings(o, "sourceIds")) {
+                const auto source = body.findFeature(sourceId);
+                require(static_cast<bool>(source), "Transform references missing source");
+                sources.push_back(source);
+            }
+            const auto operationName = string(o, "operation");
+            const auto operation = operationName == "Mirror"
+                ? TransformOperation::Mirror
+                : operationName == "Translate" ? TransformOperation::Translate
+                : operationName == "Rotate" ? TransformOperation::Rotate
+                : throw std::invalid_argument("Invalid Transform operation");
+            const auto modeName = string(o, "resultMode");
+            const auto mode = modeName == "copy" ? TransformResultMode::Copy
+                : modeName == "replace_result" ? TransformResultMode::ReplaceResult
+                : throw std::invalid_argument("Invalid Transform result mode");
+            return std::make_shared<TransformFeature>(string(o, "id"), sources,
+                operation, mode, transformValue(o));
+        }},
+        {"ComponentTransform", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "ComponentTransform references missing source");
+            const auto values = o.value("componentSignature").toArray();
+            require(values.size() == 7, "Invalid ComponentTransform signature");
+            ModelComponent component;
+            component.id = string(o, "sourceComponentId");
+            component.sourceFeatureId = string(o, "sourceFeatureId");
+            component.minX = values.at(0).toDouble(); component.minY = values.at(1).toDouble();
+            component.minZ = values.at(2).toDouble(); component.maxX = values.at(3).toDouble();
+            component.maxY = values.at(4).toDouble(); component.maxZ = values.at(5).toDouble();
+            component.volume = values.at(6).toDouble();
+            const auto operationName = string(o, "operation");
+            const auto operation = operationName == "Mirror" ? TransformOperation::Mirror
+                : operationName == "Translate" ? TransformOperation::Translate
+                : operationName == "Rotate" ? TransformOperation::Rotate
+                : throw std::invalid_argument("Invalid ComponentTransform operation");
+            const auto modeName = string(o, "resultMode");
+            const auto mode = modeName == "copy" ? TransformResultMode::Copy
+                : modeName == "replace_result" ? TransformResultMode::ReplaceResult
+                : throw std::invalid_argument("Invalid ComponentTransform result mode");
+            return std::make_shared<ComponentTransformFeature>(string(o, "id"), source,
+                component, operation, mode, transformValue(o));
+        }},
+        {"SplitSegment", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "SplitSegment references missing source");
+            const auto sideName = string(o, "side");
+            const auto side = sideName == "negative" ? SplitSide::Negative
+                : sideName == "positive" ? SplitSide::Positive
+                : throw std::invalid_argument("Invalid SplitSegment side");
+            QJsonObject matrixObject = o;
+            matrixObject.insert("transformation", o.value("sourceTransform"));
+            return std::make_shared<SplitSegmentFeature>(string(o, "id"), source,
+                transformValue(matrixObject), number(o, "splitCoordinate"), side);
+        }},
+        {"ComponentSplit", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "ComponentSplit references missing source");
+            const auto values = o.value("componentSignature").toArray();
+            const auto origin = o.value("planeOrigin").toArray();
+            const auto normal = o.value("planeNormal").toArray();
+            require(values.size() == 7 && origin.size() == 3 && normal.size() == 3,
+                "Invalid ComponentSplit parameters");
+            ModelComponent component;
+            component.id = string(o, "sourceComponentId");
+            component.sourceFeatureId = string(o, "sourceFeatureId");
+            component.minX = values.at(0).toDouble(); component.minY = values.at(1).toDouble();
+            component.minZ = values.at(2).toDouble(); component.maxX = values.at(3).toDouble();
+            component.maxY = values.at(4).toDouble(); component.maxZ = values.at(5).toDouble();
+            component.volume = values.at(6).toDouble();
+            const auto sideName = string(o, "side");
+            const auto side = sideName == "negative" ? ComponentSplitSide::Negative
+                : sideName == "positive" ? ComponentSplitSide::Positive
+                : throw std::invalid_argument("Invalid ComponentSplit side");
+            return std::make_shared<ComponentSplitFeature>(string(o, "id"), source, component,
+                gp_Pnt(origin.at(0).toDouble(), origin.at(1).toDouble(), origin.at(2).toDouble()),
+                gp_Dir(normal.at(0).toDouble(), normal.at(1).toDouble(), normal.at(2).toDouble()), side);
+        }},
+        {"SplitAssembly", [](const QJsonObject& o, const Body& body) {
+            const auto whole = body.findFeature(string(o, "wholeSourceFeatureId"));
+            const auto component = body.findFeature(string(o, "componentSourceFeatureId"));
+            const auto negative = body.findFeature(string(o, "negativeSegmentFeatureId"));
+            const auto positive = body.findFeature(string(o, "positiveSegmentFeatureId"));
+            const auto moved = body.findFeature(string(o, "movedSegmentFeatureId"));
+            require(whole && component && negative && positive && moved,
+                "SplitAssembly references missing source");
+            QJsonObject matrixObject = o;
+            matrixObject.insert("transformation", o.value("componentTransform"));
+            return std::make_shared<SplitAssemblyFeature>(string(o, "id"), whole, component,
+                negative, positive, moved, transformValue(matrixObject),
+                number(o, "splitCoordinate"));
+        }},
         {"IfcImported", [](const QJsonObject& o, const Body&) {
             const auto payload = o.value("geometryPayload");
             require(payload.isString() && !payload.toString().isEmpty(),
@@ -962,7 +1142,8 @@ bool ProjectFile::save(const QString& path, const Document& document,
         }
         QJsonObject root{{"format", "ParametricCAD"}, {"version", 1},
             {"storage", "archive"}, {"containerVersion", 1},
-            {"features", features}, {"body", history}};
+            {"features", features}, {"body", history},
+            {"components", encodeComponents(body)}};
         if (visibilityManager) {
             QJsonArray groups;
             for (const auto& group : visibilityManager->groups()) {
@@ -1142,6 +1323,8 @@ bool ProjectFile::load(const QString& path, Document& document,
             loadedBody.addFeature(decode(object, loadedBody));
             if (progress) progress(legacyFeatures.size() + index + 1, totalFeatures);
         }
+        const auto loadedComponents = decodeComponents(root);
+        if (!loadedComponents.empty()) loadedBody.replaceComponents(loadedComponents);
         if (metrics) metrics->deserializeMilliseconds = stageTimer.elapsed();
         stageTimer.restart();
         if (recompute && !loadedBody.recompute()) throw std::runtime_error(loadedBody.lastError());

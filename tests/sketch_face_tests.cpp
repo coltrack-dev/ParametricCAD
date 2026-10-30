@@ -3,6 +3,7 @@
 #include "model/Body.h"
 #include "model/ProjectFile.h"
 #include "model/ProjectArchive.h"
+#include "application/ModelingController.h"
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
@@ -17,9 +18,13 @@
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <cmath>
+#include <array>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 using namespace cad::parametric;
@@ -63,6 +68,110 @@ private slots:
         QVERIFY(!face.error().empty());
     }
 
+    void emptyGlobalSketchesHaveNoGeometry()
+    {
+        const std::array supports{
+            SketchSupportType::XY, SketchSupportType::XZ, SketchSupportType::YZ};
+        for (const auto support : supports) {
+            SketchFeature sketch("empty-sketch", support, 100.0, 60.0);
+            QVERIFY(sketch.recompute());
+            QVERIFY(!sketch.shape().IsNull());
+            QCOMPARE(sketch.shape().ShapeType(), TopAbs_COMPOUND);
+            QVERIFY(!TopoDS_Iterator(sketch.shape()).More());
+            QCOMPARE(sketch.entityCount(), std::size_t{0});
+        }
+    }
+
+    void emptyFaceSketchHasNoGeometry()
+    {
+        cad::application::ModelingController controller;
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto sketch = controller.createSketchOnFace({{
+            {box.id, cad::application::SelectionKind::Face, 1}}});
+        QVERIFY(sketch.success);
+        const auto feature = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(sketch.id));
+        QVERIFY(feature);
+        QVERIFY(controller.body().recompute());
+        QVERIFY(!feature->shape().IsNull());
+        QCOMPARE(feature->shape().ShapeType(), TopAbs_COMPOUND);
+        QVERIFY(!TopoDS_Iterator(feature->shape()).More());
+    }
+
+    void emptySketchTransitionsAndUndoRedo()
+    {
+        cad::application::ModelingController controller;
+        const auto created = controller.createSketch(SketchSupportType::XY);
+        QVERIFY(created.success);
+        auto sketch = std::dynamic_pointer_cast<SketchFeature>(
+            controller.body().findFeature(created.id));
+        QVERIFY(sketch);
+        QVERIFY(!TopoDS_Iterator(sketch->shape()).More());
+
+        QVERIFY(controller.addSketchLine(created.id, {0, 0}, {20, 0}).success);
+        QVERIFY(sketch->shape().ShapeType() == TopAbs_WIRE);
+        controller.undo();
+        QVERIFY(sketch->entities().empty());
+        QVERIFY(controller.body().recompute());
+        QVERIFY(!TopoDS_Iterator(sketch->shape()).More());
+        controller.redo();
+        QVERIFY(!sketch->entities().empty());
+        QVERIFY(sketch->shape().ShapeType() == TopAbs_WIRE);
+
+        sketch->removeLastEntity();
+        QVERIFY(controller.body().recompute());
+        QVERIFY(sketch->entities().empty());
+        QVERIFY(!TopoDS_Iterator(sketch->shape()).More());
+    }
+
+    void emptySketchRoundTripAndOperationsRejectIt()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        cad::application::ModelingController controller;
+        const auto xy = controller.createSketch(SketchSupportType::XY);
+        const auto xz = controller.createSketch(SketchSupportType::XZ);
+        const auto yz = controller.createSketch(SketchSupportType::YZ);
+        QVERIFY(xy.success && xz.success && yz.success);
+        const auto box = controller.createBox();
+        QVERIFY(box.success);
+        const auto face = controller.createSketchOnFace({{
+            {box.id, cad::application::SelectionKind::Face, 1}}});
+        QVERIFY(face.success);
+        QVERIFY(controller.body().recompute());
+
+        QString error;
+        const auto path = directory.filePath("empty-sketches.pcad");
+        Document document;
+        QVERIFY2(ProjectFile::save(path, document, controller.body(), error),
+                 qPrintable(error));
+        Document loadedDocument;
+        Body loadedBody;
+        QVERIFY2(ProjectFile::load(path, loadedDocument, loadedBody, error),
+                 qPrintable(error));
+        for (const auto& id : {xy.id, xz.id, yz.id, face.id}) {
+            const auto loaded = std::dynamic_pointer_cast<SketchFeature>(
+                loadedBody.findFeature(id));
+            QVERIFY(loaded);
+            QVERIFY(loaded->entities().empty());
+            QVERIFY(!loaded->shape().IsNull());
+            QCOMPARE(loaded->shape().ShapeType(), TopAbs_COMPOUND);
+            QVERIFY(!TopoDS_Iterator(loaded->shape()).More());
+        }
+
+        const auto selection = cad::application::SelectionSnapshot{{
+            {xy.id, cad::application::SelectionKind::Object, std::nullopt}}};
+        const auto extrude = controller.createExtrudeFromSketch(selection, 5.0);
+        QVERIFY(!extrude.success);
+        QVERIFY(QString::fromStdString(extrude.error).contains("no user geometry"));
+
+        const auto pocket = controller.createPocketFromSketch({{
+            {face.id, cad::application::SelectionKind::Object, std::nullopt}}}, 5.0);
+        QVERIFY(!pocket.success);
+        QVERIFY(QString::fromStdString(pocket.error).contains("no user geometry"));
+    }
+
     void geometryAndRebuild()
     {
         Body body;
@@ -70,11 +179,14 @@ private slots:
         auto face = std::make_shared<FaceFeature>("face", sketch);
         body.addFeature(sketch);
         body.addFeature(face);
+        sketch->addEntity(SketchLine{{0, 0}, {10, 0}});
+        sketch->addEntity(SketchLine{{10, 0}, {10, 6}});
+        sketch->addEntity(SketchLine{{10, 6}, {0, 6}});
+        sketch->addEntity(SketchLine{{0, 6}, {0, 0}});
         QVERIFY2(body.recompute(), body.lastError().c_str());
         QVERIFY(!sketch->shape().IsNull());
         QVERIFY(!face->shape().IsNull());
-        QCOMPARE(sketch->shape().ShapeType(), TopAbs_WIRE);
-        QVERIFY(BRep_Tool::IsClosed(TopoDS::Wire(sketch->shape())));
+        QCOMPARE(sketch->shape().ShapeType(), TopAbs_FACE);
         QVERIFY(BRepCheck_Analyzer(sketch->shape()).IsValid());
         QCOMPARE(face->shape().ShapeType(), TopAbs_FACE);
         QVERIFY(BRepCheck_Analyzer(face->shape()).IsValid());
@@ -84,13 +196,17 @@ private slots:
         QCOMPARE(face->dependencies().front().lock().get(), sketch.get());
         const auto oldWire = sketch->shape();
         const auto oldFace = face->shape();
-        sketch->setSize(20, 6);
+        sketch->replaceEntities(0, 4, {
+            SketchLine{{0, 0}, {20, 0}}, SketchLine{{20, 0}, {20, 6}},
+            SketchLine{{20, 6}, {0, 6}}, SketchLine{{0, 6}, {0, 0}}});
         body.markDirtyFrom(sketch->id());
         QVERIFY(body.recompute());
         QVERIFY(!sketch->shape().IsSame(oldWire));
         QVERIFY(!face->shape().IsSame(oldFace));
         QVERIFY(std::abs(area(face->shape()) - 120) < 1e-8);
-        sketch->setSize(20, 8);
+        sketch->replaceEntities(0, 4, {
+            SketchLine{{0, 0}, {20, 0}}, SketchLine{{20, 0}, {20, 8}},
+            SketchLine{{20, 8}, {0, 8}}, SketchLine{{0, 8}, {0, 0}}});
         body.markDirtyFrom(sketch->id());
         QVERIFY(body.recompute());
         QVERIFY(std::abs(area(face->shape()) - 160) < 1e-8);
@@ -107,16 +223,20 @@ private slots:
         FaceFeature face("face", sketch);
         QVERIFY(!face.recompute());
         QVERIFY(face.error().find("rebuilt") != std::string::npos);
+        sketch->addEntity(SketchLine{{0, 0}, {5, 0}});
+        sketch->addEntity(SketchLine{{5, 0}, {5, 5}});
+        sketch->addEntity(SketchLine{{5, 5}, {0, 5}});
+        sketch->addEntity(SketchLine{{0, 5}, {0, 0}});
         QVERIFY(sketch->recompute());
         QVERIFY(face.recompute());
-        sketch->setSize(0, 6);
-        QVERIFY(!sketch->recompute());
+        sketch->removeLastEntity();
+        QVERIFY(sketch->recompute());
         QVERIFY(!face.recompute());
         QVERIFY(face.shape().IsNull());
-        sketch->setSize(5, 6);
+        sketch->addEntity(SketchLine{{0, 5}, {0, 0}});
         QVERIFY(sketch->recompute());
         QVERIFY(face.recompute());
-        QVERIFY(std::abs(area(face.shape()) - 30) < 1e-8);
+        QVERIFY(std::abs(area(face.shape()) - 25) < 1e-8);
         sketch.reset();
         QVERIFY(!face.recompute());
         QVERIFY(face.error().find("no longer exists") != std::string::npos);
@@ -138,6 +258,10 @@ private slots:
         face->setName("Face001");
         body.addFeature(sketch);
         body.addFeature(face);
+        sketch->addEntity(SketchLine{{0, 0}, {10, 0}});
+        sketch->addEntity(SketchLine{{10, 0}, {10, 6}});
+        sketch->addEntity(SketchLine{{10, 6}, {0, 6}});
+        sketch->addEntity(SketchLine{{0, 6}, {0, 0}});
         QVERIFY(body.recompute());
         QString error;
         QVERIFY2(ProjectFile::save(path, document, body, error), qPrintable(error));
@@ -153,6 +277,8 @@ private slots:
         const auto loadedSketch = loadedBody.findFeature("sketch-001");
         const auto loadedFace = loadedBody.findFeature("face-001");
         QVERIFY(loadedSketch && loadedFace);
+        const auto loadedSketchFeature = std::dynamic_pointer_cast<SketchFeature>(loadedSketch);
+        QVERIFY(loadedSketchFeature);
         QCOMPARE(loadedSketch->role(), FeatureRole::Sketch);
         QCOMPARE(loadedFace->role(), FeatureRole::Face);
         QCOMPARE(loadedSketch->name(), std::string("Sketch001"));
@@ -161,8 +287,9 @@ private slots:
         QCOMPARE(std::get<double>(loadedSketch->properties()[1].value), 6.0);
         QCOMPARE(loadedFace->dependencies().front().lock().get(), loadedSketch.get());
         QVERIFY(std::abs(area(loadedFace->shape()) - 60) < 1e-8);
-        QVERIFY(loadedSketch->setNumericProperty("width", 15));
-        QVERIFY(loadedSketch->setNumericProperty("height", 8));
+        loadedSketchFeature->replaceEntities(0, 4, {
+            SketchLine{{0, 0}, {15, 0}}, SketchLine{{15, 0}, {15, 8}},
+            SketchLine{{15, 8}, {0, 8}}, SketchLine{{0, 8}, {0, 0}}});
         loadedBody.markDirtyFrom(loadedSketch->id());
         QVERIFY(loadedBody.recompute());
         QVERIFY(std::abs(area(loadedFace->shape()) - 120) < 1e-8);

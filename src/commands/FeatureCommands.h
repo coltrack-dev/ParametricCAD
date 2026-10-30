@@ -42,6 +42,22 @@ private:
     std::vector<parametric::ParametricFeature::Ptr> features_;
 };
 
+class ReplaceComponentsCommand final : public QUndoCommand
+{
+public:
+    ReplaceComponentsCommand(parametric::Body& body,
+                             std::vector<parametric::ModelComponent> before,
+                             std::vector<parametric::ModelComponent> after,
+                             const QString& text);
+    void undo() override;
+    void redo() override;
+
+private:
+    parametric::Body& body_;
+    std::vector<parametric::ModelComponent> before_;
+    std::vector<parametric::ModelComponent> after_;
+};
+
 class AddSketchEntityCommand final : public QUndoCommand
 {
 public:
@@ -418,7 +434,7 @@ private:
         setter_(*feature_, value);
         body_.markDirtyFrom(feature_->id());
         // Invalid edits remain undoable; recompute records their model error state.
-        body_.recompute();
+        if (!body_.recomputeDeferred()) body_.recompute();
     }
     parametric::Body& body_;
     std::shared_ptr<FeatureType> feature_;

@@ -1,4 +1,5 @@
 #include "application/ModelingController.h"
+#include "application/ModelTransaction.h"
 #include "application/SelectionResolver.h"
 
 #include "commands/FeatureCommands.h"
@@ -12,6 +13,11 @@
 #include "operations/SketchConstraintSolver.h"
 
 #include <TopoDS.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepGProp.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <Bnd_Box.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <TopExp.hxx>
@@ -23,10 +29,14 @@
 #include <cmath>
 #include <memory>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace cad::application {
 
 namespace {
+using cad::parametric::ComponentResolver;
+using cad::parametric::ModelComponent;
+
 std::string id(const char* prefix)
 {
     return std::string(prefix) + "-"
@@ -51,6 +61,63 @@ bool containsVisibilityCommand(const QUndoCommand* command)
         if (containsVisibilityCommand(command->child(index))) return true;
     }
     return false;
+}
+
+ModelingResult componentFailure(const std::string& message)
+{
+    return {false, {}, message, {}};
+}
+
+ModelComponent componentFromShape(const TopoDS_Shape& shape, const std::string& id,
+                                  const std::string& sourceFeatureId)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) throw std::runtime_error("Component result has empty bounds");
+    ModelComponent component;
+    component.id = id;
+    component.name = "Component result";
+    component.sourceFeatureId = sourceFeatureId;
+    bounds.Get(component.minX, component.minY, component.minZ,
+               component.maxX, component.maxY, component.maxZ);
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    component.volume = properties.Mass();
+    return component;
+}
+
+std::vector<ModelComponent> componentMetadata(const cad::parametric::Body& body)
+{
+    if (!body.components().empty()) return body.components();
+    std::vector<ModelComponent> result;
+    for (const auto& feature : body.features()) {
+        const auto generated = ComponentResolver::enumerate(body, feature->id());
+        result.insert(result.end(), generated.begin(), generated.end());
+    }
+    return result;
+}
+
+bool dependsOn(const cad::parametric::ParametricFeature::Ptr& feature,
+               const std::string& ancestorId)
+{
+    if (!feature) return false;
+    for (const auto& weakDependency : feature->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        if (!dependency) continue;
+        if (dependency->id() == ancestorId || dependsOn(dependency, ancestorId)) return true;
+    }
+    return false;
+}
+
+void collectFeatureAndDependencies(
+    const cad::parametric::ParametricFeature::Ptr& feature,
+    std::vector<std::string>& ids)
+{
+    if (!feature) return;
+    if (std::find(ids.begin(), ids.end(), feature->id()) != ids.end()) return;
+    ids.push_back(feature->id());
+    for (const auto& weakDependency : feature->dependencies())
+        collectFeatureAndDependencies(weakDependency.lock(), ids);
 }
 
 bool validateSketchProfile(
@@ -83,6 +150,64 @@ bool sameSegment(const gp_Pnt& a, const gp_Pnt& b, const gp_Pnt& c, const gp_Pnt
     constexpr double tolerance = 1.0e-6;
     return (a.Distance(c) <= tolerance && b.Distance(d) <= tolerance)
         || (a.Distance(d) <= tolerance && b.Distance(c) <= tolerance);
+}
+
+double orientation2d(const gp_Pnt2d& a, const gp_Pnt2d& b, const gp_Pnt2d& c)
+{
+    return (b.X() - a.X()) * (c.Y() - a.Y())
+        - (b.Y() - a.Y()) * (c.X() - a.X());
+}
+
+bool segmentsIntersect(const gp_Pnt2d& a, const gp_Pnt2d& b,
+                       const gp_Pnt2d& c, const gp_Pnt2d& d)
+{
+    constexpr double tolerance = 1.0e-9;
+    const auto onSegment = [tolerance](const gp_Pnt2d& p, const gp_Pnt2d& q,
+                                       const gp_Pnt2d& r) {
+        return std::abs(orientation2d(p, q, r)) <= tolerance
+            && r.X() >= std::min(p.X(), q.X()) - tolerance
+            && r.X() <= std::max(p.X(), q.X()) + tolerance
+            && r.Y() >= std::min(p.Y(), q.Y()) - tolerance
+            && r.Y() <= std::max(p.Y(), q.Y()) + tolerance;
+    };
+    const double abC = orientation2d(a, b, c);
+    const double abD = orientation2d(a, b, d);
+    const double cdA = orientation2d(c, d, a);
+    const double cdB = orientation2d(c, d, b);
+    if (((abC > tolerance && abD < -tolerance) || (abC < -tolerance && abD > tolerance))
+        && ((cdA > tolerance && cdB < -tolerance) || (cdA < -tolerance && cdB > tolerance))) {
+        return true;
+    }
+    return onSegment(a, b, c) || onSegment(a, b, d)
+        || onSegment(c, d, a) || onSegment(c, d, b);
+}
+
+std::optional<gp_Trsf> transformToComponent(
+    const cad::parametric::ParametricFeature::Ptr& root,
+    const std::string& componentId)
+{
+    if (!root) return std::nullopt;
+    if (root->id() == componentId) {
+        return gp_Trsf();
+    }
+    if (const auto transform = std::dynamic_pointer_cast<cad::parametric::TransformFeature>(root)) {
+        for (const auto& weakDependency : transform->dependencies()) {
+            const auto dependency = weakDependency.lock();
+            if (!dependency) continue;
+            const auto nested = transformToComponent(dependency, componentId);
+            if (!nested) continue;
+            gp_Trsf result = transform->transformation();
+            result.Multiply(*nested);
+            return result;
+        }
+        return std::nullopt;
+    }
+    for (const auto& weakDependency : root->dependencies()) {
+        const auto dependency = weakDependency.lock();
+        const auto nested = transformToComponent(dependency, componentId);
+        if (nested) return nested;
+    }
+    return std::nullopt;
 }
 }
 
@@ -176,6 +301,39 @@ ModelingResult ModelingController::createSketchOnFace(
     }
 }
 
+ModelingResult ModelingController::createSketchOnFace(
+    const cad::topology::TopologicalReference& faceReference)
+{
+    if (faceReference.kind != cad::topology::TopologicalKind::Face
+        || faceReference.featureId.empty()) {
+        return {false, {}, "Face reference must identify a feature Face"};
+    }
+    const auto source = body_.findFeature(faceReference.featureId);
+    if (!source) return {false, {}, "Sketch support feature does not exist"};
+    const cad::topology::TopologicalReferenceResolver resolver(body_);
+    const auto resolved = resolver.resolve(faceReference, source->shape());
+    if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape) {
+        const auto message = resolved.status == cad::topology::ResolveStatus::Ambiguous
+            ? "Face reference is ambiguous"
+            : resolved.status == cad::topology::ResolveStatus::Missing
+                ? "Face reference could not be resolved"
+                : "Face reference does not match the support feature";
+        return {false, {}, std::string(message)};
+    }
+    if (resolved.shape->ShapeType() != TopAbs_FACE
+        || !cad::parametric::SketchFeature::isPlanarFace(*resolved.shape)) {
+        return {false, {}, "Sketch on Face currently supports planar faces only"};
+    }
+    try {
+        const auto stableReference = cad::topology::TopologicalSignatureBuilder::createReference(
+            source->id(), source->shape(), *resolved.shape);
+        return addFeature(std::make_shared<cad::parametric::SketchFeature>(
+            id("sketch"), source, stableReference));
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::addSketchLine(
     const std::string& sketchId, const gp_Pnt2d& start, const gp_Pnt2d& end,
     const bool construction)
@@ -186,6 +344,123 @@ ModelingResult ModelingController::addSketchLine(
     try {
         undoStack_.push(new cad::commands::AddSketchEntityCommand(
             body_, sketch, cad::parametric::SketchLine{start, end, {}, construction}));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::replaceSketchProfile(
+    const std::string& sketchId,
+    const std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>>& segments)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    if (segments.size() < 3) return {false, {}, "Sketch profile requires at least three segments"};
+
+    constexpr double tolerance = 1.0e-7;
+    for (std::size_t index = 0; index < segments.size(); ++index) {
+        const auto& [start, end] = segments[index];
+        if (!std::isfinite(start.X()) || !std::isfinite(start.Y())
+            || !std::isfinite(end.X()) || !std::isfinite(end.Y())
+            || start.Distance(end) <= tolerance) {
+            return {false, {}, "Sketch profile contains a zero-length or non-finite segment"};
+        }
+        const auto& next = segments[(index + 1) % segments.size()].first;
+        if (end.Distance(next) > tolerance)
+            return {false, {}, "Sketch profile is not an ordered closed chain"};
+    }
+    for (std::size_t first = 0; first < segments.size(); ++first) {
+        for (std::size_t second = first + 1; second < segments.size(); ++second) {
+            const bool adjacent = second == first + 1
+                || (first == 0 && second + 1 == segments.size());
+            if (!adjacent && segmentsIntersect(
+                    segments[first].first, segments[first].second,
+                    segments[second].first, segments[second].second)) {
+                return {false, {}, "Sketch profile contains intersecting or branching segments"};
+            }
+        }
+    }
+
+    std::vector<cad::parametric::SketchEntity> after;
+    after.reserve(segments.size());
+    for (std::size_t index = 0; index < segments.size(); ++index) {
+        std::string entityId;
+        bool construction = false;
+        if (index < sketch->entities().size()) {
+            if (const auto* line = std::get_if<cad::parametric::SketchLine>(
+                    &sketch->entities()[index])) {
+                entityId = line->id;
+                construction = line->construction;
+            }
+        }
+        if (entityId.empty()) entityId = id("entity");
+        after.emplace_back(cad::parametric::SketchLine{
+            segments[index].first, segments[index].second, entityId, construction});
+    }
+
+    try {
+        ModelTransaction transaction(body_, undoStack_, "Replace Sketch Profile");
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(after),
+            sketch->constraints(), sketch->constraints(), "Replace Sketch Profile"));
+        if (!transaction.commit()) {
+            const auto message = transaction.error().isEmpty()
+                ? QStringLiteral("Split transaction failed") : transaction.error();
+            return {false, {}, message.toStdString()};
+        }
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::editSketchLine(
+    const std::string& sketchId, const std::string& entityId,
+    const gp_Pnt2d& start, const gp_Pnt2d& end)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    auto entities = sketch->entities();
+    auto found = std::find_if(entities.begin(), entities.end(),
+        [&entityId](const auto& entity) {
+            const auto* line = std::get_if<cad::parametric::SketchLine>(&entity);
+            return line && line->id == entityId;
+        });
+    if (found == entities.end()) return {false, {}, "Sketch Line does not exist"};
+    const auto construction = std::get<cad::parametric::SketchLine>(*found).construction;
+    *found = cad::parametric::SketchLine{start, end, entityId, construction};
+    try {
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(entities),
+            sketch->constraints(), sketch->constraints(), "Edit Sketch Line"));
+        return {true, sketchId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::removeSketchEntity(
+    const std::string& sketchId, const std::string& entityId)
+{
+    const auto sketch = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        body_.findFeature(sketchId));
+    if (!sketch) return {false, {}, "Active Sketch does not exist"};
+    if (sketch->hasConstraintsForEntity(entityId))
+        return {false, {}, "Cannot remove a constrained Sketch entity"};
+    auto entities = sketch->entities();
+    const auto before = entities.size();
+    entities.erase(std::remove_if(entities.begin(), entities.end(),
+        [&entityId](const auto& entity) {
+            return std::visit([&entityId](const auto& value) { return value.id == entityId; }, entity);
+        }), entities.end());
+    if (entities.size() == before) return {false, {}, "Sketch entity does not exist"};
+    try {
+        undoStack_.push(new cad::commands::ReplaceSketchCommand(
+            body_, sketch, sketch->entities(), std::move(entities),
+            sketch->constraints(), sketch->constraints(), "Remove Sketch Entity"));
         return {true, sketchId, {}};
     } catch (const std::exception& error) {
         return failure(error);
@@ -1314,6 +1589,13 @@ ModelingResult ModelingController::createLinearPattern(
     const std::vector<std::string>& selection
 )
 {
+    return createLinearPattern(selection, gp_Vec(1.0, 0.0, 0.0), 100.0, 2, true);
+}
+
+ModelingResult ModelingController::createLinearPattern(
+    const std::vector<std::string>& selection, const gp_Vec direction,
+    const double spacing, const int count, const bool includeSource)
+{
     if (selection.size() != 1) return {false, {}, "Select exactly one source feature"};
     const auto source = body_.findFeature(selection.front());
     if (!source) return {false, {}, "Pattern source does not exist"};
@@ -1321,7 +1603,7 @@ ModelingResult ModelingController::createLinearPattern(
         return addFeature(std::make_shared<cad::parametric::LinearPatternFeature>(
             id("linear-pattern"),
             std::vector<cad::parametric::ParametricFeature::Ptr>{source},
-            gp_Vec(1.0, 0.0, 0.0), 100.0, 2, true));
+            direction, spacing, count, includeSource));
     } catch (const std::exception& error) {
         return failure(error);
     }
@@ -1331,6 +1613,17 @@ ModelingResult ModelingController::createPathPattern(
     const std::vector<std::string>& selection
 )
 {
+    return createPathPattern(selection, 100.0, 2,
+        cad::parametric::PathPatternDistribution::FitCount,
+        cad::parametric::PathPatternOrientation::Fixed, 0.0, 0.0, true);
+}
+
+ModelingResult ModelingController::createPathPattern(
+    const std::vector<std::string>& selection, const double spacing, const int count,
+    const cad::parametric::PathPatternDistribution distribution,
+    const cad::parametric::PathPatternOrientation orientation,
+    const double startOffset, const double endOffset, const bool includeSource)
+{
     if (selection.size() != 2) return {false, {}, "Select source and path features"};
     const auto source = body_.findFeature(selection[0]);
     const auto path = body_.findFeature(selection[1]);
@@ -1338,11 +1631,8 @@ ModelingResult ModelingController::createPathPattern(
     try {
         return addFeature(std::make_shared<cad::parametric::PathPatternFeature>(
             id("path-pattern"),
-            std::vector<cad::parametric::ParametricFeature::Ptr>{source},
-            path, 100.0, 2,
-            cad::parametric::PathPatternDistribution::FitCount,
-            cad::parametric::PathPatternOrientation::Fixed,
-            0.0, 0.0, true));
+            std::vector<cad::parametric::ParametricFeature::Ptr>{source}, path,
+            spacing, count, distribution, orientation, startOffset, endOffset, includeSource));
     } catch (const std::exception& error) {
         return failure(error);
     }
@@ -1427,6 +1717,39 @@ ModelingResult ModelingController::createChamfer(
     }
 }
 
+ModelingResult ModelingController::createChamfer(
+    const std::vector<cad::topology::TopologicalReference>& references,
+    const double distance)
+{
+    if (references.empty()) return {false, {}, "Chamfer requires at least one edge reference"};
+    if (!std::isfinite(distance) || distance <= 0.0)
+        return {false, {}, "Chamfer distance must be positive and finite"};
+    const auto sourceId = references.front().featureId;
+    const auto source = body_.findFeature(sourceId);
+    if (!source) return {false, {}, "Chamfer source feature does not exist"};
+    std::vector<TopoDS_Edge> edges;
+    cad::topology::TopologicalReferenceResolver resolver(body_);
+    for (const auto& reference : references) {
+        if (reference.featureId != sourceId
+            || reference.kind != cad::topology::TopologicalKind::Edge)
+            return {false, {}, "Chamfer edges must belong to one feature and be Edges"};
+        const auto resolved = resolver.resolve(reference);
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+            || resolved.shape->ShapeType() != TopAbs_EDGE) {
+            return {false, {}, resolved.status == cad::topology::ResolveStatus::Ambiguous
+                ? "Chamfer edge reference is ambiguous"
+                : "Chamfer edge reference could not be resolved"};
+        }
+        edges.push_back(TopoDS::Edge(*resolved.shape));
+    }
+    try {
+        return addFeature(std::make_shared<cad::parametric::ChamferFeature>(
+            id("chamfer"), source, edges, distance));
+    } catch (const std::exception& exception) {
+        return failure(exception);
+    }
+}
+
 ModelingResult ModelingController::pushPull(
     const std::string& targetId,
     const int faceIndex,
@@ -1495,6 +1818,301 @@ ModelingResult ModelingController::transformFeatureDelta(
     gp_Trsf after = delta;
     after.Multiply(feature->placement());
     return transformFeature(featureId, feature->placement(), after);
+}
+
+ModelingResult ModelingController::createTransform(
+    const std::vector<std::string>& featureIds,
+    const cad::parametric::TransformOperation operation,
+    const cad::parametric::TransformResultMode resultMode,
+    const gp_Trsf& transformation
+)
+{
+    if (featureIds.empty()) return {false, {}, "Transform requires at least one source feature"};
+    std::vector<cad::parametric::ParametricFeature::Ptr> sources;
+    sources.reserve(featureIds.size());
+    std::vector<std::string> uniqueIds;
+    uniqueIds.reserve(featureIds.size());
+    for (const auto& featureId : featureIds) {
+        if (std::find(uniqueIds.begin(), uniqueIds.end(), featureId) != uniqueIds.end())
+            continue;
+        const auto source = body_.findFeature(featureId);
+        if (!source) return {false, {}, "Transform source does not exist: " + featureId};
+        if (source->shape().IsNull())
+            return {false, {}, "Transform source has no valid shape: " + featureId};
+        uniqueIds.push_back(featureId);
+        sources.push_back(source);
+    }
+    if (sources.empty()) return {false, {}, "Transform requires at least one source feature"};
+
+    try {
+        const auto transformId = id("transform");
+        auto transform = std::make_shared<cad::parametric::TransformFeature>(
+            transformId, sources, operation, resultMode, transformation);
+        ModelTransaction transaction(body_, undoStack_, "Transform Features");
+        undoStack_.push(new cad::commands::AddFeatureCommand(
+            body_, transform, QStringLiteral("Transform Features")));
+        if (resultMode == cad::parametric::TransformResultMode::ReplaceResult) {
+            std::vector<std::string> hiddenIds;
+            for (const auto& source : sources)
+                collectFeatureAndDependencies(source, hiddenIds);
+            std::vector<bool> before;
+            before.reserve(hiddenIds.size());
+            for (const auto& featureId : hiddenIds)
+                before.push_back(body_.findFeature(featureId)->userVisible());
+            undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+                body_, hiddenIds, before,
+                std::vector<bool>(hiddenIds.size(), false),
+                QStringLiteral("Replace Transformed Result")));
+        }
+        if (!transaction.commit()) return {false, {}, body_.lastError()};
+        return {true, transformId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::transformComponent(
+    const std::string& componentId,
+    const cad::parametric::TransformOperation operation,
+    const cad::parametric::TransformResultMode resultMode,
+    const gp_Trsf& transformation)
+{
+    std::string resolveError;
+    const auto resolved = cad::parametric::ComponentResolver::resolve(
+        body_, componentId, resolveError);
+    if (!resolved) return componentFailure(resolveError);
+    const auto source = body_.findFeature(resolved->component.sourceFeatureId);
+    if (!source) return componentFailure("Component source feature does not exist");
+    try {
+        const auto featureId = id("component-transform");
+        auto transformed = std::make_shared<cad::parametric::ComponentTransformFeature>(
+            featureId, source, resolved->component, operation, resultMode, transformation);
+        if (!transformed->recompute()) return componentFailure(transformed->error());
+        const auto resultComponentId = featureId + ":component";
+        auto resultComponent = componentFromShape(transformed->shape(), resultComponentId, featureId);
+        resultComponent.parentComponentId = componentId;
+
+        auto before = componentMetadata(body_);
+        auto after = before;
+        auto sourceIterator = std::find_if(after.begin(), after.end(),
+            [&componentId](const ModelComponent& component) { return component.id == componentId; });
+        if (sourceIterator == after.end()) return componentFailure("Component metadata is unavailable");
+        if (resultMode == cad::parametric::TransformResultMode::ReplaceResult) {
+            sourceIterator->visible = false;
+            sourceIterator->technicalHidden = true;
+            sourceIterator->replacementComponentIds = {resultComponentId};
+        }
+        after.push_back(resultComponent);
+
+        ModelTransaction transaction(body_, undoStack_, "Transform Component");
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, transformed,
+            QStringLiteral("Transform Component")));
+        undoStack_.push(new cad::commands::ReplaceComponentsCommand(body_, before,
+            after, QStringLiteral("Update Component Replacement")));
+        if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
+        return {true, featureId, {}, {resultComponentId}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::splitComponent(
+    const std::string& componentId, const gp_Pnt& origin, const gp_Dir& normal)
+{
+    std::string resolveError;
+    const auto resolved = cad::parametric::ComponentResolver::resolve(
+        body_, componentId, resolveError);
+    if (!resolved) return componentFailure(resolveError);
+    const auto source = body_.findFeature(resolved->component.sourceFeatureId);
+    if (!source) return componentFailure("Component source feature does not exist");
+    try {
+        const auto negativeId = id("component-split-negative");
+        const auto positiveId = id("component-split-positive");
+        auto negative = std::make_shared<cad::parametric::ComponentSplitFeature>(
+            negativeId, source, resolved->component, origin, normal,
+            cad::parametric::ComponentSplitSide::Negative);
+        auto positive = std::make_shared<cad::parametric::ComponentSplitFeature>(
+            positiveId, source, resolved->component, origin, normal,
+            cad::parametric::ComponentSplitSide::Positive);
+        if (!negative->recompute()) return componentFailure(negative->error());
+        if (!positive->recompute()) return componentFailure(positive->error());
+        BRepCheck_Analyzer negativeAnalyzer(negative->shape());
+        BRepCheck_Analyzer positiveAnalyzer(positive->shape());
+        if (!negativeAnalyzer.IsValid() || !positiveAnalyzer.IsValid())
+            return componentFailure("Component split produced an invalid B-Rep");
+
+        const auto negativeComponentId = negativeId + ":component";
+        const auto positiveComponentId = positiveId + ":component";
+        auto negativeComponent = componentFromShape(negative->shape(), negativeComponentId, negativeId);
+        auto positiveComponent = componentFromShape(positive->shape(), positiveComponentId, positiveId);
+        negativeComponent.parentComponentId = componentId;
+        positiveComponent.parentComponentId = componentId;
+        auto before = componentMetadata(body_);
+        auto after = before;
+        auto sourceIterator = std::find_if(after.begin(), after.end(),
+            [&componentId](const ModelComponent& component) { return component.id == componentId; });
+        if (sourceIterator == after.end()) return componentFailure("Component metadata is unavailable");
+        sourceIterator->visible = false;
+        sourceIterator->technicalHidden = true;
+        sourceIterator->replacementComponentIds = {negativeComponentId, positiveComponentId};
+        after.push_back(negativeComponent);
+        after.push_back(positiveComponent);
+
+        ModelTransaction transaction(body_, undoStack_, "Split Component");
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, negative,
+            QStringLiteral("Split Component")));
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, positive,
+            QStringLiteral("Split Component")));
+        undoStack_.push(new cad::commands::ReplaceComponentsCommand(body_, before,
+            after, QStringLiteral("Update Component Replacement")));
+        if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
+        return {true, negativeId, {}, {negativeComponentId, positiveComponentId}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::recoverPreSplit(const std::string& rootFeatureId)
+{
+    const auto root = body_.findFeature(rootFeatureId);
+    if (!root) return componentFailure("Recovery root feature does not exist");
+
+    std::vector<std::string> removableIds;
+    removableIds.reserve(body_.features().size());
+    for (const auto& feature : body_.features()) {
+        if (feature->id() == rootFeatureId || !dependsOn(feature, rootFeatureId)) continue;
+        const bool isSplit = std::dynamic_pointer_cast<cad::parametric::ComponentSplitFeature>(feature)
+            != nullptr;
+        const bool isTransform = std::dynamic_pointer_cast<cad::parametric::ComponentTransformFeature>(feature)
+            != nullptr;
+        if (!isSplit && !isTransform) {
+            return componentFailure("Recovery is unsafe: non-component downstream feature '"
+                + feature->id() + "' depends on the selected root");
+        }
+        removableIds.push_back(feature->id());
+    }
+    if (removableIds.empty()) return componentFailure("No downstream component Split/Transform history found");
+
+    const auto before = componentMetadata(body_);
+    auto after = before;
+    std::unordered_set<std::string> removedFeatureIds(removableIds.begin(), removableIds.end());
+    std::unordered_set<std::string> removedComponentIds;
+    for (const auto& component : before) {
+        if (removedFeatureIds.contains(component.sourceFeatureId))
+            removedComponentIds.insert(component.id);
+    }
+    after.erase(std::remove_if(after.begin(), after.end(),
+        [&removedFeatureIds, &removedComponentIds](ModelComponent& component) {
+            if (removedFeatureIds.contains(component.sourceFeatureId)) return true;
+            if (component.parentComponentId
+                && removedComponentIds.contains(*component.parentComponentId)) return true;
+            const auto oldSize = component.replacementComponentIds.size();
+            component.replacementComponentIds.erase(
+                std::remove_if(component.replacementComponentIds.begin(),
+                               component.replacementComponentIds.end(),
+                    [&removedComponentIds](const std::string& id) {
+                        return removedComponentIds.contains(id);
+                    }), component.replacementComponentIds.end());
+            if (oldSize != component.replacementComponentIds.size()
+                && component.replacementComponentIds.empty()) {
+                component.visible = true;
+                component.technicalHidden = false;
+            }
+            return false;
+        }), after.end());
+    if (after.empty()) return componentFailure("Recovery would remove all component metadata");
+
+    try {
+        ModelTransaction transaction(body_, undoStack_, "Recover Pre-Split Model");
+        // Remove descendants in reverse body order so no dependent feature is
+        // removed before the feature that owns it.
+        for (auto iterator = body_.features().rbegin(); iterator != body_.features().rend(); ++iterator) {
+            if (removedFeatureIds.contains((*iterator)->id()))
+                undoStack_.push(new cad::commands::RemoveFeatureCommand(body_, (*iterator)->id()));
+        }
+        undoStack_.push(new cad::commands::ReplaceComponentsCommand(
+            body_, before, after, QStringLiteral("Restore Pre-Split Components")));
+        if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
+        return {true, rootFeatureId, {}, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
+ModelingResult ModelingController::splitFeature(
+    const std::string& wholeFeatureId,
+    const std::string& componentFeatureId,
+    const double splitCoordinate,
+    const gp_Vec& moveNegative)
+{
+    const auto whole = body_.findFeature(wholeFeatureId);
+    const auto component = body_.findFeature(componentFeatureId);
+    if (!whole) return {false, {}, "Split whole feature does not exist"};
+    if (!component) return {false, {}, "Split component feature does not exist"};
+    if (!std::isfinite(splitCoordinate)) return {false, {}, "Split coordinate must be finite"};
+    const auto componentTransform = transformToComponent(whole, componentFeatureId);
+    if (!componentTransform) {
+        return {false, {}, "Split component is not a dependency of the selected result"};
+    }
+    const auto transformFeature = std::dynamic_pointer_cast<cad::parametric::TransformFeature>(whole);
+    if (!transformFeature) {
+        return {false, {}, "Split currently requires a composite Transform result"};
+    }
+    try {
+        const auto negativeId = id("split-negative");
+        const auto positiveId = id("split-positive");
+        const auto movedId = id("transform");
+        const auto assemblyId = id("split-assembly");
+        auto negative = std::make_shared<cad::parametric::SplitSegmentFeature>(
+            negativeId, component, *componentTransform, splitCoordinate,
+            cad::parametric::SplitSide::Negative);
+        auto positive = std::make_shared<cad::parametric::SplitSegmentFeature>(
+            positiveId, component, *componentTransform, splitCoordinate,
+            cad::parametric::SplitSide::Positive);
+        gp_Trsf translation;
+        translation.SetTranslation(moveNegative);
+        auto moved = std::make_shared<cad::parametric::TransformFeature>(
+            movedId, std::vector<cad::parametric::ParametricFeature::Ptr>{negative},
+            cad::parametric::TransformOperation::Translate,
+            cad::parametric::TransformResultMode::ReplaceResult, translation);
+        auto assembly = std::make_shared<cad::parametric::SplitAssemblyFeature>(
+            assemblyId, whole, component, negative, positive, moved,
+            *componentTransform, splitCoordinate);
+
+        // Validate the complete candidate before touching the document.  This
+        // also preserves the concrete OCCT diagnostic instead of losing it in
+        // a deferred Body recompute rollback.
+        if (!negative->recompute()) return {false, {}, negative->error()};
+        if (!positive->recompute()) return {false, {}, positive->error()};
+        if (!moved->recompute()) return {false, {}, moved->error()};
+        if (!assembly->recompute()) return {false, {}, assembly->error()};
+
+        ModelTransaction transaction(body_, undoStack_, "Split and Move Wall");
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, negative,
+            QStringLiteral("Split Wall Segment")));
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, positive,
+            QStringLiteral("Split Wall Segment")));
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, moved,
+            QStringLiteral("Move Wall Segment")));
+        // The assembly consumes the moved segment by reference in its visible result.
+        undoStack_.push(new cad::commands::AddFeatureCommand(body_, assembly,
+            QStringLiteral("Assemble Split Wall")));
+        undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+            body_, {wholeFeatureId}, {whole->userVisible()}, {false},
+            QStringLiteral("Hide Original Wall Result")));
+        undoStack_.push(new cad::commands::SetFeatureVisibilityCommand(
+            body_, {negativeId, positiveId, movedId}, {true, true, true},
+            {false, false, false}, QStringLiteral("Hide Split Construction Results")));
+        if (!transaction.commit()) {
+            const auto message = transaction.error().isEmpty()
+                ? QStringLiteral("Split transaction failed") : transaction.error();
+            return {false, {}, message.toStdString()};
+        }
+        assembly->setUserVisible(true);
+        return {true, assemblyId, {}};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
 }
 
 ModelingResult ModelingController::duplicateFeature(const std::string& featureId)

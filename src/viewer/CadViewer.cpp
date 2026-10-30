@@ -29,8 +29,10 @@
 #include <QToolButton>
 #include <QWheelEvent>
 #include <QWindow>
+#include <QThread>
 
 #include <AIS_DisplayMode.hxx>
+#include <AIS_Triangulation.hxx>
 #include <TCollection_ExtendedString.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <Aspect_DisplayConnection.hxx>
@@ -49,14 +51,18 @@
 #include <Bnd_Box.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <GProp_GProps.hxx>
+#include <Image_AlienPixMap.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <Prs3d_Drawer.hxx>
 #include <Prs3d_LineAspect.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TColStd_ListOfInteger.hxx>
+#include <TColStd_HArray1OfInteger.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Edge.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
@@ -125,6 +131,13 @@ QString activeSelectionModes(const Handle(AIS_InteractiveContext)& context,
         result.push_back(QString::number(iterator.Value()));
     }
     return result.join(',');
+}
+
+bool isEmptyDisplayShape(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return true;
+    if (shape.ShapeType() != TopAbs_COMPOUND) return false;
+    return !TopoDS_Iterator(shape).More();
 }
 constexpr double Pi = 3.14159265358979323846;
 constexpr double OrbitElevationLimit = 89.0 * Pi / 180.0;
@@ -218,6 +231,64 @@ void traceOcctMoveTo(
         .arg(QString::fromLatin1(stage))
         .arg(position.x()).arg(position.y())
         .arg(windowWidth).arg(windowHeight);
+}
+
+void traceWheelCoordinates(
+    const char* stage,
+    const CadViewer& viewer,
+    const QWheelEvent& event,
+    const QPoint& position,
+    const Handle(V3d_View)& view)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) return;
+
+    Standard_Integer windowWidth = 0;
+    Standard_Integer windowHeight = 0;
+    if (!view.IsNull() && !view->Window().IsNull()) {
+        view->Window()->Size(windowWidth, windowHeight);
+    }
+    const auto window = viewer.windowHandle();
+    const auto screen = viewer.screen();
+    const double widgetWidth = std::max(viewer.width(), 1);
+    const double widgetHeight = std::max(viewer.height(), 1);
+    const double scaleX = static_cast<double>(windowWidth) / widgetWidth;
+    const double scaleY = static_cast<double>(windowHeight) / widgetHeight;
+    qInfo().noquote() << QString(
+        "[COORD] %1 wheel local=(%2,%3) global=(%4,%5) widget=(%6,%7) "
+        "dprWidget=%8 dprWindow=%9 dprScreen=%10 occtWindow=(%11,%12) "
+        "passedOcct=(%2,%3) ratioScaled=(%13,%14) angleDelta=(%15,%16)")
+        .arg(QString::fromLatin1(stage))
+        .arg(position.x()).arg(position.y())
+        .arg(event.globalPosition().x()).arg(event.globalPosition().y())
+        .arg(viewer.width()).arg(viewer.height())
+        .arg(viewer.devicePixelRatioF(), 0, 'f', 3)
+        .arg(window ? window->devicePixelRatio() : 0.0, 0, 'f', 3)
+        .arg(screen ? screen->devicePixelRatio() : 0.0, 0, 'f', 3)
+        .arg(windowWidth).arg(windowHeight)
+        .arg(qRound(position.x() * scaleX)).arg(qRound(position.y() * scaleY))
+        .arg(event.angleDelta().x()).arg(event.angleDelta().y());
+}
+
+void traceCameraState(
+    const char* stage,
+    const Handle(V3d_View)& view)
+{
+    if (!qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) return;
+
+    if (view.IsNull() || view->Camera().IsNull()) {
+        qInfo().noquote() << QString("[COORD] %1 camera=null")
+            .arg(QString::fromLatin1(stage));
+        return;
+    }
+    const auto camera = view->Camera();
+    const gp_Pnt eye = camera->Eye();
+    const gp_Pnt center = camera->Center();
+    qInfo().noquote() << QString(
+        "[COORD] %1 camera eye=(%2,%3,%4) center=(%5,%6,%7) scale=%8")
+        .arg(QString::fromLatin1(stage))
+        .arg(eye.X()).arg(eye.Y()).arg(eye.Z())
+        .arg(center.X()).arg(center.Y()).arg(center.Z())
+        .arg(camera->Scale());
 }
 
 QPointF projectWorldPoint(
@@ -538,8 +609,11 @@ CadViewer::CadViewer(
 void CadViewer::traceSelectionLifecycle(const QString& message) const
 {
     if (!selectionTraceEnabled_) return;
-    const QString line = QString("[SEL %1] %2")
+    const QString line = QString("[SEL %1 tid=%2 mode=%3 xray=%4] %5")
         .arg(++selectionTraceSequence_, 5, 10, QLatin1Char('0'))
+        .arg(QString::asprintf("%p", QThread::currentThreadId()))
+        .arg(selectionModeName(selectionMode_))
+        .arg(xRayEnabled_ ? 1 : 0)
         .arg(message);
     const QByteArray encoded = line.toLocal8Bit();
     std::fprintf(stderr, "%s\n", encoded.constData());
@@ -1498,8 +1572,16 @@ void CadViewer::invalidateSnapReferenceCache(const char* reason)
 
 void CadViewer::invalidateSnapProjectionCache(const char* reason)
 {
-    Q_UNUSED(reason);
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        qInfo().noquote() << QString(
+            "[COORD] snap projection cache invalidate reason=%1 entriesBefore=%2")
+            .arg(QString::fromLatin1(reason != nullptr ? reason : "unknown"))
+            .arg(snapScreenProjectionCache_.size());
+    }
     snapScreenProjectionCache_.clear();
+    if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
+        qInfo().noquote() << "[COORD] snap projection cache invalidated entriesAfter=0";
+    }
 }
 
 void CadViewer::updateTransformSnap(
@@ -1567,8 +1649,11 @@ void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
 {
     QElapsedTimer timer;
     timer.start();
+    traceCameraState("wheel before zoom", view_);
     const auto pointBefore = worldAnchorAtScreenPoint(position);
     view_->SetZoom(factor);
+    invalidateSnapProjectionCache("CAMERA_CHANGED: zoom scale");
+    traceCameraState("wheel after SetZoom", view_);
 
     if (pointBefore) {
         const auto pointAfter = worldAnchorAtScreenPoint(position);
@@ -1583,9 +1668,11 @@ void CadViewer::zoomAtCursor(const QPoint& position, const double factor)
             eye.Translate(correction);
             center.Translate(correction);
             camera->SetEyeAndCenter(eye, center);
+            invalidateSnapProjectionCache("CAMERA_CHANGED: zoom anchor correction");
         }
     }
 
+    traceCameraState("wheel after zoom", view_);
     view_->Redraw();
     recordPerformanceSample("zoom redraw", timer.elapsed());
 }
@@ -1736,7 +1823,7 @@ void CadViewer::initializeOcc()
 
     context_ = new AIS_InteractiveContext(viewer_);
     selectionAdapter_ = std::make_unique<cad::viewer::OcctSelectionAdapter>(
-        context_, featureObjects_);
+        context_, featureObjects_, componentObjects_, componentFeatures_);
     transformGizmo_ = std::make_unique<cad::viewer::TransformGizmo>(context_);
     view_ = viewer_->CreateView();
 
@@ -1769,10 +1856,43 @@ void CadViewer::initializeOcc()
     );
 
     view_->MustBeResized();
+    occViewportSynchronized_ = false;
 
     initialized_ = true;
     selectionActivationDirty_ = true;
     if (bulkUpdateDepth_ == 0) applySelectionMode();
+}
+
+void CadViewer::synchronizeOccViewport(const char* reason)
+{
+    if (!initialized_ || view_.IsNull() || view_->Window().IsNull()) return;
+
+    Standard_Integer width = 0;
+    Standard_Integer height = 0;
+    view_->Window()->Size(width, height);
+    const bool sizeChanged = width != lastOccWindowWidth_ || height != lastOccWindowHeight_;
+    if (!occViewportSynchronized_ || sizeChanged) {
+        view_->MustBeResized();
+        view_->Window()->Size(width, height);
+        lastOccWindowWidth_ = width;
+        lastOccWindowHeight_ = height;
+        occViewportSynchronized_ = width > 0 && height > 0;
+    }
+
+    if (performanceDiagnostics_ && (!occViewportSynchronized_ || sizeChanged)) {
+        qInfo().noquote() << QString(
+            "[VIEWPORT] %1 widget=(%2,%3) physical=(%4,%5) dpr=%6 nativeReady=%7 "
+            "occtWindow=(%8,%9) synchronized=%10")
+            .arg(QString::fromLatin1(reason))
+            .arg(width > 0 ? this->width() : 0)
+            .arg(height > 0 ? this->height() : 0)
+            .arg(qRound(this->width() * devicePixelRatioF()))
+            .arg(qRound(this->height() * devicePixelRatioF()))
+            .arg(devicePixelRatioF(), 0, 'f', 3)
+            .arg(windowHandle() && windowHandle()->winId() != 0 ? 1 : 0)
+            .arg(width).arg(height)
+            .arg(occViewportSynchronized_ ? 1 : 0);
+    }
 }
 
 void CadViewer::bindWindow()
@@ -1815,6 +1935,11 @@ void CadViewer::showEvent(QShowEvent* event)
     QWidget::showEvent(event);
 
     initializeOcc();
+    synchronizeOccViewport("showEvent");
+    if (!view_.IsNull() && !context_.IsNull()) {
+        context_->UpdateCurrentViewer();
+        view_->Redraw();
+    }
 }
 
 void CadViewer::paintEvent(QPaintEvent* event)
@@ -1825,6 +1950,7 @@ void CadViewer::paintEvent(QPaintEvent* event)
         initializeOcc();
     }
 
+    synchronizeOccViewport("paintEvent");
     view_->Redraw();
 }
 
@@ -1833,7 +1959,9 @@ void CadViewer::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
 
     if (initialized_) {
-        view_->MustBeResized();
+        synchronizeOccViewport("resizeEvent");
+        if (!context_.IsNull()) context_->UpdateCurrentViewer();
+        view_->Redraw();
         if (qEnvironmentVariableIsSet("PARAMETRICCAD_TRACE_COORDINATES")) {
             Standard_Integer windowWidth = 0;
             Standard_Integer windowHeight = 0;
@@ -1863,6 +1991,11 @@ void CadViewer::resizeEvent(QResizeEvent* event)
 void CadViewer::display(const TopoDS_Shape& shape, const QString& featureId, bool fitView)
 {
     initializeOcc();
+
+    if (isEmptyDisplayShape(shape)) {
+        removeFeaturePresentation(featureId);
+        return;
+    }
 
     Handle(AIS_Shape) interactiveShape =
         new AIS_Shape(shape);
@@ -1954,6 +2087,12 @@ CadViewer::DisplayMode CadViewer::displayMode() const noexcept
 
 void CadViewer::beginBulkUpdate()
 {
+    if (bulkUpdateDepth_ == 0 && performanceDiagnostics_) {
+        perfAisCreated_ = 0;
+        perfAisReused_ = 0;
+        perfViewerUpdates_ = 0;
+        perfViewRedraws_ = 0;
+    }
     ++bulkUpdateDepth_;
 }
 
@@ -1974,6 +2113,13 @@ void CadViewer::endBulkUpdate()
         timer.start();
         applySelectionMode();
         lastBulkViewerUpdateMilliseconds_ = timer.elapsed();
+        if (!view_.IsNull() && !view_->Window().IsNull()) {
+            synchronizeOccViewport("endBulkUpdate");
+            context_->UpdateCurrentViewer();
+            if (performanceDiagnostics_) ++perfViewerUpdates_;
+            view_->Redraw();
+            if (performanceDiagnostics_) ++perfViewRedraws_;
+        }
         if (performanceDiagnostics_) {
             std::size_t visible = 0;
             std::size_t selectable = 0;
@@ -1986,7 +2132,11 @@ void CadViewer::endBulkUpdate()
                               << "selectable=" << selectable
                               << "selectionMs=" << lastSelectionActivationMilliseconds_
                               << "viewerMs=" << lastViewerUpdateMilliseconds_
-                              << "bulkMs=" << lastBulkViewerUpdateMilliseconds_;
+                              << "bulkMs=" << lastBulkViewerUpdateMilliseconds_
+                              << "AISCreated=" << perfAisCreated_
+                              << "AISReused=" << perfAisReused_
+                              << "viewerUpdates=" << perfViewerUpdates_
+                              << "redraws=" << perfViewRedraws_;
         }
     }
 }
@@ -2008,12 +2158,17 @@ std::int64_t CadViewer::lastSelectionActivationMilliseconds() const noexcept
 
 void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureId)
 {
-    if (shape.IsNull()) return;
+    if (isEmptyDisplayShape(shape)) {
+        removeFeaturePresentation(featureId);
+        return;
+    }
     const auto found = featureObjects_.find(featureId);
     if (found == featureObjects_.end()) {
+        if (performanceDiagnostics_) ++perfAisCreated_;
         display(shape, featureId, false);
         return;
     }
+    if (performanceDiagnostics_) ++perfAisReused_;
     const auto& object = found->second;
     configureSketchPresentation(object, featureId);
     setFeatureTransparency(featureId, object);
@@ -2046,6 +2201,58 @@ void CadViewer::updateFeature(const TopoDS_Shape& shape, const QString& featureI
     traceSelectionLifecycle(QString("AIS replace feature=%1 obj=%2 after Redisplay")
         .arg(featureId).arg(selectionObjectPointer(object)));
     if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
+}
+
+void CadViewer::updateComponent(const TopoDS_Shape& shape,
+                                const QString& componentId,
+                                const QString& featureId)
+{
+    initializeOcc();
+    // A feature and its component presentations are mutually exclusive.  A
+    // project load or a refresh can reach this path after the same feature was
+    // previously presented as one AIS_Shape.  Remove that stale feature-level
+    // object before displaying or reusing the component presentation, rather
+    // than relying only on the later retain pass.
+    if (featureObjects_.contains(featureId)) removeFeaturePresentation(featureId);
+    if (isEmptyDisplayShape(shape)) {
+        const auto found = componentObjects_.find(componentId);
+        if (found != componentObjects_.end()) {
+            context_->Remove(found->second, Standard_False);
+            std::erase(displayedShapes_, found->second);
+            componentObjects_.erase(found);
+            componentFeatures_.erase(componentId);
+            componentVisibility_.erase(componentId);
+        }
+        return;
+    }
+    const auto found = componentObjects_.find(componentId);
+    if (found == componentObjects_.end()) {
+        if (performanceDiagnostics_) ++perfAisCreated_;
+        auto object = Handle(AIS_Shape)(new AIS_Shape(shape));
+        applyDisplayMode(object, shape);
+        context_->Display(object, bulkUpdateDepth_ == 0 ? Standard_True : Standard_False);
+        componentObjects_[componentId] = object;
+        componentFeatures_[componentId] = featureId;
+        componentVisibility_.try_emplace(componentId, VisibilityMode::Visible);
+        displayedShapes_.push_back(object);
+        selectionActivationDirty_ = true;
+        return;
+    }
+    if (performanceDiagnostics_) ++perfAisReused_;
+    const auto& object = found->second;
+    if (!object->Shape().IsEqual(shape)) {
+        object->SetShape(shape);
+        applyDisplayMode(object, shape);
+    }
+    componentFeatures_[componentId] = featureId;
+    const auto mode = componentVisibilityMode(componentId);
+    if (mode == VisibilityMode::Hidden) context_->Erase(object, Standard_False);
+    else {
+        if (!context_->IsDisplayed(object)) context_->Display(object, Standard_False);
+        if (mode == VisibilityMode::Ghosted) object->SetTransparency(GhostTransparency);
+        else if (!xRayEnabled_) object->UnsetTransparency();
+        context_->Redisplay(object, Standard_False);
+    }
 }
 
 void CadViewer::updateSketchConstructionGeometry(
@@ -2251,6 +2458,8 @@ void CadViewer::clearSpatialBox()
     if (spatialBoxObject_.IsNull() || context_.IsNull()) return;
     context_->Remove(spatialBoxObject_, Standard_False);
     spatialBoxObject_.Nullify();
+    meshObject_.Nullify();
+    meshVisible_ = false;
     spatialBoxMin_ = gp_Pnt();
     spatialBoxMax_ = gp_Pnt();
     spatialBoxHandle_ = -1;
@@ -2548,6 +2757,8 @@ void CadViewer::updateSpatialBoxDrag(const QPoint& position)
 cad::application::VisibilityMode CadViewer::featureVisibilityMode(
     const QString& featureId) const noexcept
 {
+    const auto component = componentVisibility_.find(featureId);
+    if (component != componentVisibility_.end()) return component->second;
     const auto found = featureVisibility_.find(featureId);
     return found == featureVisibility_.end()
         ? VisibilityMode::Visible : found->second;
@@ -2581,11 +2792,15 @@ void CadViewer::releaseManagedSelection(const QString& featureId)
 {
     const auto active = managedSelectionModes_.find(featureId);
     if (active == managedSelectionModes_.end()) return;
-    const auto found = featureObjects_.find(featureId);
-    if (found != featureObjects_.end() && !found->second.IsNull()) {
+    const auto component = componentObjects_.find(featureId);
+    const auto feature = featureObjects_.find(featureId);
+    const auto object = component != componentObjects_.end()
+        ? component->second
+        : feature != featureObjects_.end() ? feature->second : Handle(AIS_Shape){};
+    if (!object.IsNull()) {
         traceSelectionLifecycle(QString("release managed BEFORE feature=%1 obj=%2 mode=%3")
-            .arg(featureId).arg(selectionObjectPointer(found->second)).arg(active->second));
-        context_->Deactivate(found->second, active->second);
+            .arg(featureId).arg(selectionObjectPointer(object)).arg(active->second));
+        context_->Deactivate(object, active->second);
         traceSelectionLifecycle(QString("release managed AFTER feature=%1").arg(featureId));
     }
     managedSelectionModes_.erase(active);
@@ -2597,6 +2812,9 @@ void CadViewer::updateManagedShape(const QString& featureId,
 {
     // Release selection while the old shape is still intact. The cache must
     // never describe selection structures belonging to a previous shape.
+    if (selectionAdapter_) {
+        selectionAdapter_->clearSelectedPresentation(object);
+    }
     releaseManagedSelection(featureId);
     object->SetShape(shape);
     context_->Redisplay(object, Standard_False);
@@ -2639,20 +2857,9 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
             ++it;
             continue;
         }
-        cancelPushPull();
-        managedSelectionModes_.erase(it->first);
-        traceSelectionLifecycle(QString("AIS unregister feature=%1 obj=%2 before Remove")
-            .arg(it->first).arg(selectionObjectPointer(it->second)));
-        context_->Remove(it->second, Standard_False);
-        traceSelectionLifecycle(QString("AIS unregister feature=%1 after Remove").arg(it->first));
-        std::erase(displayedShapes_, it->second);
-        const auto construction = sketchConstructionObjects_.find(it->first);
-        if (construction != sketchConstructionObjects_.end()) {
-            context_->Remove(construction->second, Standard_False);
-            sketchConstructionObjects_.erase(construction);
-        }
-        featureVisibility_.erase(it->first);
-        it = featureObjects_.erase(it);
+        const auto featureId = it->first;
+        ++it;
+        removeFeaturePresentation(featureId);
         changed = true;
     }
     if (changed) {
@@ -2662,6 +2869,88 @@ void CadViewer::retainFeatures(const QStringList& featureIds)
         selectionState_.hovered.reset();
         if (bulkUpdateDepth_ == 0) syncSelectionStateFromOcct();
         if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
+    }
+}
+
+void CadViewer::retainComponents(const QStringList& componentIds)
+{
+    if (!initialized_) return;
+    for (auto it = componentObjects_.begin(); it != componentObjects_.end();) {
+        if (componentIds.contains(it->first)) { ++it; continue; }
+        context_->Remove(it->second, Standard_False);
+        std::erase(displayedShapes_, it->second);
+        componentFeatures_.erase(it->first);
+        componentVisibility_.erase(it->first);
+        it = componentObjects_.erase(it);
+        selectionActivationDirty_ = true;
+    }
+}
+
+void CadViewer::setComponentVisibility(const QString& componentId,
+                                       const VisibilityMode mode)
+{
+    const auto found = componentObjects_.find(componentId);
+    if (found == componentObjects_.end()) return;
+    componentVisibility_[componentId] = mode;
+    if (mode != VisibilityMode::Visible) {
+        releaseManagedSelection(componentId);
+        // A component may have been activated before its effective visibility
+        // changed, or its activation cache may have been restored from a
+        // previous project state.  Deactivate all modes, not only the mode
+        // tracked in managedSelectionModes_, before hiding/ghosting it.
+        context_->Deactivate(found->second);
+    }
+    if (mode == VisibilityMode::Hidden) context_->Erase(found->second, Standard_False);
+    else {
+        if (!context_->IsDisplayed(found->second)) context_->Display(found->second, Standard_False);
+        if (mode == VisibilityMode::Ghosted) found->second->SetTransparency(GhostTransparency);
+        else if (!xRayEnabled_) found->second->UnsetTransparency();
+        context_->Redisplay(found->second, Standard_False);
+    }
+    if (qEnvironmentVariableIsSet("PARAMETRIC_CAD_TRACE_VISIBILITY")) {
+        qInfo().noquote() << "CadViewer component visibility: id=" << componentId
+                          << "mode=" << static_cast<int>(mode)
+                          << "displayed=" << context_->IsDisplayed(found->second)
+                          << "activeModes=" << activeSelectionModes(context_, found->second)
+                          << "object=" << selectionObjectPointer(found->second);
+    }
+    selectionActivationDirty_ = true;
+    if (bulkUpdateDepth_ == 0) { applySelectionMode(); context_->UpdateCurrentViewer(); }
+}
+
+VisibilityMode CadViewer::componentVisibilityMode(const QString& componentId) const noexcept
+{
+    const auto found = componentVisibility_.find(componentId);
+    return found == componentVisibility_.end() ? VisibilityMode::Visible : found->second;
+}
+
+void CadViewer::removeFeaturePresentation(const QString& featureId)
+{
+    const auto found = featureObjects_.find(featureId);
+    if (found == featureObjects_.end()) return;
+
+    cancelPushPull();
+    if (selectionAdapter_) selectionAdapter_->clearSelectedPresentation(found->second);
+    releaseManagedSelection(featureId);
+    traceSelectionLifecycle(QString("AIS unregister feature=%1 obj=%2 before Remove")
+        .arg(featureId).arg(selectionObjectPointer(found->second)));
+    context_->Remove(found->second, Standard_False);
+    traceSelectionLifecycle(QString("AIS unregister feature=%1 after Remove").arg(featureId));
+    std::erase(displayedShapes_, found->second);
+    const auto construction = sketchConstructionObjects_.find(featureId);
+    if (construction != sketchConstructionObjects_.end()) {
+        context_->Remove(construction->second, Standard_False);
+        sketchConstructionObjects_.erase(construction);
+    }
+    featureVisibility_.erase(featureId);
+    featureObjects_.erase(found);
+    selectionActivationDirty_ = true;
+    invalidateSnapReferenceCache("MODEL_CHANGED: empty feature presentation removed");
+    resetDetectedCycle();
+    selectionState_.hovered.reset();
+    if (bulkUpdateDepth_ == 0) {
+        syncSelectionStateFromOcct();
+        context_->UpdateCurrentViewer();
     }
 }
 
@@ -2684,6 +2973,11 @@ void CadViewer::clear()
     spatialBoxObject_.Nullify();
     displayedShapes_.clear();
     featureObjects_.clear();
+    componentObjects_.clear();
+    componentFeatures_.clear();
+    componentVisibility_.clear();
+    geometryVisibilityBeforeMeshOnly_.clear();
+    meshDisplayMode_ = MeshDisplayMode::Geometry;
     sketchConstructionObjects_.clear();
     managedSelectionModes_.clear();
     editingSketchFeatureId_.clear();
@@ -2699,6 +2993,58 @@ bool CadViewer::hasDisplayedShapes() const
     return !displayedShapes_.empty();
 }
 
+std::size_t CadViewer::displayedFeaturePresentationCount() const noexcept
+{
+    if (context_.IsNull()) return 0;
+    std::size_t count = 0;
+    for (const auto& [id, object] : featureObjects_) {
+        Q_UNUSED(id);
+        if (!object.IsNull() && context_->IsDisplayed(object)) ++count;
+    }
+    return count;
+}
+
+std::size_t CadViewer::displayedComponentPresentationCount() const noexcept
+{
+    if (context_.IsNull()) return 0;
+    std::size_t count = 0;
+    for (const auto& [id, object] : componentObjects_) {
+        Q_UNUSED(id);
+        if (!object.IsNull() && context_->IsDisplayed(object)) ++count;
+    }
+    return count;
+}
+
+QImage CadViewer::captureImage()
+{
+    initializeOcc();
+    if (view_.IsNull() || view_->Window().IsNull()) return {};
+
+    synchronizeOccViewport("captureImage");
+    const int imageWidth = std::max(width(), 1);
+    const int imageHeight = std::max(height(), 1);
+    Image_AlienPixMap image;
+    if (!view_->ToPixMap(image, imageWidth, imageHeight,
+                         Graphic3d_BT_RGB, Standard_False)) {
+        return {};
+    }
+
+    QImage result(imageWidth, imageHeight, QImage::Format_RGB888);
+    for (int y = 0; y < imageHeight; ++y) {
+        auto* destination = result.scanLine(y);
+        for (int x = 0; x < imageWidth; ++x) {
+            const auto color = image.PixelColor(x, y);
+            destination[x * 3] = static_cast<uchar>(
+                std::clamp(color.GetRGB().Red(), 0.0, 1.0) * 255.0);
+            destination[x * 3 + 1] = static_cast<uchar>(
+                std::clamp(color.GetRGB().Green(), 0.0, 1.0) * 255.0);
+            destination[x * 3 + 2] = static_cast<uchar>(
+                std::clamp(color.GetRGB().Blue(), 0.0, 1.0) * 255.0);
+        }
+    }
+    return result;
+}
+
 void CadViewer::fitAll()
 {
     if (!initialized_) {
@@ -2709,8 +3055,183 @@ void CadViewer::fitAll()
     timer.start();
     view_->FitAll();
     view_->ZFitAll();
+    invalidateSnapProjectionCache("CAMERA_CHANGED: fit all");
     view_->Redraw();
     recordPerformanceSample("FitAll", timer.elapsed());
+}
+
+void CadViewer::showMesh(const cad::cae::VolumeMesh& mesh)
+{
+    if (mesh.nodes.empty() || mesh.surfaceTriangles.empty()) {
+        deleteMeshPresentation();
+        return;
+    }
+    initializeOcc();
+    TColgp_Array1OfPnt nodes(1, static_cast<Standard_Integer>(mesh.nodes.size()));
+    for (Standard_Integer index = 1; index <= nodes.Upper(); ++index) {
+        const auto& node = mesh.nodes[static_cast<std::size_t>(index - 1)];
+        nodes.SetValue(index, gp_Pnt(node.x, node.y, node.z));
+    }
+    Poly_Array1OfTriangle triangles(
+        1, static_cast<Standard_Integer>(mesh.surfaceTriangles.size()));
+    for (Standard_Integer index = 1; index <= triangles.Upper(); ++index) {
+        const auto& triangle = mesh.surfaceTriangles[static_cast<std::size_t>(index - 1)];
+        triangles.SetValue(index, Poly_Triangle(
+            static_cast<Standard_Integer>(triangle.nodes[0] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[1] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[2] + 1)));
+    }
+    if (!meshObject_.IsNull()) context_->Remove(meshObject_, Standard_False);
+    meshObject_ = new AIS_Triangulation(new Poly_Triangulation(nodes, triangles));
+    meshObject_->SetColor(Quantity_Color(Quantity_NOC_CYAN1));
+    meshObject_->SetTransparency(0.35);
+    context_->Display(meshObject_, Standard_False);
+    // CAE presentations are visualization-only. They must not become
+    // detected owners and steal CAD Face/Edge/Vertex picks.
+    context_->Deactivate(meshObject_);
+    meshVisible_ = true;
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::showMeshScalar(
+    const cad::cae::VolumeMesh& mesh, const std::vector<double>& values)
+{
+    if (mesh.nodes.empty() || mesh.surfaceTriangles.empty()
+        || values.size() != mesh.nodes.size()) {
+        deleteMeshPresentation();
+        return;
+    }
+    initializeOcc();
+    double minimum = values.front();
+    double maximum = values.front();
+    for (const auto value : values) {
+        minimum = std::min(minimum, value);
+        maximum = std::max(maximum, value);
+    }
+    const auto range = maximum - minimum;
+    TColgp_Array1OfPnt nodes(1, static_cast<Standard_Integer>(mesh.nodes.size()));
+    for (Standard_Integer index = 1; index <= nodes.Upper(); ++index) {
+        const auto& node = mesh.nodes[static_cast<std::size_t>(index - 1)];
+        nodes.SetValue(index, gp_Pnt(node.x, node.y, node.z));
+    }
+    Poly_Array1OfTriangle triangles(
+        1, static_cast<Standard_Integer>(mesh.surfaceTriangles.size()));
+    for (Standard_Integer index = 1; index <= triangles.Upper(); ++index) {
+        const auto& triangle = mesh.surfaceTriangles[static_cast<std::size_t>(index - 1)];
+        triangles.SetValue(index, Poly_Triangle(
+            static_cast<Standard_Integer>(triangle.nodes[0] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[1] + 1),
+            static_cast<Standard_Integer>(triangle.nodes[2] + 1)));
+    }
+    if (!meshObject_.IsNull()) context_->Remove(meshObject_, Standard_False);
+    meshObject_ = new AIS_Triangulation(new Poly_Triangulation(nodes, triangles));
+    const Handle(TColStd_HArray1OfInteger) colors = new TColStd_HArray1OfInteger(
+        1, static_cast<Standard_Integer>(mesh.nodes.size()));
+    for (Standard_Integer index = 1; index <= colors->Upper(); ++index) {
+        const auto normalized = range > 0.0
+            ? std::clamp((values[static_cast<std::size_t>(index - 1)] - minimum) / range, 0.0, 1.0)
+            : 0.5;
+        const auto red = static_cast<int>(255.0 * normalized);
+        const auto green = static_cast<int>(255.0 * (1.0 - std::abs(2.0 * normalized - 1.0)));
+        const auto blue = static_cast<int>(255.0 * (1.0 - normalized));
+        colors->SetValue(index, (255 << 24) | (blue << 16) | (green << 8) | red);
+    }
+    meshObject_->SetColors(colors);
+    meshObject_->SetTransparency(0.15);
+    context_->Display(meshObject_, Standard_False);
+    context_->Deactivate(meshObject_);
+    meshVisible_ = true;
+    context_->UpdateCurrentViewer();
+}
+
+void CadViewer::showPotential(
+    const cad::cae::VolumeMesh& mesh, const std::vector<double>& nodalPotential)
+{
+    showMeshScalar(mesh, nodalPotential);
+}
+
+void CadViewer::showElectricField(
+    const cad::cae::VolumeMesh& mesh,
+    const std::vector<std::array<double, 3>>& elementField)
+{
+    if (elementField.size() != mesh.tetrahedra.size()) {
+        deleteMeshPresentation();
+        return;
+    }
+    std::vector<double> nodalMagnitude(mesh.nodes.size(), 0.0);
+    std::vector<std::size_t> counts(mesh.nodes.size(), 0);
+    for (std::size_t element = 0; element < mesh.tetrahedra.size(); ++element) {
+        const auto& field = elementField[element];
+        const auto magnitude = std::sqrt(field[0] * field[0]
+            + field[1] * field[1] + field[2] * field[2]);
+        for (const auto node : mesh.tetrahedra[element].nodes) {
+            nodalMagnitude[node] += magnitude;
+            ++counts[node];
+        }
+    }
+    for (std::size_t node = 0; node < nodalMagnitude.size(); ++node)
+        if (counts[node] != 0) nodalMagnitude[node] /= static_cast<double>(counts[node]);
+    showMeshScalar(mesh, nodalMagnitude);
+}
+
+void CadViewer::clearCaeResultPresentation()
+{
+    deleteMeshPresentation();
+}
+
+void CadViewer::hideMesh()
+{
+    if (!meshObject_.IsNull() && !context_.IsNull()) context_->Erase(meshObject_, Standard_False);
+    meshVisible_ = false;
+    if (!context_.IsNull()) context_->UpdateCurrentViewer();
+}
+
+void CadViewer::deleteMeshPresentation()
+{
+    if (!meshObject_.IsNull() && !context_.IsNull()) context_->Remove(meshObject_, Standard_False);
+    meshObject_.Nullify();
+    meshVisible_ = false;
+    if (!context_.IsNull()) context_->UpdateCurrentViewer();
+}
+
+bool CadViewer::meshVisible() const noexcept
+{
+    return meshVisible_;
+}
+
+void CadViewer::setMeshDisplayMode(const MeshDisplayMode mode)
+{
+    initializeOcc();
+    if (mode == meshDisplayMode_) return;
+    if (mode == MeshDisplayMode::Mesh && meshDisplayMode_ != MeshDisplayMode::Mesh) {
+        geometryVisibilityBeforeMeshOnly_.clear();
+        for (const auto& [id, object] : featureObjects_) {
+            const bool displayed = !object.IsNull() && context_->IsDisplayed(object);
+            geometryVisibilityBeforeMeshOnly_[id] = displayed;
+            if (displayed) context_->Erase(object, Standard_False);
+        }
+    } else if (meshDisplayMode_ == MeshDisplayMode::Mesh) {
+        for (const auto& [id, object] : featureObjects_) {
+            const auto previous = geometryVisibilityBeforeMeshOnly_.find(id);
+            if (previous != geometryVisibilityBeforeMeshOnly_.end() && previous->second
+                && !object.IsNull()) {
+                context_->Display(object, Standard_False);
+            }
+        }
+        geometryVisibilityBeforeMeshOnly_.clear();
+    }
+    meshDisplayMode_ = mode;
+    if (mode == MeshDisplayMode::Geometry) hideMesh();
+    else if (!meshObject_.IsNull()) {
+        context_->Display(meshObject_, Standard_False);
+        meshVisible_ = true;
+    }
+    context_->UpdateCurrentViewer();
+}
+
+CadViewer::MeshDisplayMode CadViewer::meshDisplayMode() const noexcept
+{
+    return meshDisplayMode_;
 }
 
 void CadViewer::setSelectionMode(SelectionMode mode)
@@ -2943,11 +3464,28 @@ std::vector<cad::topology::TopologicalReference> CadViewer::captureTopologySelec
 
     for (const auto& hit : selectionAdapter_->selectedHits()) {
         if (!hit.hasSubshape() || hit.shape.IsNull()) continue;
+        if (!cad::viewer::OcctSelectionAdapter::isValidSubshapeHit(hit)) {
+            traceSelectionLifecycle(QString("reject topology capture feature=%1 reason=stale subshape")
+                .arg(hit.item.featureId));
+            continue;
+        }
         const auto feature = body.findFeature(hit.item.featureId.toStdString());
         if (!feature || feature->shape().IsNull()) continue;
+        TopTools_IndexedMapOfShape currentSubshapes;
+        TopExp::MapShapes(feature->shape(), hit.shape.ShapeType(), currentSubshapes);
+        if (currentSubshapes.FindIndex(hit.shape) <= 0) {
+            traceSelectionLifecycle(QString("reject topology capture feature=%1 reason=not in current feature shape")
+                .arg(hit.item.featureId));
+            continue;
+        }
         try {
-            result.push_back(cad::topology::TopologicalSignatureBuilder::createReference(
-                feature->id(), feature->shape(), hit.shape));
+            const auto reference = cad::topology::TopologicalSignatureBuilder::createReference(
+                feature->id(), feature->shape(), hit.shape);
+            result.push_back(reference);
+            traceSelectionLifecycle(QString("topology capture success feature=%1 kind=%2 index=%3")
+                .arg(hit.item.featureId)
+                .arg(static_cast<int>(hit.item.kind))
+                .arg(reference.transientIndex.value_or(0)));
         } catch (const Standard_Failure& failure) {
             qCWarning(pcadViewerLog) << "failed to capture topology"
                                      << hit.item.featureId
@@ -2964,7 +3502,8 @@ std::vector<cad::topology::TopologicalReference> CadViewer::captureTopologySelec
 void CadViewer::restoreSelection(
     const cad::parametric::Body& body,
     const std::vector<cad::topology::TopologicalReference>& topology,
-    const std::vector<std::string>& objectFeatureIds)
+    const std::vector<std::string>& objectFeatureIds,
+    const std::vector<std::string>& componentIds)
 {
     if (!initialized_ || !context_) return;
 
@@ -2990,6 +3529,13 @@ void CadViewer::restoreSelection(
             && featureIsSelectable(object->first)) {
             context_->AddOrRemoveSelected(object->second, Standard_False);
         }
+    }
+    for (const auto& componentId : componentIds) {
+        const auto object = componentObjects_.find(QString::fromStdString(componentId));
+        if (object != componentObjects_.end() && !object->second.IsNull()
+            && context_->IsDisplayed(object->second)
+            && featureIsSelectable(object->first))
+            context_->AddOrRemoveSelected(object->second, Standard_False);
     }
     if (bulkUpdateDepth_ == 0) context_->UpdateCurrentViewer();
     syncSelectionStateFromOcct();
@@ -3128,6 +3674,23 @@ void CadViewer::applySelectionMode()
             .arg(activeSelectionModes(context_, object)));
         managedSelectionModes_[id] = mode;
     }
+    for (const auto& [id, object] : componentObjects_) {
+        if (object.IsNull()) { managedSelectionModes_.erase(id); continue; }
+        const bool selectable = !selectionDisabled_ && featureIsSelectable(id);
+        const auto active = managedSelectionModes_.find(id);
+        if (!selectable) {
+            if (active != managedSelectionModes_.end()) {
+                context_->Deactivate(object, active->second);
+                managedSelectionModes_.erase(active);
+            } else context_->Deactivate(object);
+            continue;
+        }
+        if (active != managedSelectionModes_.end() && active->second == mode) continue;
+        if (active != managedSelectionModes_.end()) context_->Deactivate(object, active->second);
+        context_->SetSelectionModeActive(object, mode, Standard_True,
+            AIS_SelectionModesConcurrency_Multiple, Standard_True);
+        managedSelectionModes_[id] = mode;
+    }
     if (transformGizmo_) {
         transformGizmo_->deactivateSelection();
     }
@@ -3187,6 +3750,11 @@ void CadViewer::setXRayEnabled(bool enabled)
         context_->Redisplay(pushPullPreview_, Standard_False);
     }
 
+    // Transparency changes can rebuild presentation-sensitive selection data
+    // on different OCCT backends. Reconcile the requested CAD mode explicitly
+    // after the X-Ray transition instead of relying on the old activation.
+    selectionActivationDirty_ = true;
+    applySelectionMode();
     context_->UpdateCurrentViewer();
     syncToolBarState();
 }
@@ -3206,9 +3774,16 @@ void CadViewer::updateHover(const QPoint& position)
         recordPerformanceSample("hover MoveTo", timer.elapsed());
         const auto detected = selectionAdapter_->detectedHit();
         if (!detected) {
+            traceSelectionLifecycle(QString("hover no detected owner position=(%1,%2)")
+                .arg(position.x()).arg(position.y()));
             selectionState_.hovered.reset();
         } else if (!selectionState_.hovered
                    || !selectionState_.hovered->hasSameTransientIdentity(*detected)) {
+            traceSelectionLifecycle(QString("hover detected feature=%1 kind=%2 index=%3 presentation=%4")
+                .arg(detected->item.featureId)
+                .arg(static_cast<int>(detected->item.kind))
+                .arg(detected->item.currentSubshapeIndex.value_or(0))
+                .arg(selectionObjectPointer(detected->presentation)));
             selectionState_.hovered = detected;
         }
     }
@@ -4109,8 +4684,8 @@ void CadViewer::mouseMoveEvent(QMouseEvent* event)
         const int deltaY = lastMousePosition_.y() - currentPosition.y();
         QElapsedTimer timer;
         timer.start();
-        invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         view_->Pan(deltaX, deltaY);
+        invalidateSnapProjectionCache("CAMERA_CHANGED: pan");
         recordPerformanceSample("pan redraw", timer.elapsed());
         lastMousePosition_ = currentPosition;
         return;
@@ -4275,8 +4850,10 @@ void CadViewer::wheelEvent(QWheelEvent* event)
             ? 0.8
             : 1.25;
 
-    zoomAtCursor(event->position().toPoint(), factor);
-    invalidateSnapProjectionCache("CAMERA_CHANGED: zoom");
+    const QPoint position = event->position().toPoint();
+    traceWheelCoordinates("wheel before zoom", *this, *event, position, view_);
+    zoomAtCursor(position, factor);
+    traceWheelCoordinates("wheel after zoom", *this, *event, position, view_);
 }
 
 void CadViewer::keyPressEvent(QKeyEvent* event)

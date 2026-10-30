@@ -174,6 +174,7 @@ void ParametricFeature::markDirty() noexcept
 
 bool ParametricFeature::recompute()
 {
+    ++geometryRevision_;
     try {
         for (const std::weak_ptr<ParametricFeature>& weakDependency : dependencies_) {
             const Ptr dependency = weakDependency.lock();

@@ -24,7 +24,34 @@
       ],
       "plane": "XY",
       "width": 70.0,
-      "height": 50.0
+      "height": 50.0,
+      "entities": [
+        {
+          "type": "Line",
+          "id": "extrude-line-1",
+          "start": [0.0, 0.0],
+          "end": [70.0, 0.0]
+        },
+        {
+          "type": "Line",
+          "id": "extrude-line-2",
+          "start": [70.0, 0.0],
+          "end": [70.0, 50.0]
+        },
+        {
+          "type": "Line",
+          "id": "extrude-line-3",
+          "start": [70.0, 50.0],
+          "end": [0.0, 50.0]
+        },
+        {
+          "type": "Line",
+          "id": "extrude-line-4",
+          "start": [0.0, 50.0],
+          "end": [0.0, 0.0]
+        }
+      ],
+      "constraints": []
     },
     {
       "id": "face-extrude",
@@ -215,7 +242,14 @@
       ],
       "plane": "XZ",
       "width": 26.0,
-      "height": 52.0
+      "height": 52.0,
+      "entities": [
+        {"type": "Line", "id": "revolve-line-1", "start": [0.0, 0.0], "end": [26.0, 0.0]},
+        {"type": "Line", "id": "revolve-line-2", "start": [26.0, 0.0], "end": [26.0, 52.0]},
+        {"type": "Line", "id": "revolve-line-3", "start": [26.0, 52.0], "end": [0.0, 52.0]},
+        {"type": "Line", "id": "revolve-line-4", "start": [0.0, 52.0], "end": [0.0, 0.0]}
+      ],
+      "constraints": []
     },
     {
       "id": "face-revolve",
@@ -547,7 +581,14 @@
       ],
       "plane": "XY",
       "width": 55.0,
-      "height": 38.0
+      "height": 38.0,
+      "entities": [
+        {"type": "Line", "id": "loft-a-1", "start": [0.0, 0.0], "end": [55.0, 0.0]},
+        {"type": "Line", "id": "loft-a-2", "start": [55.0, 0.0], "end": [55.0, 38.0]},
+        {"type": "Line", "id": "loft-a-3", "start": [55.0, 38.0], "end": [0.0, 38.0]},
+        {"type": "Line", "id": "loft-a-4", "start": [0.0, 38.0], "end": [0.0, 0.0]}
+      ],
+      "constraints": []
     },
     {
       "id": "loft-section-b",
@@ -570,7 +611,14 @@
       ],
       "plane": "XY",
       "width": 34.0,
-      "height": 24.0
+      "height": 24.0,
+      "entities": [
+        {"type": "Line", "id": "loft-b-1", "start": [0.0, 0.0], "end": [34.0, 0.0]},
+        {"type": "Line", "id": "loft-b-2", "start": [34.0, 0.0], "end": [34.0, 24.0]},
+        {"type": "Line", "id": "loft-b-3", "start": [34.0, 24.0], "end": [0.0, 24.0]},
+        {"type": "Line", "id": "loft-b-4", "start": [0.0, 24.0], "end": [0.0, 0.0]}
+      ],
+      "constraints": []
     },
     {
       "id": "loft-section-c",
@@ -593,7 +641,14 @@
       ],
       "plane": "XY",
       "width": 18.0,
-      "height": 14.0
+      "height": 14.0,
+      "entities": [
+        {"type": "Line", "id": "loft-c-1", "start": [0.0, 0.0], "end": [18.0, 0.0]},
+        {"type": "Line", "id": "loft-c-2", "start": [18.0, 0.0], "end": [18.0, 14.0]},
+        {"type": "Line", "id": "loft-c-3", "start": [18.0, 14.0], "end": [0.0, 14.0]},
+        {"type": "Line", "id": "loft-c-4", "start": [0.0, 14.0], "end": [0.0, 0.0]}
+      ],
+      "constraints": []
     },
     {
       "id": "loft-demo",
@@ -642,7 +697,14 @@
       ],
       "plane": "YZ",
       "width": 12.0,
-      "height": 12.0
+      "height": 12.0,
+      "entities": [
+        {"type": "Line", "id": "sweep-profile-1", "start": [0.0, 0.0], "end": [12.0, 0.0]},
+        {"type": "Line", "id": "sweep-profile-2", "start": [12.0, 0.0], "end": [12.0, 12.0]},
+        {"type": "Line", "id": "sweep-profile-3", "start": [12.0, 12.0], "end": [0.0, 12.0]},
+        {"type": "Line", "id": "sweep-profile-4", "start": [0.0, 12.0], "end": [0.0, 0.0]}
+      ],
+      "constraints": []
     },
     {
       "id": "sweep-path",
@@ -665,7 +727,11 @@
       ],
       "plane": "XZ",
       "width": 85.0,
-      "height": 55.0
+      "height": 55.0,
+      "entities": [
+        {"type": "Line", "id": "sweep-path-line", "start": [0.0, 0.0], "end": [85.0, 0.0]}
+      ],
+      "constraints": []
     },
     {
       "id": "sweep-demo",

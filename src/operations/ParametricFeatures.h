@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ParametricFeature.h"
+#include "model/ModelComponent.h"
 #include "model/TopologicalReference.h"
 
 #include <TopoDS_Edge.hxx>
@@ -919,6 +920,170 @@ private:
     Ptr pathOwner_;
     std::optional<cad::topology::TopologicalReference> pathReference_;
     SweepPathDefinition pathDefinition_;
+};
+
+enum class TransformOperation { Mirror, Translate, Rotate };
+enum class TransformResultMode { Copy, ReplaceResult };
+
+class TransformFeature final : public ParametricFeature
+{
+public:
+    TransformFeature(
+        std::string id,
+        std::vector<Ptr> sources,
+        TransformOperation operation,
+        TransformResultMode resultMode,
+        gp_Trsf transformation
+    );
+
+    const char* typeId() const noexcept override { return "Transform"; }
+    std::string creationLabel() const override { return "Transform"; }
+    Ptr clone(std::string newId) const override;
+
+    const std::vector<std::string>& sourceIds() const noexcept { return sourceIds_; }
+    // If both an intermediate feature and one of its downstream results are
+    // selected, only the downstream result is emitted by this feature.
+    std::vector<std::string> effectiveSourceIds() const;
+    TransformOperation operation() const noexcept { return operation_; }
+    TransformResultMode resultMode() const noexcept { return resultMode_; }
+    const gp_Trsf& transformation() const noexcept { return transformation_; }
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::vector<std::string> sourceIds_;
+    std::vector<std::weak_ptr<ParametricFeature>> sources_;
+    TransformOperation operation_;
+    TransformResultMode resultMode_;
+    gp_Trsf transformation_;
+};
+
+class ComponentTransformFeature final : public ParametricFeature
+{
+public:
+    ComponentTransformFeature(std::string id, const Ptr& source,
+                              ModelComponent component,
+                              TransformOperation operation,
+                              TransformResultMode resultMode,
+                              gp_Trsf transformation);
+    const char* typeId() const noexcept override { return "ComponentTransform"; }
+    std::string creationLabel() const override { return "Transform Component"; }
+    Ptr clone(std::string newId) const override;
+    const std::string& sourceFeatureId() const noexcept { return sourceFeatureId_; }
+    const std::string& sourceComponentId() const noexcept { return sourceComponentId_; }
+    TransformOperation operation() const noexcept { return operation_; }
+    TransformResultMode resultMode() const noexcept { return resultMode_; }
+    const gp_Trsf& transformation() const noexcept { return transformation_; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    bool setProperty(const std::string& key, const PropertyValue& value) override;
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string sourceFeatureId_;
+    std::string sourceComponentId_;
+    Ptr source_;
+    ModelComponent component_;
+    TransformOperation operation_;
+    TransformResultMode resultMode_;
+    gp_Trsf transformation_;
+};
+
+enum class SplitSide { Negative, Positive };
+
+class SplitSegmentFeature final : public ParametricFeature
+{
+public:
+    SplitSegmentFeature(std::string id, const Ptr& source, gp_Trsf sourceTransform,
+                        double splitCoordinate, SplitSide side);
+    const char* typeId() const noexcept override { return "SplitSegment"; }
+    std::string creationLabel() const override { return "Split wall segment"; }
+    Ptr clone(std::string newId) const override;
+    const std::string& sourceFeatureId() const noexcept { return sourceFeatureId_; }
+    double splitCoordinate() const noexcept { return splitCoordinate_; }
+    SplitSide side() const noexcept { return side_; }
+    const gp_Trsf& sourceTransform() const noexcept { return sourceTransform_; }
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string sourceFeatureId_;
+    Ptr source_;
+    gp_Trsf sourceTransform_;
+    double splitCoordinate_;
+    SplitSide side_;
+};
+
+enum class ComponentSplitSide { Negative, Positive };
+
+class ComponentSplitFeature final : public ParametricFeature
+{
+public:
+    ComponentSplitFeature(std::string id, const Ptr& source,
+                          ModelComponent component, gp_Pnt origin, gp_Dir normal,
+                          ComponentSplitSide side);
+    const char* typeId() const noexcept override { return "ComponentSplit"; }
+    std::string creationLabel() const override { return "Split Component"; }
+    Ptr clone(std::string newId) const override;
+    const std::string& sourceFeatureId() const noexcept { return sourceFeatureId_; }
+    const std::string& sourceComponentId() const noexcept { return sourceComponentId_; }
+    const gp_Pnt& planeOrigin() const noexcept { return origin_; }
+    const gp_Dir& planeNormal() const noexcept { return normal_; }
+    ComponentSplitSide side() const noexcept { return side_; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    bool setProperty(const std::string& key, const PropertyValue& value) override;
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string sourceFeatureId_;
+    std::string sourceComponentId_;
+    Ptr source_;
+    ModelComponent component_;
+    gp_Pnt origin_;
+    gp_Dir normal_;
+    ComponentSplitSide side_;
+};
+
+class SplitAssemblyFeature final : public ParametricFeature
+{
+public:
+    SplitAssemblyFeature(std::string id, const Ptr& wholeSource, const Ptr& componentSource,
+                         const Ptr& negativeSegment, const Ptr& positiveSegment,
+                         const Ptr& movedSegment,
+                         gp_Trsf componentTransform, double splitCoordinate);
+    const char* typeId() const noexcept override { return "SplitAssembly"; }
+    std::string creationLabel() const override { return "Split wall assembly"; }
+    Ptr clone(std::string newId) const override;
+    const std::string& wholeSourceFeatureId() const noexcept { return wholeSourceId_; }
+    const std::string& componentSourceFeatureId() const noexcept { return componentSourceId_; }
+    const gp_Trsf& componentTransform() const noexcept { return componentTransform_; }
+    double splitCoordinate() const noexcept { return splitCoordinate_; }
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string wholeSourceId_;
+    std::string componentSourceId_;
+    Ptr wholeSource_;
+    Ptr componentSource_;
+    Ptr negativeSegment_;
+    Ptr positiveSegment_;
+    Ptr movedSegment_;
+    gp_Trsf componentTransform_;
+    double splitCoordinate_;
 };
 
 } // namespace cad::parametric
