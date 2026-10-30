@@ -202,6 +202,12 @@ public:
         const std::vector<std::string>& objectFeatureIds,
         const std::vector<std::string>& componentIds = {});
     void clearSelection();
+    void showTrimPreview(const std::vector<TopoDS_Shape>& kept,
+                         const std::vector<TopoDS_Shape>& discarded,
+                         const gp_Pnt& origin, const gp_Dir& normal,
+                         const Bnd_Box& bounds);
+    void clearTrimPreview();
+    std::size_t trimPreviewPresentationCount() const noexcept;
     void enterSketchMode(const gp_Pnt& origin, const gp_Dir& xDirection,
                          const gp_Dir& yDirection, const gp_Dir& normal,
                          const QString& featureId);
@@ -393,6 +399,8 @@ private:
     std::map<QString, cad::application::VisibilityMode> componentVisibility_;
     Handle(AIS_Shape) spatialBoxObject_;
     Handle(AIS_Shape) sectionPlaneObject_;
+    Handle(AIS_Shape) trimPreviewPlaneObject_;
+    std::vector<Handle(AIS_Shape)> trimPreviewObjects_;
     Handle(AIS_Shape) sectionHandleObject_;
     Handle(AIS_Shape) sectionNormalObject_;
     Handle(AIS_Triangulation) meshObject_;

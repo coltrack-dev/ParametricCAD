@@ -41,6 +41,7 @@
 #include <QHBoxLayout>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepCheck_Analyzer.hxx>
@@ -2384,6 +2385,64 @@ void MainWindow::createParametricPanel()
     featureEditorPanel_->setFeatures(modeling_.features());
     featureEditorPanel_->setActionState(modeling_.actionState(selectedIds()));
 
+    featureEditorPanel_->setTrimPreviewHandler(
+        [this](const QStringList& featureIds, const gp_Pnt& origin, const gp_Dir& normal,
+               const cad::parametric::TrimSide side, const double offset) {
+            std::vector<TopoDS_Shape> kept;
+            std::vector<TopoDS_Shape> discarded;
+            Bnd_Box bounds;
+            for (const auto& featureId : featureIds) {
+                const auto source = modeling_.body().findFeature(featureId.toStdString());
+                if (!source) return QString("Trim source feature is missing");
+                for (const auto& component : cad::parametric::ComponentResolver::enumerate(
+                         modeling_.body(), source->id())) {
+                    auto temporary = std::make_shared<cad::parametric::TrimBodyFeature>(
+                        "trim-preview", source, component, origin, normal, side, offset);
+                    if (!temporary->recompute())
+                        return QString::fromStdString(temporary->error());
+                    std::string resolutionError;
+                    const auto resolved = cad::parametric::ComponentResolver::resolve(
+                        modeling_.body(), component.id, resolutionError);
+                    const auto sourceShape = resolved ? resolved->shape : source->shape();
+                    if (sourceShape.IsNull()) return QString("Trim source geometry is empty");
+                    BRepBndLib::Add(sourceShape, bounds);
+                    BRepBndLib::Add(temporary->shape(), bounds);
+                    kept.push_back(temporary->shape());
+                    BRepAlgoAPI_Cut cut(sourceShape, temporary->shape());
+                    if (!cut.IsDone()) return QString("Trim preview discarded-part calculation failed");
+                    if (!cut.Shape().IsNull()) discarded.push_back(cut.Shape());
+                }
+            }
+            viewer_->showTrimPreview(kept, discarded, origin, normal, bounds);
+            return QString{};
+        });
+    featureEditorPanel_->setTrimPreviewClearHandler(
+        [this]() { viewer_->clearTrimPreview(); });
+    featureEditorPanel_->setTrimPlanePickHandler(
+        [this]() -> std::optional<std::pair<gp_Pnt, gp_Dir>> {
+            const auto selection = viewer_->selectionSnapshot();
+            if (selection.items.size() != 1
+                || selection.items.front().kind != cad::application::SelectionKind::Face)
+                return std::nullopt;
+            const auto references = viewer_->captureTopologySelection(modeling_.body());
+            if (references.size() != 1) return std::nullopt;
+            const auto& reference = references.front();
+            const auto feature = modeling_.body().findFeature(reference.featureId);
+            if (!feature) return std::nullopt;
+            const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+                reference, feature->shape());
+            if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+                || resolved.shape->ShapeType() != TopAbs_FACE)
+                return std::nullopt;
+            const auto face = TopoDS::Face(*resolved.shape);
+            BRepAdaptor_Surface surface(face, Standard_True);
+            if (surface.GetType() != GeomAbs_Plane) return std::nullopt;
+            const auto plane = surface.Plane();
+            auto normal = plane.Axis().Direction();
+            if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+            return std::make_pair(plane.Location(), normal);
+        });
+
     featureEditorPanel_->setModelChangedHandler(
         [this]() {
             refreshModelView();
@@ -3296,6 +3355,9 @@ void MainWindow::commitVisibilityConfiguration(
 
 void MainWindow::refreshModelView(const bool fitView)
 {
+    // A model refresh invalidates every transient Trim preview.  Preview AIS
+    // objects never belong to ModelPresenter and must not survive undo/redo.
+    viewer_->clearTrimPreview();
     const auto result = presenter_->refreshModel();
     if (!meshSourceFeatureId_.isEmpty()) {
         const auto currentGeometryRevision = modeling_.body().featureGeometryRevision(

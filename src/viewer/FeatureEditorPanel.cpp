@@ -408,6 +408,24 @@ void FeatureEditorPanel::setFeatureDoubleClickedHandler(
     featureDoubleClickedHandler_ = std::move(handler);
 }
 
+void FeatureEditorPanel::setTrimPreviewHandler(std::function<QString(
+    const QStringList&, const gp_Pnt&, const gp_Dir&,
+    cad::parametric::TrimSide, double)> handler)
+{
+    trimPreviewHandler_ = std::move(handler);
+}
+
+void FeatureEditorPanel::setTrimPreviewClearHandler(std::function<void()> handler)
+{
+    trimPreviewClearHandler_ = std::move(handler);
+}
+
+void FeatureEditorPanel::setTrimPlanePickHandler(
+    std::function<std::optional<std::pair<gp_Pnt, gp_Dir>>()> handler)
+{
+    trimPlanePickHandler_ = std::move(handler);
+}
+
 void FeatureEditorPanel::setRevolveAxisPickHandler(
     std::function<void(const QString&, const QString&)> handler)
 {
@@ -949,11 +967,13 @@ void FeatureEditorPanel::addTrimBody()
         setPanelMessage("Select one or more target features before trimming", true);
         return;
     }
-    QDialog dialog(this);
-    dialog.setWindowTitle("Trim Body by Plane");
-    auto* form = new QFormLayout(&dialog);
-    auto number = [&dialog](double value) {
-        auto* spin = new QDoubleSpinBox(&dialog);
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowModality(Qt::NonModal);
+    dialog->setWindowTitle("Trim Body by Plane");
+    auto* form = new QFormLayout(dialog);
+    auto number = [dialog](double value) {
+        auto* spin = new QDoubleSpinBox(dialog);
         spin->setRange(-1.0e9, 1.0e9);
         spin->setDecimals(3);
         spin->setValue(value);
@@ -962,29 +982,89 @@ void FeatureEditorPanel::addTrimBody()
     auto* originX = number(0.0); auto* originY = number(0.0); auto* originZ = number(0.0);
     auto* normalX = number(0.0); auto* normalY = number(0.0); auto* normalZ = number(1.0);
     auto* offset = number(0.0);
-    auto* side = new QComboBox(&dialog);
+    auto* side = new QComboBox(dialog);
     side->addItems({"Keep positive", "Keep negative"});
     form->addRow("Origin X", originX); form->addRow("Origin Y", originY);
     form->addRow("Origin Z", originZ); form->addRow("Normal X", normalX);
     form->addRow("Normal Y", normalY); form->addRow("Normal Z", normalZ);
     form->addRow("Offset", offset); form->addRow("Side", side);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    auto* pickFace = new QPushButton("Pick planar face", dialog);
+    form->addRow(pickFace);
+    auto* previewError = new QLabel(dialog);
+    previewError->setStyleSheet("color: #b00020");
+    previewError->setWordWrap(true);
+    form->addRow(previewError);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, dialog);
     form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return;
-    const gp_Vec normal(normalX->value(), normalY->value(), normalZ->value());
-    if (normal.SquareMagnitude() <= 1.0e-12) {
-        setPanelMessage("Trim plane normal must be non-zero", true);
-        return;
-    }
     std::vector<std::string> featureIds;
     for (const auto& id : ids) featureIds.push_back(id.toStdString());
-    reportResult(service_->trimBodyByFeatures(featureIds,
-        gp_Pnt(originX->value(), originY->value(), originZ->value()),
-        gp_Dir(normal), side->currentIndex() == 0
-            ? cad::parametric::TrimSide::Positive : cad::parametric::TrimSide::Negative,
-        offset->value()));
+    const auto updatePreview = [this, dialog, ids, originX, originY, originZ, normalX, normalY,
+                                normalZ, offset, side, previewError]() {
+        if (!trimPreviewHandler_) return;
+        const gp_Vec normal(normalX->value(), normalY->value(), normalZ->value());
+        if (normal.SquareMagnitude() <= 1.0e-12) {
+            previewError->setText("Trim plane normal must be non-zero");
+            if (trimPreviewClearHandler_) trimPreviewClearHandler_();
+            return;
+        }
+        const auto error = trimPreviewHandler_(ids,
+            gp_Pnt(originX->value(), originY->value(), originZ->value()), gp_Dir(normal),
+            side->currentIndex() == 0 ? cad::parametric::TrimSide::Positive
+                                       : cad::parametric::TrimSide::Negative,
+            offset->value());
+        previewError->setText(error);
+    };
+    const auto changed = [updatePreview](double) { updatePreview(); };
+    connect(originX, qOverload<double>(&QDoubleSpinBox::valueChanged), changed);
+    connect(originY, qOverload<double>(&QDoubleSpinBox::valueChanged), changed);
+    connect(originZ, qOverload<double>(&QDoubleSpinBox::valueChanged), changed);
+    connect(normalX, qOverload<double>(&QDoubleSpinBox::valueChanged), changed);
+    connect(normalY, qOverload<double>(&QDoubleSpinBox::valueChanged), changed);
+    connect(normalZ, qOverload<double>(&QDoubleSpinBox::valueChanged), changed);
+    connect(offset, qOverload<double>(&QDoubleSpinBox::valueChanged), changed);
+    connect(side, qOverload<int>(&QComboBox::currentIndexChanged),
+        [updatePreview](int) { updatePreview(); });
+    connect(pickFace, &QPushButton::clicked, dialog, [this, updatePreview, previewError,
+                                                       originX, originY, originZ, normalX,
+                                                       normalY, normalZ]() {
+        if (!trimPlanePickHandler_) return;
+        const auto plane = trimPlanePickHandler_();
+        if (!plane) {
+            previewError->setText("Select one planar face in the viewer");
+            return;
+        }
+        originX->setValue(plane->first.X()); originY->setValue(plane->first.Y());
+        originZ->setValue(plane->first.Z()); normalX->setValue(plane->second.X());
+        normalY->setValue(plane->second.Y()); normalZ->setValue(plane->second.Z());
+        updatePreview();
+    });
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+        dialog, [this, dialog, featureIds, originX, originY, originZ, normalX, normalY,
+                 normalZ, offset, side, previewError]() {
+            const gp_Vec normal(normalX->value(), normalY->value(), normalZ->value());
+            if (normal.SquareMagnitude() <= 1.0e-12) {
+                previewError->setText("Trim plane normal must be non-zero");
+                return;
+            }
+            const auto result = service_->trimBodyByFeatures(featureIds,
+                gp_Pnt(originX->value(), originY->value(), originZ->value()), gp_Dir(normal),
+                side->currentIndex() == 0 ? cad::parametric::TrimSide::Positive
+                                           : cad::parametric::TrimSide::Negative,
+                offset->value());
+            if (!result.success) {
+                previewError->setText(QString::fromStdString(result.error));
+                return;
+            }
+            reportResult(result);
+            dialog->accept();
+        });
+    connect(dialog, &QDialog::finished, dialog, [this](int) {
+        if (trimPreviewClearHandler_) trimPreviewClearHandler_();
+    });
+    updatePreview();
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 void FeatureEditorPanel::refresh()

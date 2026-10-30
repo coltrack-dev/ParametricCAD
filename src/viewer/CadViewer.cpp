@@ -46,6 +46,7 @@
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -2961,6 +2962,7 @@ void CadViewer::clear()
     }
 
     cancelPushPull();
+    clearTrimPreview();
     clearSection();
     clearSketchLinePickTarget();
     if (!sketchPreviewObject_.IsNull()) {
@@ -2986,6 +2988,62 @@ void CadViewer::clear()
     invalidateSnapReferenceCache("MODEL_CHANGED: viewer cleared");
     resetDetectedCycle();
     selectionState_ = {};
+}
+
+void CadViewer::showTrimPreview(const std::vector<TopoDS_Shape>& kept,
+                                const std::vector<TopoDS_Shape>& discarded,
+                                const gp_Pnt& origin, const gp_Dir& normal,
+                                const Bnd_Box& bounds)
+{
+    clearTrimPreview();
+    if (context_.IsNull()) return;
+
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double extent = std::max({xmax - xmin, ymax - ymin, zmax - zmin,
+        origin.Distance(gp_Pnt(xmin, ymin, zmin)), 1.0}) * 0.75 + 1.0;
+    const auto plane = BRepBuilderAPI_MakeFace(
+        gp_Pln(origin, normal), -extent, extent, -extent, extent).Shape();
+    if (!plane.IsNull()) {
+        trimPreviewPlaneObject_ = new AIS_Shape(plane);
+        trimPreviewPlaneObject_->SetDisplayMode(AIS_Shaded);
+        trimPreviewPlaneObject_->SetColor(Quantity_NOC_CYAN);
+        trimPreviewPlaneObject_->SetTransparency(0.72);
+        context_->Display(trimPreviewPlaneObject_, Standard_False);
+    }
+    const auto display = [this](const TopoDS_Shape& shape, const Quantity_Color& color) {
+        if (shape.IsNull()) return;
+        auto object = Handle(AIS_Shape)(new AIS_Shape(shape));
+        object->SetDisplayMode(AIS_Shaded);
+        object->SetColor(color);
+        object->SetTransparency(0.35);
+        context_->Display(object, Standard_False);
+        trimPreviewObjects_.push_back(object);
+    };
+    for (const auto& shape : kept) display(shape, Quantity_NOC_GREEN);
+    for (const auto& shape : discarded) display(shape, Quantity_NOC_RED);
+    if (!trimPreviewPlaneObject_.IsNull() || !trimPreviewObjects_.empty()) {
+        context_->UpdateCurrentViewer();
+        if (view_) view_->Redraw();
+    }
+}
+
+void CadViewer::clearTrimPreview()
+{
+    if (!context_.IsNull()) {
+        if (!trimPreviewPlaneObject_.IsNull())
+            context_->Remove(trimPreviewPlaneObject_, Standard_False);
+        for (const auto& object : trimPreviewObjects_) {
+            if (!object.IsNull()) context_->Remove(object, Standard_False);
+        }
+    }
+    trimPreviewPlaneObject_.Nullify();
+    trimPreviewObjects_.clear();
+}
+
+std::size_t CadViewer::trimPreviewPresentationCount() const noexcept
+{
+    return (trimPreviewPlaneObject_.IsNull() ? 0U : 1U) + trimPreviewObjects_.size();
 }
 
 bool CadViewer::hasDisplayedShapes() const

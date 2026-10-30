@@ -37,6 +37,29 @@ class MainWindowTests final : public QObject
     Q_OBJECT
 
 private slots:
+    void trimPreviewUsesTransientPresentationsAndCleansUp()
+    {
+        if (qEnvironmentVariable("DISPLAY").isEmpty()) {
+            QSKIP("Native CadViewer is required for AIS preview tests");
+        }
+        CadViewer viewer;
+        Bnd_Box bounds;
+        bounds.Add(gp_Pnt(0, 0, 0));
+        bounds.Add(gp_Pnt(10, 10, 10));
+        viewer.showTrimPreview({BRepPrimAPI_MakeBox(5, 10, 10).Shape()},
+            {BRepPrimAPI_MakeBox(5, 10, 10).Shape()},
+            gp_Pnt(5, 0, 0), gp_Dir(1, 0, 0), bounds);
+        if (viewer.trimPreviewPresentationCount() == 0)
+            QSKIP("OCCT viewer context is unavailable in this display configuration");
+        QVERIFY(viewer.trimPreviewPresentationCount() == 3);
+        viewer.clearTrimPreview();
+        QVERIFY(viewer.trimPreviewPresentationCount() == 0);
+        viewer.showTrimPreview({}, {}, gp_Pnt(5, 0, 0), gp_Dir(1, 0, 0), bounds);
+        QVERIFY(viewer.trimPreviewPresentationCount() == 1);
+        viewer.clear();
+        QVERIFY(viewer.trimPreviewPresentationCount() == 0);
+    }
+
     void groupedToolbarsReuseExistingActions()
     {
         if (qEnvironmentVariable("DISPLAY").isEmpty()) {

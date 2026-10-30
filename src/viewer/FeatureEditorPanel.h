@@ -49,6 +49,12 @@ public:
         std::function<void(const QStringList&)> handler
     );
     void setFeatureDoubleClickedHandler(std::function<void(const QString&)> handler);
+    void setTrimPreviewHandler(std::function<QString(
+        const QStringList&, const gp_Pnt&, const gp_Dir&,
+        cad::parametric::TrimSide, double)> handler);
+    void setTrimPreviewClearHandler(std::function<void()> handler);
+    void setTrimPlanePickHandler(
+        std::function<std::optional<std::pair<gp_Pnt, gp_Dir>>()> handler);
     void setRevolveAxisPickHandler(
         std::function<void(const QString&, const QString&)> handler);
     void setVisibilityHandlers(
@@ -161,6 +167,10 @@ private:
     std::function<void()> modelChangedHandler_;
     std::function<void(const QStringList&)> featureSelectedHandler_;
     std::function<void(const QString&)> featureDoubleClickedHandler_;
+    std::function<QString(const QStringList&, const gp_Pnt&, const gp_Dir&,
+                          cad::parametric::TrimSide, double)> trimPreviewHandler_;
+    std::function<void()> trimPreviewClearHandler_;
+    std::function<std::optional<std::pair<gp_Pnt, gp_Dir>>()> trimPlanePickHandler_;
     std::function<void(const QString&, const QString&)> revolveAxisPickHandler_;
     std::function<void(const QStringList&)> hideHandler_;
     std::function<void(const QStringList&)> showHandler_;
