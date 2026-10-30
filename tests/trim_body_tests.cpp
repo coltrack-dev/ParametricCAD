@@ -3,6 +3,7 @@
 #include "model/Feature.h"
 #include "model/ModelComponent.h"
 #include "model/ProjectFile.h"
+#include "application/ModelingController.h"
 #include "operations/ParametricFeatures.h"
 
 #include <BRepGProp.hxx>
@@ -111,6 +112,29 @@ int main()
         auto invalidFaceTrim = std::make_shared<TrimBodyFeature>("invalid-face", source,
             component, source, invalidReference, TrimSide::Positive);
         check(!invalidFaceTrim->recompute(), "invalid plane reference is rejected");
+
+        // A loaded project may contain persisted component metadata for only
+        // some features (the house file does this for replacement chains).
+        // A generated component for another feature must still be accepted
+        // by the controller and become persistent after Apply.
+        cad::application::ModelingController controller;
+        auto persistedSource = std::make_shared<BoxParametricFeature>(
+            "persisted-source", 10, 10, 10);
+        auto generatedTarget = std::make_shared<BoxParametricFeature>(
+            "generated-target", 10, 10, 10);
+        controller.body().addFeature(persistedSource);
+        controller.body().addFeature(generatedTarget);
+        check(controller.body().recompute(), "controller metadata fixture recompute");
+        const auto persistedComponent = componentFor(controller.body(), "persisted-source");
+        const auto generatedComponent = componentFor(controller.body(), "generated-target");
+        controller.body().replaceComponents({persistedComponent});
+        const auto controllerResult = controller.trimBody(
+            {generatedComponent.id}, gp_Pnt(5, 0, 0), gp_Dir(1, 0, 0), TrimSide::Positive);
+        check(controllerResult.success, "trim accepts generated component metadata");
+        controller.undo();
+        controller.redo();
+        check(controller.body().findFeature(controllerResult.id) != nullptr,
+            "trim metadata fixture survives undo redo");
     } catch (const std::exception& exception) {
         return (std::fprintf(stderr, "%s\n", exception.what()), 1);
     }

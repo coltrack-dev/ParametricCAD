@@ -4,6 +4,7 @@
 #include "model/ProjectFile.h"
 #include "model/ProjectArchive.h"
 #include "application/VisibilityManager.h"
+#include "application/ModelingController.h"
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
@@ -313,6 +314,20 @@ int main()
             }
         }
         check(hasTrimReplacement, "facade house preserves trim component visibility metadata");
+        Document houseTrimDocument;
+        Body houseTrimBody;
+        check(ProjectFile::load(facadePath, houseTrimDocument, houseTrimBody, error),
+            "reload facade house for trim controller test");
+        cad::application::ModelingController houseTrimController;
+        houseTrimController.replaceProject(std::move(houseTrimDocument),
+            std::move(houseTrimBody));
+        const auto houseTrimResult = houseTrimController.trimBodyByFeatures(
+            {"house-025"}, gp_Pnt(0, 0, 3000),
+            gp_Dir(0, -std::tan(60.0 * std::acos(-1.0) / 180.0), 1),
+            cad::parametric::TrimSide::Negative);
+        check(houseTrimResult.success, "trim loaded house OSB component");
+        houseTrimController.undo();
+        houseTrimController.redo();
         const auto facadeWall = facadeBody.findFeature("house-001");
         check(facadeWall && std::abs(std::get<double>(facadeWall->properties()[0].value) - 13000.0) < 1e-9
                   && std::abs(std::get<double>(facadeWall->properties()[1].value) - 380.0) < 1e-9,

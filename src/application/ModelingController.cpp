@@ -24,6 +24,7 @@
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <QUuid>
+#include <QDebug>
 
 #include <algorithm>
 #include <cmath>
@@ -88,9 +89,11 @@ ModelComponent componentFromShape(const TopoDS_Shape& shape, const std::string& 
 
 std::vector<ModelComponent> componentMetadata(const cad::parametric::Body& body)
 {
-    if (!body.components().empty()) return body.components();
-    std::vector<ModelComponent> result;
+    std::vector<ModelComponent> result = body.components();
+    std::unordered_set<std::string> persistedFeatures;
+    for (const auto& component : result) persistedFeatures.insert(component.sourceFeatureId);
     for (const auto& feature : body.features()) {
+        if (persistedFeatures.contains(feature->id())) continue;
         const auto generated = ComponentResolver::enumerate(body, feature->id());
         result.insert(result.end(), generated.begin(), generated.end());
     }
@@ -1983,6 +1986,8 @@ ModelingResult ModelingController::trimBody(
     std::vector<std::string> resultIds;
     auto before = componentMetadata(body_);
     auto after = before;
+    qInfo().noquote() << "Trim Body apply: targets=" << static_cast<int>(componentIds.size())
+                      << "metadata=" << static_cast<int>(before.size());
     try {
         for (const auto& componentId : componentIds) {
             if (!uniqueIds.insert(componentId).second)
@@ -1990,6 +1995,10 @@ ModelingResult ModelingController::trimBody(
             std::string resolveError;
             const auto resolved = cad::parametric::ComponentResolver::resolve(
                 body_, componentId, resolveError);
+            qInfo().noquote() << "Trim Body target component="
+                              << QString::fromStdString(componentId)
+                              << "resolved=" << static_cast<bool>(resolved)
+                              << "error=" << QString::fromStdString(resolveError);
             if (!resolved) return componentFailure(resolveError);
             const auto source = body_.findFeature(resolved->component.sourceFeatureId);
             if (!source) return componentFailure("Trim target source feature does not exist");
@@ -2008,6 +2017,8 @@ ModelingResult ModelingController::trimBody(
                 });
             if (sourceIterator == after.end())
                 return componentFailure("Trim target component metadata is unavailable");
+            qInfo().noquote() << "Trim Body metadata lookup component="
+                              << QString::fromStdString(componentId) << "found=true";
             sourceIterator->visible = false;
             sourceIterator->technicalHidden = true;
             sourceIterator->replacementComponentIds = {resultComponentId};

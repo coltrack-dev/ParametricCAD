@@ -2396,6 +2396,8 @@ void MainWindow::createParametricPanel()
                 if (!source) return QString("Trim source feature is missing");
                 for (const auto& component : cad::parametric::ComponentResolver::enumerate(
                          modeling_.body(), source->id())) {
+                    qInfo().noquote() << "Trim preview target feature=" << featureId
+                                      << "component=" << QString::fromStdString(component.id);
                     auto temporary = std::make_shared<cad::parametric::TrimBodyFeature>(
                         "trim-preview", source, component, origin, normal, side, offset);
                     if (!temporary->recompute())
@@ -2403,7 +2405,17 @@ void MainWindow::createParametricPanel()
                     std::string resolutionError;
                     const auto resolved = cad::parametric::ComponentResolver::resolve(
                         modeling_.body(), component.id, resolutionError);
-                    const auto sourceShape = resolved ? resolved->shape : source->shape();
+                    if (!resolved) {
+                        qInfo().noquote() << "Trim preview component resolution failed id="
+                                          << QString::fromStdString(component.id)
+                                          << "error=" << QString::fromStdString(resolutionError);
+                        return QString("Trim target component could not be resolved: ")
+                            + QString::fromStdString(resolutionError);
+                    }
+                    const auto sourceShape = resolved->shape;
+                    qInfo().noquote() << "Trim preview shape component="
+                                      << QString::fromStdString(component.id)
+                                      << "null=" << sourceShape.IsNull();
                     if (sourceShape.IsNull()) return QString("Trim source geometry is empty");
                     BRepBndLib::Add(sourceShape, bounds);
                     BRepBndLib::Add(temporary->shape(), bounds);
@@ -2421,12 +2433,17 @@ void MainWindow::createParametricPanel()
     featureEditorPanel_->setTrimPlanePickHandler(
         [this]() -> std::optional<std::pair<gp_Pnt, gp_Dir>> {
             const auto selection = viewer_->selectionSnapshot();
+            qInfo().noquote() << "Trim plane pick selection items="
+                              << static_cast<int>(selection.items.size());
             if (selection.items.size() != 1
                 || selection.items.front().kind != cad::application::SelectionKind::Face)
                 return std::nullopt;
             const auto references = viewer_->captureTopologySelection(modeling_.body());
             if (references.size() != 1) return std::nullopt;
             const auto& reference = references.front();
+            qInfo().noquote() << "Trim plane pick feature="
+                              << QString::fromStdString(reference.featureId)
+                              << "transientIndex=" << reference.transientIndex.value_or(-1);
             const auto feature = modeling_.body().findFeature(reference.featureId);
             if (!feature) return std::nullopt;
             const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
