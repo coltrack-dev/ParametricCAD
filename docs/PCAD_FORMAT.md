@@ -53,8 +53,16 @@ runtime model.
 
 Supported serialized feature records depend on the current registry. The core
 records include Box, Cylinder, Cone, Sphere, Torus, Hexagon, Boolean, Sketch,
-Face, Extrude, Revolve, and Sweep. See `src/model/ProjectFile.cpp` for the
-authoritative registry.
+Face, Extrude, Revolve, Sweep, and TrimBody. See `src/model/ProjectFile.cpp`
+for the authoritative registry.
+
+`TrimBody` keeps one side of a target solid using a plane. Its required fields
+are `sourceFeatureId`, `sourceComponentId`, `planeOrigin`, `planeNormal`, and
+`side` (`positive` or `negative`); `offset` is optional and defaults to zero.
+When the plane is selected from another feature, `planeFeatureId` and the
+serialized `planeReference` are stored instead of relying on a transient
+viewer selection. The source feature remains in the parametric history and
+the trim feature is recomputed from it on load.
 
 Revolve records contain `sourceFeatureId`, `angleDegrees`, and a typed `axis`
 object. Global axes use `GlobalX`, `GlobalY`, or `GlobalZ`; a Sketch-line axis

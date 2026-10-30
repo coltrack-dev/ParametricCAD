@@ -1043,6 +1043,39 @@ const std::unordered_map<std::string, FeatureFactory>& factories()
                 gp_Pnt(origin.at(0).toDouble(), origin.at(1).toDouble(), origin.at(2).toDouble()),
                 gp_Dir(normal.at(0).toDouble(), normal.at(1).toDouble(), normal.at(2).toDouble()), side);
         }},
+        {"TrimBody", [](const QJsonObject& o, const Body& body) {
+            const auto source = body.findFeature(string(o, "sourceFeatureId"));
+            require(static_cast<bool>(source), "TrimBody references missing source");
+            const auto values = o.value("componentSignature").toArray();
+            const auto origin = o.value("planeOrigin").toArray();
+            const auto normal = o.value("planeNormal").toArray();
+            require(values.size() == 7 && origin.size() == 3 && normal.size() == 3,
+                "Invalid TrimBody parameters");
+            ModelComponent component;
+            component.id = string(o, "sourceComponentId");
+            component.sourceFeatureId = string(o, "sourceFeatureId");
+            component.minX = values.at(0).toDouble(); component.minY = values.at(1).toDouble();
+            component.minZ = values.at(2).toDouble(); component.maxX = values.at(3).toDouble();
+            component.maxY = values.at(4).toDouble(); component.maxZ = values.at(5).toDouble();
+            component.volume = values.at(6).toDouble();
+            const auto sideName = string(o, "side");
+            const auto side = sideName == "negative" ? TrimSide::Negative
+                : sideName == "positive" ? TrimSide::Positive
+                : throw std::invalid_argument("Invalid TrimBody side");
+            const auto offset = o.contains("offset") ? number(o, "offset") : 0.0;
+            if (o.contains("planeReference")) {
+                const auto planeSource = body.findFeature(string(o, "planeFeatureId"));
+                require(static_cast<bool>(planeSource), "TrimBody references missing plane feature");
+                return std::make_shared<TrimBodyFeature>(string(o, "id"), source, component,
+                    planeSource,
+                    cad::topology::topologicalReferenceFromJson(
+                        o.value("planeReference").toObject()), side, offset);
+            }
+            return std::make_shared<TrimBodyFeature>(string(o, "id"), source, component,
+                gp_Pnt(origin.at(0).toDouble(), origin.at(1).toDouble(), origin.at(2).toDouble()),
+                gp_Dir(normal.at(0).toDouble(), normal.at(1).toDouble(), normal.at(2).toDouble()),
+                side, offset);
+        }},
         {"SplitAssembly", [](const QJsonObject& o, const Body& body) {
             const auto whole = body.findFeature(string(o, "wholeSourceFeatureId"));
             const auto component = body.findFeature(string(o, "componentSourceFeatureId"));

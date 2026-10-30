@@ -245,6 +245,22 @@ QJsonArray toolDefinitions()
         }},
         {"required", QJsonArray{"componentId", "origin", "normal", "units"}}
     };
+    const QJsonObject trimBody{
+        {"type", "object"},
+        {"additionalProperties", false},
+        {"properties", QJsonObject{
+            {"targetComponentIds", QJsonObject{{"type", "array"}}},
+            {"origin", QJsonObject{{"type", "array"}}},
+            {"normal", QJsonObject{{"type", "array"}}},
+            {"side", QJsonObject{{"type", "string"},
+                {"enum", QJsonArray{"positive", "negative"}}}},
+            {"offset", QJsonObject{{"type", "number"}}},
+            {"planeFeatureId", QJsonObject{{"type", "string"}}},
+            {"planeReference", QJsonObject{{"type", "object"}}},
+            {"units", units}
+        }},
+        {"required", QJsonArray{"targetComponentIds", "side", "units"}}
+    };
     const QJsonObject componentVisibility{{"type", "object"}, {"additionalProperties", false},
         {"properties", QJsonObject{
             {"componentId", QJsonObject{{"type", "string"}}},
@@ -312,6 +328,8 @@ QJsonArray toolDefinitions()
             {"inputSchema", componentTransform}}}
         ,{"cad.split_component", QJsonObject{{"description", "Split one persistent model component by a plane"},
             {"inputSchema", componentSplit}}}
+        ,{"cad.trim_body", QJsonObject{{"description", "Trim one or more solid components by an explicit plane or planar face"},
+            {"inputSchema", trimBody}}}
         ,{"cad.recover_pre_split", QJsonObject{{"description", "Restore a whole-feature result before downstream component Split/Transform operations"},
             {"inputSchema", recoverPreSplit}}}
     };

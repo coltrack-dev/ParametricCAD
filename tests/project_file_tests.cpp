@@ -3,6 +3,7 @@
 #include "model/Body.h"
 #include "model/ProjectFile.h"
 #include "model/ProjectArchive.h"
+#include "application/VisibilityManager.h"
 #include "operations/BoxFeature.h"
 #include "operations/CylinderFeature.h"
 #include "operations/ParametricFeatures.h"
@@ -13,6 +14,7 @@
 #include <QTemporaryDir>
 #include <QDir>
 #include <BRepGProp.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <GProp_GProps.hxx>
 #include <cmath>
 #include <gp_Trsf.hxx>
@@ -290,6 +292,79 @@ int main()
             check(houseMetrics.featureCount == static_cast<int>(houseBody.features().size()),
                 "house project feature count");
         }
+        const auto facadePath = QDir(QStringLiteral(PARAMETRIC_CAD_SOURCE_DIR))
+            .filePath("examples/house_facade_photo.pcad");
+        check(QFile::exists(facadePath), "facade house project exists");
+        Document facadeDocument;
+        Body facadeBody;
+        cad::application::VisibilityManager facadeVisibility;
+        ProjectLoadMetrics facadeMetrics;
+        check(ProjectFile::load(facadePath, facadeDocument, facadeBody, error,
+            {}, &facadeMetrics, true, &facadeVisibility),
+            "load facade house project");
+        check(facadeMetrics.featureCount == 77 && facadeBody.features().size() == 77,
+            "facade house feature count");
+        check(facadeVisibility.groups().empty(), "facade house visibility groups");
+        bool hasTrimReplacement = false;
+        for (const auto& component : facadeBody.components()) {
+            if (component.technicalHidden && !component.replacementComponentIds.empty()) {
+                hasTrimReplacement = true;
+                break;
+            }
+        }
+        check(hasTrimReplacement, "facade house preserves trim component visibility metadata");
+        const auto facadeWall = facadeBody.findFeature("house-001");
+        check(facadeWall && std::abs(std::get<double>(facadeWall->properties()[0].value) - 13000.0) < 1e-9
+                  && std::abs(std::get<double>(facadeWall->properties()[1].value) - 380.0) < 1e-9,
+            "facade house width and depth orientation");
+        check(facadeBody.findFeature("house-009") && facadeBody.findFeature("house-010")
+                  && facadeBody.findFeature("house-011"),
+            "facade house door opening components");
+        check(facadeBody.findFeature("trim-house-025-left-slope")
+                  && std::string(facadeBody.findFeature("trim-house-025-left-slope")->typeId())
+                      == "TrimBody",
+            "facade house uses parametric trims");
+        const auto leftRoof = facadeBody.findFeature("house-055");
+        const auto rightRoof = facadeBody.findFeature("house-056");
+        const auto rightAtticWall = facadeBody.findFeature("house-018");
+        check(leftRoof && rightRoof && rightAtticWall
+                  && std::abs(std::abs(leftRoof->placement().Value(2, 3))
+                      - std::sin(60.0 * std::acos(-1.0) / 180.0)) < 1e-9
+                  && std::abs(std::abs(rightRoof->placement().Value(2, 3))
+                      - std::sin(25.0 * std::acos(-1.0) / 180.0)) < 1e-9
+                  && std::abs(rightRoof->placement().TranslationPart().Y()
+                      - 2591.3739784558543) < 1e-6
+                  && std::abs(std::get<double>(rightAtticWall->properties()[2].value) - 1500.0) < 1e-9,
+            "facade house roof slopes and attic wall height");
+        for (const auto& feature : facadeBody.features()) {
+            check(!feature->shape().IsNull() && BRepCheck_Analyzer(feature->shape()).IsValid(),
+                "facade house contains invalid geometry");
+        }
+        const auto facadeRoundtripPath = directory.filePath("house-facade-roundtrip.pcad");
+        check(ProjectFile::save(facadeRoundtripPath, facadeDocument, facadeBody,
+            error, &facadeVisibility), "save facade house roundtrip");
+        Document facadeReloadedDocument;
+        Body facadeReloadedBody;
+        cad::application::VisibilityManager facadeReloadedVisibility;
+        check(ProjectFile::load(facadeRoundtripPath, facadeReloadedDocument,
+            facadeReloadedBody, error, {}, nullptr, true, &facadeReloadedVisibility),
+            "reload facade house roundtrip");
+        check(facadeReloadedBody.features().size() == facadeBody.features().size()
+                  && facadeReloadedBody.findFeature("house-055")
+                  && facadeReloadedBody.findFeature("house-056"),
+            "facade house roundtrip feature identity");
+        auto facadeWindow = facadeReloadedBody.findFeature("house-040");
+        check(facadeWindow && facadeWindow->userVisible(), "facade window initially visible");
+        facadeWindow->setUserVisible(false);
+        check(ProjectFile::save(facadeRoundtripPath, facadeReloadedDocument,
+            facadeReloadedBody, error, &facadeReloadedVisibility),
+            "save facade visibility edit");
+        Document visibilityDocument;
+        Body visibilityBody;
+        check(ProjectFile::load(facadeRoundtripPath, visibilityDocument, visibilityBody,
+            error), "reload facade visibility edit");
+        check(!visibilityBody.findFeature("house-040")->userVisible(),
+            "facade visibility roundtrip");
         file.setFileName(path);
 
         bad = root;

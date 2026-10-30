@@ -150,6 +150,13 @@ target_link_libraries(model_component_tests PRIVATE model_test_support
     ParametricCAD::OCCTModeling)
 add_test(NAME model_component_tests COMMAND model_component_tests)
 
+add_executable(house_facade_generator house_facade_generator.cpp)
+target_link_libraries(house_facade_generator PRIVATE model_test_support Qt6::Core)
+
+add_executable(trim_body_tests trim_body_tests.cpp)
+target_link_libraries(trim_body_tests PRIVATE model_test_support)
+add_test(NAME trim_body_tests COMMAND trim_body_tests)
+
 add_executable(electrostatic_boundary_tests
     electrostatic_boundary_tests.cpp
 )

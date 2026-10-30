@@ -226,6 +226,13 @@ public:
         const gp_Pnt& origin,
         const gp_Dir& normal
     );
+    ModelingResult trimBody(
+        const std::vector<std::string>& componentIds,
+        const gp_Pnt& origin,
+        const gp_Dir& normal,
+        cad::parametric::TrimSide side,
+        double offset = 0.0
+    );
     ModelingResult recoverPreSplit(const std::string& rootFeatureId);
     ModelingResult splitFeature(
         const std::string& wholeFeatureId,
@@ -242,6 +249,13 @@ public:
         BooleanKind operation,
         const std::vector<std::string>& selection,
         const std::string& currentId = {}
+    ) override;
+    ModelingResult trimBodyByFeatures(
+        const std::vector<std::string>& featureIds,
+        const gp_Pnt& origin,
+        const gp_Dir& normal,
+        cad::parametric::TrimSide side,
+        double offset = 0.0
     ) override;
     ModelingResult deleteFeature(const std::string& featureId) override;
     ModelingResult importFeatures(

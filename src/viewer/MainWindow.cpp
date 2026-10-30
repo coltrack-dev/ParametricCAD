@@ -40,6 +40,8 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <GeomAbs_SurfaceType.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepBndLib.hxx>
@@ -872,7 +874,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
         "cad.get_components", "cad.get_component", "cad.get_component_topology",
         "cad.set_component_visibility", "cad.transform_component", "cad.split_component",
-        "cad.recover_pre_split"};
+        "cad.recover_pre_split", "cad.trim_body"};
     static const QStringList transactionalTools{
         "cad.create_sketch", "cad.add_rectangle", "cad.add_line", "cad.add_circle",
         "cad.extrude", "cad.pocket", "cad.edit_feature", "cad.delete_feature"};
@@ -946,6 +948,25 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
             || arguments.value("componentId").toString().isEmpty())
             return rpcError(id, -32602, "split_component requires componentId, origin and normal");
     }
+    if (tool == "cad.trim_body") {
+        if (!hasOnly({"targetComponentIds", "origin", "normal", "side", "offset",
+                      "planeFeatureId", "planeReference", "units"})
+            || !arguments.value("targetComponentIds").isArray()
+            || arguments.value("targetComponentIds").toArray().isEmpty()
+            || !arguments.value("side").isString())
+            return rpcError(id, -32602,
+                "trim_body requires targetComponentIds and side");
+        const auto side = arguments.value("side").toString();
+        if (side != "positive" && side != "negative")
+            return rpcError(id, -32602, "trim_body side must be positive or negative");
+        if (arguments.contains("offset")
+            && (!arguments.value("offset").isDouble()
+                || !std::isfinite(arguments.value("offset").toDouble())))
+            return rpcError(id, -32602, "trim_body offset must be finite");
+        if (arguments.contains("planeFeatureId") != arguments.contains("planeReference"))
+            return rpcError(id, -32602,
+                "planeFeatureId and planeReference must be supplied together");
+    }
     if (tool == "cad.recover_pre_split") {
         if (!hasOnly({"rootFeatureId"})
             || !arguments.value("rootFeatureId").isString()
@@ -960,7 +981,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         "cad.extrude", "cad.pocket", "cad.chamfer", "cad.fillet", "cad.shell",
         "cad.add_arc", "cad.linear_pattern", "cad.path_pattern", "cad.edit_sketch_profile",
         "cad.mirror", "cad.translate", "cad.rotate", "cad.transform_model", "cad.split_feature",
-        "cad.transform_component", "cad.split_component"};
+        "cad.transform_component", "cad.split_component", "cad.trim_body"};
     if (unitTools.contains(tool)) {
         QString unitsError;
         if (!validUnits(arguments, unitsError)) return rpcError(id, -32602, unitsError);
@@ -1676,6 +1697,60 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         if (!modelingResult.success) return finishModeling(modelingResult, "split_component");
         refreshModelView();
         return finishModeling(modelingResult, "split_component");
+    } else if (tool == "cad.trim_body") {
+        const auto vector3 = [&arguments](const char* key, double& x, double& y, double& z) {
+            const auto values = arguments.value(QLatin1String(key)).toArray();
+            if (values.size() != 3 || !values.at(0).isDouble()
+                || !values.at(1).isDouble() || !values.at(2).isDouble()) return false;
+            x = values.at(0).toDouble(); y = values.at(1).toDouble(); z = values.at(2).toDouble();
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+        };
+        std::vector<std::string> componentIds;
+        for (const auto& value : arguments.value("targetComponentIds").toArray()) {
+            if (!value.isString() || value.toString().isEmpty())
+                return rpcError(id, -32602, "targetComponentIds must contain non-empty strings");
+            componentIds.push_back(value.toString().toStdString());
+        }
+        double ox = 0.0, oy = 0.0, oz = 0.0, nx = 0.0, ny = 0.0, nz = 0.0;
+        if (arguments.contains("planeReference")) {
+            const auto planeFeature = modeling_.body().findFeature(
+                arguments.value("planeFeatureId").toString().toStdString());
+            if (!planeFeature) return rpcError(id, -32004, "Trim plane feature not found");
+            try {
+                const auto reference = cad::topology::topologicalReferenceFromJson(
+                    arguments.value("planeReference").toObject());
+                if (reference.featureId != planeFeature->id()
+                    || reference.kind != cad::topology::TopologicalKind::Face)
+                    return rpcError(id, -32602, "Trim plane reference has the wrong feature or kind");
+                const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+                    reference, planeFeature->shape());
+                if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape
+                    || resolved.shape->ShapeType() != TopAbs_FACE)
+                    return rpcError(id, -32602, "Trim plane face reference could not be resolved");
+                const auto face = TopoDS::Face(*resolved.shape);
+                BRepAdaptor_Surface surface(face, Standard_True);
+                if (surface.GetType() != GeomAbs_Plane)
+                    return rpcError(id, -32602, "Trim plane face must be planar");
+                const auto plane = surface.Plane();
+                const auto origin = plane.Location();
+                auto normal = plane.Axis().Direction();
+                if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+                ox = origin.X(); oy = origin.Y(); oz = origin.Z();
+                nx = normal.X(); ny = normal.Y(); nz = normal.Z();
+            } catch (const std::exception& error) {
+                return rpcError(id, -32602, QString::fromUtf8(error.what()));
+            }
+        } else if (!vector3("origin", ox, oy, oz) || !vector3("normal", nx, ny, nz)) {
+            return rpcError(id, -32602, "trim_body requires finite origin and normal");
+        }
+        const auto modelingResult = modeling_.trimBody(componentIds,
+            gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz),
+            arguments.value("side").toString() == "positive"
+                ? cad::parametric::TrimSide::Positive : cad::parametric::TrimSide::Negative,
+            arguments.value("offset").toDouble(0.0));
+        if (!modelingResult.success) return finishModeling(modelingResult, "trim_body");
+        refreshModelView();
+        return finishModeling(modelingResult, "trim_body");
     } else if (tool == "cad.recover_pre_split") {
         const auto modelingResult = modeling_.recoverPreSplit(
             arguments.value("rootFeatureId").toString().toStdString());

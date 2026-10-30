@@ -43,6 +43,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 #include <stdexcept>
 #include <unordered_set>
@@ -3785,6 +3786,197 @@ ParametricFeature::Ptr ComponentSplitFeature::clone(std::string newId) const
         origin_, normal_, side_);
     copyPlacementTo(copy);
     return copy;
+}
+
+TrimBodyFeature::TrimBodyFeature(
+    std::string id, const Ptr& source, ModelComponent component, const gp_Pnt origin,
+    const gp_Dir normal, const TrimSide side, const double offset)
+    : ParametricFeature(std::move(id), "Trim Body by Plane"),
+      sourceFeatureId_(source ? source->id() : std::string{}),
+      sourceComponentId_(component.id), source_(source), component_(std::move(component)),
+      origin_(origin), normal_(normal), side_(side), offset_(offset)
+{
+    if (!source) throw std::invalid_argument("Trim source must not be null");
+    if (sourceComponentId_.empty()) throw std::invalid_argument("Trim component id must not be empty");
+    if (!std::isfinite(offset_)) throw std::invalid_argument("Trim offset must be finite");
+    addDependency(source_);
+}
+
+TrimBodyFeature::TrimBodyFeature(
+    std::string id, const Ptr& source, ModelComponent component, const Ptr& planeSource,
+    cad::topology::TopologicalReference planeReference, const TrimSide side,
+    const double offset)
+    : TrimBodyFeature(std::move(id), source, std::move(component), gp_Pnt(), gp_Dir(0, 0, 1),
+          side, offset)
+{
+    if (!planeSource) throw std::invalid_argument("Trim plane source must not be null");
+    if (planeReference.kind != cad::topology::TopologicalKind::Face
+        || planeReference.featureId != planeSource->id())
+        throw std::invalid_argument("Invalid Trim plane face reference");
+    planeSource_ = planeSource;
+    planeReference_ = std::move(planeReference);
+    addDependency(planeSource_);
+}
+
+std::vector<FeatureProperty> TrimBodyFeature::properties() const
+{
+    const auto normal = normal_.XYZ();
+    return {
+        componentTextProperty("sourceFeatureId", "Target Feature", sourceFeatureId_),
+        componentTextProperty("sourceComponentId", "Target Component", sourceComponentId_),
+        componentNumberProperty("planeOriginX", "Plane origin X", origin_.X(), true),
+        componentNumberProperty("planeOriginY", "Plane origin Y", origin_.Y(), true),
+        componentNumberProperty("planeOriginZ", "Plane origin Z", origin_.Z(), true),
+        componentNumberProperty("planeNormalX", "Plane normal X", normal.X(), true),
+        componentNumberProperty("planeNormalY", "Plane normal Y", normal.Y(), true),
+        componentNumberProperty("planeNormalZ", "Plane normal Z", normal.Z(), true),
+        componentNumberProperty("offset", "Plane offset", offset_, true),
+        componentEditableTextProperty("side", "Keep side",
+            side_ == TrimSide::Negative ? "negative" : "positive"),
+        componentTextProperty("validity", "B-Rep validity",
+            !shape().IsNull() && BRepCheck_Analyzer(shape()).IsValid() ? "valid" : "invalid")};
+}
+
+bool TrimBodyFeature::setNumericProperty(const std::string& key, const double value)
+{
+    if (!std::isfinite(value)) return false;
+    if (key == "planeOriginX") origin_.SetX(value);
+    else if (key == "planeOriginY") origin_.SetY(value);
+    else if (key == "planeOriginZ") origin_.SetZ(value);
+    else if (key == "planeNormalX" || key == "planeNormalY" || key == "planeNormalZ") {
+        auto normal = normal_.XYZ();
+        if (key == "planeNormalX") normal.SetX(value);
+        else if (key == "planeNormalY") normal.SetY(value);
+        else normal.SetZ(value);
+        if (normal.SquareModulus() <= 1.0e-12) return false;
+        try { normal_ = gp_Dir(normal); }
+        catch (...) { return false; }
+    } else if (key == "offset") offset_ = value;
+    else return false;
+    markDirty();
+    return true;
+}
+
+bool TrimBodyFeature::setProperty(const std::string& key, const PropertyValue& value)
+{
+    if (key == "side" && std::holds_alternative<std::string>(value)) {
+        const auto& side = std::get<std::string>(value);
+        if (side == "negative") side_ = TrimSide::Negative;
+        else if (side == "positive") side_ = TrimSide::Positive;
+        else return false;
+        markDirty();
+        return true;
+    }
+    return ParametricFeature::setProperty(key, value);
+}
+
+TopoDS_Shape TrimBodyFeature::build() const
+{
+    const auto sourceShape = source_->shape().ShapeType() == TopAbs_SOLID
+        ? source_->shape() : resolveComponentShape(source_->shape(), component_);
+    if (sourceShape.IsNull()) throw std::runtime_error("Trim target component is unresolved");
+
+    gp_Pnt planeOrigin = origin_;
+    gp_Dir planeNormal = normal_;
+    if (planeReference_) {
+        const auto resolved = cad::topology::TopologicalReferenceResolver::resolveAgainstShape(
+            *planeReference_, planeSource_->shape());
+        if (resolved.status != cad::topology::ResolveStatus::Resolved || !resolved.shape)
+            throw std::runtime_error(resolved.error.empty()
+                ? "Trim plane face reference could not be resolved" : resolved.error);
+        if (resolved.shape->ShapeType() != TopAbs_FACE)
+            throw std::runtime_error("Trim plane reference did not resolve to a face");
+        const auto face = TopoDS::Face(*resolved.shape);
+        BRepAdaptor_Surface surface(face, Standard_True);
+        if (surface.GetType() != GeomAbs_Plane)
+            throw std::runtime_error("Trim plane reference must resolve to a planar face");
+        planeOrigin = surface.Plane().Location();
+        planeNormal = surface.Plane().Axis().Direction();
+        if (face.Orientation() == TopAbs_REVERSED) planeNormal.Reverse();
+    }
+    planeOrigin.Translate(gp_Vec(planeNormal) * offset_);
+
+    Bnd_Box bounds;
+    BRepBndLib::Add(sourceShape, bounds);
+    if (bounds.IsVoid()) throw std::runtime_error("Cannot trim an empty component");
+    Standard_Real minX, minY, minZ, maxX, maxY, maxZ;
+    bounds.Get(minX, minY, minZ, maxX, maxY, maxZ);
+    const std::array<gp_Pnt, 8> corners{
+        gp_Pnt(minX, minY, minZ), gp_Pnt(minX, minY, maxZ),
+        gp_Pnt(minX, maxY, minZ), gp_Pnt(minX, maxY, maxZ),
+        gp_Pnt(maxX, minY, minZ), gp_Pnt(maxX, minY, maxZ),
+        gp_Pnt(maxX, maxY, minZ), gp_Pnt(maxX, maxY, maxZ)};
+    double minDistance = std::numeric_limits<double>::max();
+    double maxDistance = -std::numeric_limits<double>::max();
+    for (const auto& corner : corners) {
+        const auto distance = gp_Vec(planeOrigin, corner).Dot(gp_Vec(planeNormal));
+        minDistance = std::min(minDistance, distance);
+        maxDistance = std::max(maxDistance, distance);
+    }
+    constexpr double tolerance = 1.0e-7;
+    const bool keepsPositive = side_ == TrimSide::Positive;
+    if (keepsPositive ? maxDistance < -tolerance : minDistance > tolerance)
+        throw std::runtime_error("Trim plane removes the entire target component");
+    if (keepsPositive ? minDistance > tolerance : maxDistance < -tolerance)
+        return sourceShape;
+
+    const auto extent = std::max({
+        maxX - minX, maxY - minY, maxZ - minZ,
+        std::abs(minX - planeOrigin.X()), std::abs(maxX - planeOrigin.X()),
+        std::abs(minY - planeOrigin.Y()), std::abs(maxY - planeOrigin.Y()),
+        std::abs(minZ - planeOrigin.Z()), std::abs(maxZ - planeOrigin.Z()), 1.0}) + 1.0;
+    const auto plane = BRepBuilderAPI_MakeFace(
+        gp_Pln(planeOrigin, planeNormal), -extent, extent, -extent, extent).Face();
+    if (plane.IsNull()) throw std::runtime_error("Failed to construct Trim plane");
+    gp_Pnt reference = planeOrigin;
+    reference.Translate(gp_Vec(planeNormal) * (keepsPositive ? extent : -extent));
+    BRepPrimAPI_MakeHalfSpace halfSpace(plane, reference);
+    if (!halfSpace.IsDone()) throw std::runtime_error("Failed to construct Trim half-space");
+    BRepAlgoAPI_Common common(sourceShape, halfSpace.Solid());
+    common.Build();
+    if (!common.IsDone() || common.Shape().IsNull())
+        throw std::runtime_error("OCCT Trim Body operation failed");
+    int solids = 0;
+    for (TopExp_Explorer explorer(common.Shape(), TopAbs_SOLID);
+         explorer.More(); explorer.Next()) ++solids;
+    if (solids == 0) throw std::runtime_error("Trim Body produced an empty result");
+    BRepCheck_Analyzer analyzer(common.Shape());
+    if (!analyzer.IsValid()) throw std::runtime_error("Trim Body produced an invalid B-Rep");
+    return common.Shape();
+}
+
+void TrimBodyFeature::writeParameters(QJsonObject& object) const
+{
+    object.insert("sourceFeatureId", QString::fromStdString(sourceFeatureId_));
+    object.insert("sourceComponentId", QString::fromStdString(sourceComponentId_));
+    object.insert("componentSignature", componentBounds(component_));
+    object.insert("planeOrigin", QJsonArray{origin_.X(), origin_.Y(), origin_.Z()});
+    object.insert("planeNormal", QJsonArray{normal_.X(), normal_.Y(), normal_.Z()});
+    object.insert("side", side_ == TrimSide::Negative ? "negative" : "positive");
+    object.insert("offset", offset_);
+    if (planeReference_) {
+        object.insert("planeFeatureId", QString::fromStdString(planeSource_->id()));
+        object.insert("planeReference", cad::topology::toJson(*planeReference_));
+    }
+}
+
+ParametricFeature::Ptr TrimBodyFeature::clone(std::string newId) const
+{
+    ParametricFeature::Ptr copy;
+    if (planeReference_) {
+        copy = std::make_shared<TrimBodyFeature>(std::move(newId), source_, component_,
+            planeSource_, *planeReference_, side_, offset_);
+    } else {
+        copy = std::make_shared<TrimBodyFeature>(std::move(newId), source_, component_,
+            origin_, normal_, side_, offset_);
+    }
+    copyPlacementTo(copy);
+    return copy;
+}
+
+std::vector<std::string> TrimBodyFeature::hiddenDependencyIds() const
+{
+    return {sourceFeatureId_};
 }
 
 SplitAssemblyFeature::SplitAssemblyFeature(std::string id, const Ptr& wholeSource,

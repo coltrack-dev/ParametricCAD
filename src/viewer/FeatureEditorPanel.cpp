@@ -12,6 +12,8 @@
 #include <QMenu>
 #include <QScopedValueRollback>
 #include <QDoubleSpinBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QCheckBox>
@@ -469,6 +471,7 @@ void FeatureEditorPanel::createUi()
     auto* fuseButton = new QPushButton("Fuse", this);
     auto* cutButton = new QPushButton("Cut", this);
     auto* commonButton = new QPushButton("Common", this);
+    auto* trimButton = new QPushButton("Trim Body", this);
 
     fuseButton->setToolTip(
         "Select two features in the tree with Ctrl, then Fuse"
@@ -479,10 +482,14 @@ void FeatureEditorPanel::createUi()
     commonButton->setToolTip(
         "Select two features and keep their intersection"
     );
+    trimButton->setToolTip(
+        "Select target features and trim their solid components by a plane"
+    );
 
     booleanLayout->addWidget(fuseButton, 0, 0);
     booleanLayout->addWidget(cutButton, 0, 1);
     booleanLayout->addWidget(commonButton, 1, 0, 1, 2);
+    booleanLayout->addWidget(trimButton, 2, 0, 1, 2);
 
     rootLayout->addLayout(booleanLayout);
 
@@ -634,6 +641,8 @@ void FeatureEditorPanel::createUi()
             );
         }
     );
+
+    connect(trimButton, &QPushButton::clicked, this, [this]() { addTrimBody(); });
 
     connect(
         tree_,
@@ -930,6 +939,52 @@ void FeatureEditorPanel::addBoolean(
         }(),
         current ? current->data(0, FeatureIdRole).toString().toStdString() : std::string{}));
     return;
+}
+
+void FeatureEditorPanel::addTrimBody()
+{
+    if (!service_) return;
+    const auto ids = selectedFeatureIds();
+    if (ids.isEmpty()) {
+        setPanelMessage("Select one or more target features before trimming", true);
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle("Trim Body by Plane");
+    auto* form = new QFormLayout(&dialog);
+    auto number = [&dialog](double value) {
+        auto* spin = new QDoubleSpinBox(&dialog);
+        spin->setRange(-1.0e9, 1.0e9);
+        spin->setDecimals(3);
+        spin->setValue(value);
+        return spin;
+    };
+    auto* originX = number(0.0); auto* originY = number(0.0); auto* originZ = number(0.0);
+    auto* normalX = number(0.0); auto* normalY = number(0.0); auto* normalZ = number(1.0);
+    auto* offset = number(0.0);
+    auto* side = new QComboBox(&dialog);
+    side->addItems({"Keep positive", "Keep negative"});
+    form->addRow("Origin X", originX); form->addRow("Origin Y", originY);
+    form->addRow("Origin Z", originZ); form->addRow("Normal X", normalX);
+    form->addRow("Normal Y", normalY); form->addRow("Normal Z", normalZ);
+    form->addRow("Offset", offset); form->addRow("Side", side);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const gp_Vec normal(normalX->value(), normalY->value(), normalZ->value());
+    if (normal.SquareMagnitude() <= 1.0e-12) {
+        setPanelMessage("Trim plane normal must be non-zero", true);
+        return;
+    }
+    std::vector<std::string> featureIds;
+    for (const auto& id : ids) featureIds.push_back(id.toStdString());
+    reportResult(service_->trimBodyByFeatures(featureIds,
+        gp_Pnt(originX->value(), originY->value(), originZ->value()),
+        gp_Dir(normal), side->currentIndex() == 0
+            ? cad::parametric::TrimSide::Positive : cad::parametric::TrimSide::Negative,
+        offset->value()));
 }
 
 void FeatureEditorPanel::refresh()

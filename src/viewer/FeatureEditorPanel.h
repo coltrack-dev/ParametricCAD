@@ -106,6 +106,7 @@ private:
     void addHexagon();
 
     void addBoolean(cad::application::BooleanKind operation, const QString& operationName);
+    void addTrimBody();
 
     void showFeature(const std::string& featureId);
 

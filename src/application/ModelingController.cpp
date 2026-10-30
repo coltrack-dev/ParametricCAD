@@ -1972,6 +1972,63 @@ ModelingResult ModelingController::splitComponent(
     }
 }
 
+ModelingResult ModelingController::trimBody(
+    const std::vector<std::string>& componentIds, const gp_Pnt& origin,
+    const gp_Dir& normal, const cad::parametric::TrimSide side, const double offset)
+{
+    if (componentIds.empty()) return componentFailure("Trim Body requires at least one component");
+    if (!std::isfinite(offset)) return componentFailure("Trim offset must be finite");
+    std::unordered_set<std::string> uniqueIds;
+    std::vector<cad::parametric::ParametricFeature::Ptr> trims;
+    std::vector<std::string> resultIds;
+    auto before = componentMetadata(body_);
+    auto after = before;
+    try {
+        for (const auto& componentId : componentIds) {
+            if (!uniqueIds.insert(componentId).second)
+                return componentFailure("Trim Body target components must be unique");
+            std::string resolveError;
+            const auto resolved = cad::parametric::ComponentResolver::resolve(
+                body_, componentId, resolveError);
+            if (!resolved) return componentFailure(resolveError);
+            const auto source = body_.findFeature(resolved->component.sourceFeatureId);
+            if (!source) return componentFailure("Trim target source feature does not exist");
+            const auto trimId = id("trim-body");
+            auto trim = std::make_shared<cad::parametric::TrimBodyFeature>(
+                trimId, source, resolved->component, origin, normal, side, offset);
+            if (!trim->recompute()) return componentFailure(trim->error());
+            BRepCheck_Analyzer analyzer(trim->shape());
+            if (!analyzer.IsValid()) return componentFailure("Trim Body produced an invalid B-Rep");
+            const auto resultComponentId = trimId + ":component";
+            auto resultComponent = componentFromShape(trim->shape(), resultComponentId, trimId);
+            resultComponent.parentComponentId = componentId;
+            const auto sourceIterator = std::find_if(after.begin(), after.end(),
+                [&componentId](const ModelComponent& component) {
+                    return component.id == componentId;
+                });
+            if (sourceIterator == after.end())
+                return componentFailure("Trim target component metadata is unavailable");
+            sourceIterator->visible = false;
+            sourceIterator->technicalHidden = true;
+            sourceIterator->replacementComponentIds = {resultComponentId};
+            after.push_back(resultComponent);
+            trims.push_back(std::move(trim));
+            resultIds.push_back(resultComponentId);
+        }
+        ModelTransaction transaction(body_, undoStack_, "Trim Body by Plane");
+        for (const auto& trim : trims) {
+            undoStack_.push(new cad::commands::AddFeatureCommand(body_, trim,
+                QStringLiteral("Trim Body by Plane")));
+        }
+        undoStack_.push(new cad::commands::ReplaceComponentsCommand(body_, before, after,
+            QStringLiteral("Update Trimmed Components")));
+        if (!transaction.commit()) return componentFailure(transaction.error().toStdString());
+        return {true, trims.front()->id(), {}, resultIds};
+    } catch (const std::exception& error) {
+        return failure(error);
+    }
+}
+
 ModelingResult ModelingController::recoverPreSplit(const std::string& rootFeatureId)
 {
     const auto root = body_.findFeature(rootFeatureId);
@@ -2174,6 +2231,22 @@ ModelingResult ModelingController::createBoolean(
     } catch (const std::exception& error) {
         return failure(error);
     }
+}
+
+ModelingResult ModelingController::trimBodyByFeatures(
+    const std::vector<std::string>& featureIds, const gp_Pnt& origin,
+    const gp_Dir& normal, const cad::parametric::TrimSide side, const double offset)
+{
+    std::vector<std::string> componentIds;
+    std::unordered_set<std::string> seen;
+    for (const auto& featureId : featureIds) {
+        const auto feature = body_.findFeature(featureId);
+        if (!feature) return componentFailure("Trim target feature does not exist");
+        for (const auto& component : cad::parametric::ComponentResolver::enumerate(body_, featureId)) {
+            if (seen.insert(component.id).second) componentIds.push_back(component.id);
+        }
+    }
+    return trimBody(componentIds, origin, normal, side, offset);
 }
 
 ModelingResult ModelingController::setFeatureProperty(

@@ -1055,6 +1055,50 @@ private:
     ComponentSplitSide side_;
 };
 
+enum class TrimSide { Negative, Positive };
+
+class TrimBodyFeature final : public ParametricFeature
+{
+public:
+    TrimBodyFeature(std::string id, const Ptr& source, ModelComponent component,
+                    gp_Pnt origin, gp_Dir normal, TrimSide side, double offset = 0.0);
+    TrimBodyFeature(std::string id, const Ptr& source, ModelComponent component,
+                    const Ptr& planeSource,
+                    cad::topology::TopologicalReference planeReference,
+                    TrimSide side, double offset = 0.0);
+    const char* typeId() const noexcept override { return "TrimBody"; }
+    std::string creationLabel() const override { return "Trim Body by Plane"; }
+    Ptr clone(std::string newId) const override;
+    std::vector<std::string> hiddenDependencyIds() const override;
+    const std::string& sourceFeatureId() const noexcept { return sourceFeatureId_; }
+    const std::string& sourceComponentId() const noexcept { return sourceComponentId_; }
+    const gp_Pnt& planeOrigin() const noexcept { return origin_; }
+    const gp_Dir& planeNormal() const noexcept { return normal_; }
+    TrimSide side() const noexcept { return side_; }
+    double offset() const noexcept { return offset_; }
+    const std::optional<cad::topology::TopologicalReference>& planeReference() const noexcept
+    { return planeReference_; }
+    std::vector<FeatureProperty> properties() const override;
+    bool setNumericProperty(const std::string& key, double value) override;
+    bool setProperty(const std::string& key, const PropertyValue& value) override;
+
+protected:
+    TopoDS_Shape build() const override;
+    void writeParameters(QJsonObject& object) const override;
+
+private:
+    std::string sourceFeatureId_;
+    std::string sourceComponentId_;
+    Ptr source_;
+    ModelComponent component_;
+    Ptr planeSource_;
+    std::optional<cad::topology::TopologicalReference> planeReference_;
+    gp_Pnt origin_;
+    gp_Dir normal_;
+    TrimSide side_;
+    double offset_;
+};
+
 class SplitAssemblyFeature final : public ParametricFeature
 {
 public:

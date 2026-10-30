@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ParametricFeature.h"
+#include "operations/ParametricFeatures.h"
 #include "application/Selection.h"
 
 #include <string>
@@ -65,6 +66,13 @@ public:
         BooleanKind operation,
         const std::vector<std::string>& selection,
         const std::string& currentId = {}
+    ) = 0;
+    virtual ModelingResult trimBodyByFeatures(
+        const std::vector<std::string>& featureIds,
+        const gp_Pnt& origin,
+        const gp_Dir& normal,
+        cad::parametric::TrimSide side,
+        double offset = 0.0
     ) = 0;
     virtual ModelingResult deleteFeature(const std::string& featureId) = 0;
     virtual ModelingResult setFeatureVisibility(
