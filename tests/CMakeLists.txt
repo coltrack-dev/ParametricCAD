@@ -118,6 +118,7 @@ add_library(model_test_support STATIC
     ../src/model/Body.cpp
     ../src/model/ParametricFeature.cpp
     ../src/model/ModelComponent.cpp
+    ../src/model/ComponentIntegrity.cpp
     ../src/model/ShapePayload.cpp
     ../src/model/TopologicalReference.cpp
     ../src/operations/BoxFeature.cpp
@@ -149,6 +150,11 @@ target_include_directories(model_component_tests PRIVATE ${PROJECT_SOURCE_DIR}/s
 target_link_libraries(model_component_tests PRIVATE model_test_support
     ParametricCAD::OCCTModeling)
 add_test(NAME model_component_tests COMMAND model_component_tests)
+
+add_executable(component_integrity_tests component_integrity_tests.cpp)
+target_include_directories(component_integrity_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(component_integrity_tests PRIVATE model_test_support)
+add_test(NAME component_integrity_tests COMMAND component_integrity_tests)
 
 add_executable(house_facade_generator house_facade_generator.cpp)
 target_link_libraries(house_facade_generator PRIVATE model_test_support Qt6::Core)

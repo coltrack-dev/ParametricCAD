@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <algorithm>
 #include <cmath>
 
 #ifndef PARAMETRICCAD_APP_PATH
@@ -251,6 +252,36 @@ private slots:
         QVERIFY(missing.value("result").toObject().value("isError").toBool());
         QCOMPARE(missing.value("result").toObject().value("structuredContent")
             .toObject().value("error").toObject().value("code").toInt(), -32004);
+    }
+
+    void componentIdentityThroughMcp()
+    {
+        QVERIFY(callTool("cad.new_project").value("featureCount").toInt() == 0);
+        const auto featureId = createRectangleExtrude(20.0, 10.0, 5.0);
+        QVERIFY(!featureId.isEmpty());
+
+        const auto byFeature = callTool("cad.get_components",
+            QJsonObject{{"featureId", featureId}}).value("components").toArray();
+        QCOMPARE(byFeature.size(), 1);
+        const auto component = byFeature.at(0).toObject();
+        const QString componentId = component.value(QStringLiteral("id")).toString();
+        QVERIFY(!componentId.isEmpty());
+
+        const auto resolved = callTool("cad.get_component",
+            QJsonObject{{QStringLiteral("componentId"), componentId}});
+        QCOMPARE(resolved.value(QStringLiteral("id")).toString(), componentId);
+        QCOMPARE(resolved.value(QStringLiteral("sourceFeatureId")).toString(), featureId);
+
+        const auto hidden = callTool("cad.set_component_visibility",
+            QJsonObject{{QStringLiteral("componentId"), componentId},
+                        {QStringLiteral("mode"), QStringLiteral("hidden")} });
+        QCOMPARE(hidden.value(QStringLiteral("componentId")).toString(), componentId);
+        const auto globallyListed = callTool("cad.get_components")
+            .value(QStringLiteral("components")).toArray();
+        QVERIFY(std::any_of(globallyListed.begin(), globallyListed.end(),
+            [&componentId](const auto& value) {
+                return value.toObject().value(QStringLiteral("id")).toString() == componentId;
+            }));
     }
 
     void spatialTransformsThroughMcp()
