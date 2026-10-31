@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <functional>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace {
@@ -63,6 +65,19 @@ bool matches(const cad::parametric::ModelComponent& component,
 }
 
 namespace cad::parametric {
+
+const char* componentLifecycleStatusName(const ComponentLifecycleStatus status) noexcept
+{
+    switch (status) {
+    case ComponentLifecycleStatus::Current: return "CURRENT";
+    case ComponentLifecycleStatus::Replaced: return "REPLACED";
+    case ComponentLifecycleStatus::MissingSource: return "MISSING_SOURCE";
+    case ComponentLifecycleStatus::Ambiguous: return "AMBIGUOUS";
+    case ComponentLifecycleStatus::InvalidReplacementChain:
+        return "INVALID_REPLACEMENT_CHAIN";
+    }
+    return "AMBIGUOUS";
+}
 
 std::vector<ModelComponent> ComponentResolver::enumerate(const Body& body,
                                                          const std::string& featureId)
@@ -244,39 +259,182 @@ std::vector<ComponentResolution> ComponentResolver::resolveFeature(
                 return matches(component, candidate.metrics, tolerance);
             });
         if (duplicate != candidates.end()) continue;
-        result.push_back({component, match->shape});
+        result.push_back({component, match->shape, ComponentLifecycleStatus::Current, {}, {}});
     }
     return result;
+}
+
+namespace {
+
+void setResolutionDiagnostic(ComponentResolution& result,
+                             const ComponentLifecycleStatus status,
+                             std::string code, std::string message)
+{
+    result.lifecycleStatus = status;
+    result.diagnosticCode = std::move(code);
+    result.diagnosticMessage = std::move(message);
+}
+
+ComponentResolution canonicalize(const Body& body, ModelComponent component,
+                                  const std::unordered_map<std::string,
+                                      std::vector<std::string>>& replacementMap,
+                                 const std::unordered_map<std::string,
+                                      std::optional<std::string>>& parentMap,
+                                  const std::unordered_map<std::string,
+                                      std::string>& featureErrors,
+                                  const double tolerance)
+{
+    ComponentResolution result{std::move(component), TopoDS_Shape{},
+        ComponentLifecycleStatus::Current, {}, {}};
+    const auto source = body.findFeature(result.component.sourceFeatureId);
+    if (!source) {
+        setResolutionDiagnostic(result, ComponentLifecycleStatus::MissingSource,
+            "MISSING_SOURCE_FEATURE", "Component source feature is missing");
+        return result;
+    }
+    const auto featureError = featureErrors.find(result.component.sourceFeatureId);
+    if (featureError != featureErrors.end()) {
+        setResolutionDiagnostic(result, ComponentLifecycleStatus::Ambiguous,
+            "AMBIGUOUS_COMPONENT_RESOLUTION", featureError->second);
+        return result;
+    }
+
+    std::unordered_map<std::string, int> colors;
+    std::function<bool(const std::string&)> visit = [&](const std::string& id) {
+        colors[id] = 1;
+        const auto found = replacementMap.find(id);
+        if (found != replacementMap.end()) {
+            for (const auto& replacementId : found->second) {
+                if (!replacementMap.contains(replacementId)) return false;
+                if (colors[replacementId] == 1) return false;
+                if (colors[replacementId] == 0 && !visit(replacementId)) return false;
+            }
+        }
+        colors[id] = 2;
+        return true;
+    };
+    if (!visit(result.component.id)) {
+        setResolutionDiagnostic(result, ComponentLifecycleStatus::InvalidReplacementChain,
+            "INVALID_REPLACEMENT_CHAIN", "Replacement references contain a cycle or dangling ID");
+        return result;
+    }
+
+    for (const auto& replacementId : result.component.replacementComponentIds) {
+        const auto child = parentMap.find(replacementId);
+        if (child == parentMap.end()) {
+            setResolutionDiagnostic(result, ComponentLifecycleStatus::InvalidReplacementChain,
+                "DANGLING_REPLACEMENT_REFERENCE", "Replacement component ID does not exist");
+            return result;
+        }
+        if (!child->second || *child->second != result.component.id) {
+            setResolutionDiagnostic(result, ComponentLifecycleStatus::InvalidReplacementChain,
+                "INVALID_PARENT_COMPONENT_REFERENCE", "Replacement child does not point to its parent");
+            return result;
+        }
+    }
+    if (result.component.parentComponentId) {
+        const auto parent = replacementMap.find(*result.component.parentComponentId);
+        if (parent == replacementMap.end()
+            || std::find(parent->second.begin(), parent->second.end(), result.component.id)
+                == parent->second.end()) {
+            setResolutionDiagnostic(result, ComponentLifecycleStatus::InvalidReplacementChain,
+                "INVALID_PARENT_COMPONENT_REFERENCE", "Component parent link is not reciprocal");
+            return result;
+        }
+    }
+    if (!result.component.replacementComponentIds.empty()) {
+        setResolutionDiagnostic(result, ComponentLifecycleStatus::Replaced,
+            "COMPONENT_REPLACED", "Component has current replacement components");
+    }
+
+    const auto resolved = ComponentResolver::resolveFeature(
+        body, result.component.sourceFeatureId, tolerance);
+    const auto geometry = std::find_if(resolved.begin(), resolved.end(),
+        [&result](const ComponentResolution& candidate) {
+            return candidate.component.id == result.component.id;
+        });
+    if (geometry != resolved.end()) result.shape = geometry->shape;
+    if (result.shape.IsNull() && result.lifecycleStatus == ComponentLifecycleStatus::Current) {
+        setResolutionDiagnostic(result, ComponentLifecycleStatus::Ambiguous,
+            "AMBIGUOUS_COMPONENT_RESOLUTION", "Component geometry is not uniquely resolvable");
+    }
+    return result;
+}
+
+} // namespace
+
+std::vector<ComponentResolution> ComponentResolver::resolveAll(
+    const Body& body, const double tolerance)
+{
+    std::unordered_map<std::string, std::vector<std::string>> replacementMap;
+    std::unordered_map<std::string, std::optional<std::string>> parentMap;
+    for (const auto& component : body.components())
+    {
+        replacementMap[component.id] = component.replacementComponentIds;
+        parentMap[component.id] = component.parentComponentId;
+    }
+
+    std::unordered_map<std::string, std::string> featureErrors;
+    std::vector<ModelComponent> components;
+    for (const auto& feature : body.features()) {
+        std::string error;
+        const auto merged = mergeFeatureMetadata(body, feature->id(), error, tolerance);
+        if (!error.empty()) featureErrors[feature->id()] = error;
+        components.insert(components.end(), merged.begin(), merged.end());
+        if (!error.empty()) {
+            for (const auto& persisted : body.components()) {
+                if (persisted.sourceFeatureId == feature->id()) components.push_back(persisted);
+            }
+        }
+    }
+    for (const auto& component : body.components()) {
+        if (!body.findFeature(component.sourceFeatureId)) components.push_back(component);
+    }
+
+    std::vector<ComponentResolution> result;
+    result.reserve(components.size());
+    for (auto& component : components) {
+        result.push_back(canonicalize(body, std::move(component), replacementMap,
+                                      parentMap, featureErrors, tolerance));
+    }
+    return result;
+}
+
+std::optional<ComponentResolution> ComponentResolver::resolveCanonical(
+    const Body& body, const std::string& componentId, std::string& error,
+    const double tolerance)
+{
+    error.clear();
+    const auto all = resolveAll(body, tolerance);
+    const auto found = std::find_if(all.begin(), all.end(),
+        [&componentId](const ComponentResolution& value) {
+            return value.component.id == componentId;
+        });
+    if (found == all.end()) {
+        error = "COMPONENT_NOT_FOUND: component '" + componentId + "'";
+        return {};
+    }
+    if (found->lifecycleStatus != ComponentLifecycleStatus::Current) {
+        error = found->diagnosticCode + ": " + found->diagnosticMessage;
+    }
+    return *found;
 }
 
 std::optional<ComponentResolution> ComponentResolver::resolve(
     const Body& body, const std::string& componentId, std::string& error,
     double tolerance)
 {
-    error.clear();
-    for (const auto& component : body.components()) {
-        if (component.id != componentId) continue;
-        const auto resolved = resolveFeature(body, component.sourceFeatureId, tolerance);
-        for (const auto& candidate : resolved) {
-            if (candidate.component.id == componentId) return candidate;
-        }
-        error = "Component geometry could not be resolved";
+    const auto canonical = resolveCanonical(body, componentId, error, tolerance);
+    if (!canonical) {
+        if (error.rfind("COMPONENT_NOT_FOUND:", 0) == 0) error = "Component not found";
         return {};
     }
-    // Legacy projects have no metadata.  Accept the deterministic signature
-    // produced by enumerate(), but never silently choose an unrelated solid.
-    for (const auto& feature : body.features()) {
-        std::string enumerationError;
-        ComponentResolver::enumerate(body, feature->id(), enumerationError);
-        if (!enumerationError.empty()) {
-            error = enumerationError;
-            return {};
-        }
-        for (const auto& component : resolveFeature(body, feature->id(), tolerance)) {
-            if (component.component.id == componentId) return component;
-        }
+    if (canonical->shape.IsNull()) {
+        if (error.empty()) error = "Component geometry could not be resolved";
+        return {};
     }
-    error = "Component not found";
-    return {};
+    // Keep the historical API usable for inspection and compatibility.  New
+    // modeling operations must use resolveCanonical() and require CURRENT.
+    return canonical;
 }
 }

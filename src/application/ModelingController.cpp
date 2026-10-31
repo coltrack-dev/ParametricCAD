@@ -69,6 +69,26 @@ ModelingResult componentFailure(const std::string& message)
     return {false, {}, message, {}};
 }
 
+std::optional<cad::parametric::ComponentResolution> resolveCurrentComponent(
+    const cad::parametric::Body& body, const std::string& componentId,
+    std::string& error)
+{
+    const auto resolved = ComponentResolver::resolveCanonical(body, componentId, error);
+    if (!resolved) return {};
+    if (resolved->lifecycleStatus != cad::parametric::ComponentLifecycleStatus::Current) {
+        if (error.empty()) {
+            error = std::string(cad::parametric::componentLifecycleStatusName(
+                resolved->lifecycleStatus));
+        }
+        return {};
+    }
+    if (resolved->shape.IsNull()) {
+        error = "UNRESOLVED_COMPONENT_GEOMETRY: current component has no shape";
+        return {};
+    }
+    return resolved;
+}
+
 ModelComponent componentFromShape(const TopoDS_Shape& shape, const std::string& id,
                                   const std::string& sourceFeatureId)
 {
@@ -1886,8 +1906,7 @@ ModelingResult ModelingController::transformComponent(
     const gp_Trsf& transformation)
 {
     std::string resolveError;
-    const auto resolved = cad::parametric::ComponentResolver::resolve(
-        body_, componentId, resolveError);
+    const auto resolved = resolveCurrentComponent(body_, componentId, resolveError);
     if (!resolved) return componentFailure(resolveError);
     const auto source = body_.findFeature(resolved->component.sourceFeatureId);
     if (!source) return componentFailure("Component source feature does not exist");
@@ -1930,8 +1949,7 @@ ModelingResult ModelingController::splitComponent(
     const std::string& componentId, const gp_Pnt& origin, const gp_Dir& normal)
 {
     std::string resolveError;
-    const auto resolved = cad::parametric::ComponentResolver::resolve(
-        body_, componentId, resolveError);
+    const auto resolved = resolveCurrentComponent(body_, componentId, resolveError);
     if (!resolved) return componentFailure(resolveError);
     const auto source = body_.findFeature(resolved->component.sourceFeatureId);
     if (!source) return componentFailure("Component source feature does not exist");
@@ -2004,8 +2022,7 @@ ModelingResult ModelingController::trimBody(
             if (!uniqueIds.insert(componentId).second)
                 return componentFailure("Trim Body target components must be unique");
             std::string resolveError;
-            const auto resolved = cad::parametric::ComponentResolver::resolve(
-                body_, componentId, resolveError);
+            const auto resolved = resolveCurrentComponent(body_, componentId, resolveError);
             qInfo().noquote() << "Trim Body target component="
                               << QString::fromStdString(componentId)
                               << "resolved=" << static_cast<bool>(resolved)
@@ -2261,15 +2278,42 @@ ModelingResult ModelingController::trimBodyByFeatures(
     const std::vector<std::string>& featureIds, const gp_Pnt& origin,
     const gp_Dir& normal, const cad::parametric::TrimSide side, const double offset)
 {
+    const auto canonical = cad::parametric::ComponentResolver::resolveAll(body_);
+    std::unordered_map<std::string, cad::parametric::ComponentResolution> byId;
+    for (const auto& resolution : canonical)
+        byId.emplace(resolution.component.id, resolution);
+
     std::vector<std::string> componentIds;
     std::unordered_set<std::string> seen;
     for (const auto& featureId : featureIds) {
         const auto feature = body_.findFeature(featureId);
         if (!feature) return componentFailure("Trim target feature does not exist");
-        for (const auto& component : cad::parametric::ComponentResolver::enumerate(body_, featureId)) {
-            if (seen.insert(component.id).second) componentIds.push_back(component.id);
+
+        std::vector<std::string> pending;
+        for (const auto& resolution : canonical) {
+            if (resolution.component.sourceFeatureId == featureId)
+                pending.push_back(resolution.component.id);
+        }
+        std::unordered_set<std::string> visited;
+        while (!pending.empty()) {
+            const auto componentId = pending.back();
+            pending.pop_back();
+            if (!visited.insert(componentId).second) continue;
+            const auto iterator = byId.find(componentId);
+            if (iterator == byId.end()) continue;
+            const auto& resolution = iterator->second;
+            if (resolution.lifecycleStatus == cad::parametric::ComponentLifecycleStatus::Current
+                    && !resolution.shape.IsNull()) {
+                if (seen.insert(componentId).second) componentIds.push_back(componentId);
+                continue;
+            }
+            if (resolution.lifecycleStatus == cad::parametric::ComponentLifecycleStatus::Replaced) {
+                pending.insert(pending.end(), resolution.component.replacementComponentIds.begin(),
+                    resolution.component.replacementComponentIds.end());
+            }
         }
     }
+    if (componentIds.empty()) return componentFailure("Trim target feature has no current component");
     return trimBody(componentIds, origin, normal, side, offset);
 }
 

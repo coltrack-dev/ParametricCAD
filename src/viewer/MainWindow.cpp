@@ -200,6 +200,19 @@ QJsonObject componentJson(const cad::parametric::ModelComponent& component)
     return result;
 }
 
+QJsonObject componentResolutionJson(
+    const cad::parametric::ComponentResolution& resolution)
+{
+    auto result = componentJson(resolution.component);
+    result.insert("lifecycleStatus", QString::fromLatin1(
+        cad::parametric::componentLifecycleStatusName(resolution.lifecycleStatus)));
+    if (!resolution.diagnosticCode.empty())
+        result.insert("diagnosticCode", QString::fromStdString(resolution.diagnosticCode));
+    if (!resolution.diagnosticMessage.empty())
+        result.insert("diagnosticMessage", QString::fromStdString(resolution.diagnosticMessage));
+    return result;
+}
+
 QString visibilityModeString(const cad::application::VisibilityMode mode)
 {
     switch (mode) {
@@ -1107,31 +1120,23 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
     } else if (tool == "cad.get_components") {
         const QString featureId = arguments.value("featureId").toString();
         QJsonArray components;
-        if (!featureId.isEmpty()) {
-            for (const auto& component : cad::parametric::ComponentResolver::enumerate(
-                     modeling_.body(), featureId.toStdString()))
-                components.append(componentJson(component));
-        } else {
-            for (const auto& component : modeling_.body().components())
-                components.append(componentJson(component));
-            if (components.isEmpty()) {
-                for (const auto& feature : modeling_.body().features())
-                    for (const auto& component : cad::parametric::ComponentResolver::enumerate(
-                             modeling_.body(), feature->id()))
-                        components.append(componentJson(component));
-            }
+        for (const auto& resolution : cad::parametric::ComponentResolver::resolveAll(
+                 modeling_.body())) {
+            if (!featureId.isEmpty()
+                && resolution.component.sourceFeatureId != featureId.toStdString()) continue;
+            components.append(componentResolutionJson(resolution));
         }
         result = QJsonObject{{"components", components}, {"componentCount", components.size()}};
     } else if (tool == "cad.get_component" || tool == "cad.get_component_topology") {
         const auto componentId = arguments.value("componentId").toString().toStdString();
         std::string resolveError;
-        const auto resolved = cad::parametric::ComponentResolver::resolve(
+        const auto resolved = cad::parametric::ComponentResolver::resolveCanonical(
             modeling_.body(), componentId, resolveError);
-        if (!resolved)
+        if (!resolved || resolved->shape.IsNull())
             return rpcError(id, -32004, "Component could not be resolved",
                 QJsonObject{{"componentId", QString::fromStdString(componentId)},
                             {"message", QString::fromStdString(resolveError)}});
-        result = componentJson(resolved->component);
+        result = componentResolutionJson(*resolved);
         const auto sourceFeature = modeling_.body().findFeature(
             resolved->component.sourceFeatureId);
         const auto visibility = sourceFeature
@@ -1161,32 +1166,21 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         }
     } else if (tool == "cad.set_component_visibility") {
         const auto componentId = arguments.value("componentId").toString().toStdString();
-        auto* component = modeling_.body().findComponent(componentId);
         std::string resolveError;
-        if (!component) {
-            const auto resolved = cad::parametric::ComponentResolver::resolve(
-                modeling_.body(), componentId, resolveError);
-            if (!resolved)
-                return rpcError(id, -32004, "Component could not be resolved",
-                    QJsonObject{{"componentId", QString::fromStdString(componentId)},
-                                {"message", QString::fromStdString(resolveError)}});
-            auto values = modeling_.body().components();
-            const auto generated = cad::parametric::ComponentResolver::enumerate(
-                modeling_.body(), resolved->component.sourceFeatureId);
-            for (const auto& generatedComponent : generated) {
-                if (std::none_of(values.begin(), values.end(),
-                        [&generatedComponent](const auto& value) {
-                            return value.id == generatedComponent.id;
-                        })) values.push_back(generatedComponent);
-            }
-            modeling_.body().replaceComponents(std::move(values));
-            component = modeling_.body().findComponent(componentId);
+        const auto resolved = cad::parametric::ComponentResolver::resolveCanonical(
+            modeling_.body(), componentId, resolveError);
+        if (!resolved || resolved->lifecycleStatus
+            != cad::parametric::ComponentLifecycleStatus::Current) {
+            return rpcError(id, -32004, "Component is not current",
+                QJsonObject{{"componentId", QString::fromStdString(componentId)},
+                            {"message", QString::fromStdString(resolveError)}});
         }
+        auto* component = modeling_.body().findComponent(componentId);
         const auto modeString = arguments.value("mode").toString();
         const auto mode = modeString == "hidden" ? cad::application::VisibilityMode::Hidden
             : modeString == "ghosted" ? cad::application::VisibilityMode::Ghosted
                                        : cad::application::VisibilityMode::Visible;
-        component->visible = mode != cad::application::VisibilityMode::Hidden;
+        if (component) component->visible = mode != cad::application::VisibilityMode::Hidden;
         visibilityManager_.setComponentVisibility(componentId, mode);
         if (arguments.value("isolate").toBool(false)) {
             visibilityManager_.setIsolatedComponents({componentId});
@@ -1232,18 +1226,19 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
         // presentation state.
         std::vector<TopoDS_Shape> activeComponentShapes;
         qint64 activeComponentCount = 0;
-        for (const auto& component : modeling_.body().components()) {
-            const auto feature = modeling_.body().findFeature(component.sourceFeatureId);
+        bool hasCanonicalComponents = false;
+        for (const auto& resolved : cad::parametric::ComponentResolver::resolveAll(
+                 modeling_.body())) {
+            hasCanonicalComponents = true;
+            if (resolved.lifecycleStatus != cad::parametric::ComponentLifecycleStatus::Current
+                || resolved.shape.IsNull()) continue;
+            const auto feature = modeling_.body().findFeature(
+                resolved.component.sourceFeatureId);
             if (!feature) continue;
-            std::string resolveError;
-            const auto resolved = cad::parametric::ComponentResolver::resolve(
-                modeling_.body(), component.id, resolveError);
-            if (!resolved) continue;
             const auto visibility = visibilityManager_.effectiveComponentVisibility(
-                *feature, resolved->component, modeling_.body());
+                *feature, resolved.component, modeling_.body());
             if (visibility.mode == cad::application::VisibilityMode::Hidden) continue;
-            if (resolved->shape.IsNull()) continue;
-            activeComponentShapes.push_back(resolved->shape);
+            activeComponentShapes.push_back(resolved.shape);
             ++activeComponentCount;
         }
 
@@ -1259,7 +1254,7 @@ QJsonObject MainWindow::handleAutomationRequest(const QJsonObject& request)
                     builder.Add(compound, componentShape);
                 activeShape = compound;
             }
-        } else if (modeling_.body().components().empty()) {
+        } else if (!hasCanonicalComponents && modeling_.body().components().empty()) {
             // Backward-compatible fallback for projects without component
             // metadata.  In that case Body::shape() remains the only safe
             // aggregate available to MCP inspection.
@@ -2394,8 +2389,13 @@ void MainWindow::createParametricPanel()
             for (const auto& featureId : featureIds) {
                 const auto source = modeling_.body().findFeature(featureId.toStdString());
                 if (!source) return QString("Trim source feature is missing");
-                for (const auto& component : cad::parametric::ComponentResolver::enumerate(
-                         modeling_.body(), source->id())) {
+                for (const auto& resolution : cad::parametric::ComponentResolver::resolveAll(
+                         modeling_.body())) {
+                    if (resolution.component.sourceFeatureId != source->id()
+                        || resolution.lifecycleStatus
+                            != cad::parametric::ComponentLifecycleStatus::Current)
+                        continue;
+                    const auto& component = resolution.component;
                     qInfo().noquote() << "Trim preview target feature=" << featureId
                                       << "component=" << QString::fromStdString(component.id);
                     auto temporary = std::make_shared<cad::parametric::TrimBodyFeature>(

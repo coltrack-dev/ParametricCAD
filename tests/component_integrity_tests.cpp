@@ -144,6 +144,49 @@ void c3ReplacementChain()
     check(static_cast<bool>(cad::parametric::ComponentResolver::resolve(
               controller.body(), sourceComponent.id, error)),
         "C-3 expected current resolver behavior for replaced ID");
+    std::string canonicalError;
+    const auto canonicalOld = cad::parametric::ComponentResolver::resolveCanonical(
+        controller.body(), sourceComponent.id, canonicalError);
+    check(canonicalOld && canonicalOld->lifecycleStatus
+              == cad::parametric::ComponentLifecycleStatus::Replaced,
+          "C-3 canonical resolver marks replaced component");
+    const auto staleTrim = controller.trimBody(
+        {sourceComponent.id}, gp_Pnt(5, 0, 0), gp_Dir(1, 0, 0),
+        cad::parametric::TrimSide::Positive);
+    check(!staleTrim.success && staleTrim.error.find("COMPONENT_REPLACED") != std::string::npos,
+          "C-3 operation rejects replaced component");
+    const auto canonical = cad::parametric::ComponentResolver::resolveAll(controller.body());
+    const auto currentCount = std::count_if(canonical.begin(), canonical.end(),
+        [](const auto& value) {
+            return value.lifecycleStatus == cad::parametric::ComponentLifecycleStatus::Current;
+        });
+    check(currentCount == 2, "C-3 canonical current branch count");
+    auto* currentComponent = controller.body().findComponent(split.componentIds.front());
+    check(currentComponent != nullptr, "C-3 current component metadata");
+    currentComponent->visible = false;
+    canonicalError.clear();
+    const auto hiddenCurrent = cad::parametric::ComponentResolver::resolveCanonical(
+        controller.body(), split.componentIds.front(), canonicalError);
+    check(hiddenCurrent && hiddenCurrent->lifecycleStatus
+              == cad::parametric::ComponentLifecycleStatus::Current,
+          "C-3 user visibility does not change lifecycle");
+
+    QTemporaryDir directory;
+    check(directory.isValid(), "C-3 replacement temporary directory");
+    Document document;
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    QString saveError;
+    const auto path = directory.filePath("replacement-chain.pcad");
+    check(ProjectFile::save(path, document, controller.body(), saveError),
+          "C-3 replacement save");
+    check(ProjectFile::load(path, loadedDocument, loadedBody, saveError),
+          "C-3 replacement load");
+    const auto loadedCanonical = cad::parametric::ComponentResolver::resolveAll(loadedBody);
+    check(std::count_if(loadedCanonical.begin(), loadedCanonical.end(),
+        [](const auto& value) {
+            return value.lifecycleStatus == cad::parametric::ComponentLifecycleStatus::Current;
+        }) == 2, "C-3 replacement load current count");
 }
 
 void c4PartialMetadata()

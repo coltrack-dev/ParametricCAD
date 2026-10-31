@@ -57,9 +57,26 @@ std::vector<ComponentIntegrityIssue> inspectComponentIntegrity(
 
     for (const auto& component : body.components()) {
         for (const auto& replacementId : component.replacementComponentIds) {
-            if (!byId.contains(replacementId)) {
+            const auto replacement = byId.find(replacementId);
+            if (replacement == byId.end()) {
                 issue(issues, "DANGLING_REPLACEMENT_REFERENCE", component.sourceFeatureId,
                     component.id, "Replacement component ID does not exist",
+                    ComponentIntegritySeverity::Error);
+            } else if (!replacement->second->parentComponentId
+                       || *replacement->second->parentComponentId != component.id) {
+                issue(issues, "INVALID_PARENT_COMPONENT_REFERENCE", component.sourceFeatureId,
+                    component.id, "Replacement child does not point to its parent",
+                    ComponentIntegritySeverity::Error);
+            }
+        }
+        if (component.parentComponentId) {
+            const auto parent = byId.find(*component.parentComponentId);
+            if (parent == byId.end()
+                || std::find(parent->second->replacementComponentIds.begin(),
+                             parent->second->replacementComponentIds.end(), component.id)
+                    == parent->second->replacementComponentIds.end()) {
+                issue(issues, "INVALID_PARENT_COMPONENT_REFERENCE", component.sourceFeatureId,
+                    component.id, "Component parent link is not reciprocal",
                     ComponentIntegritySeverity::Error);
             }
         }
@@ -125,11 +142,25 @@ std::vector<ComponentIntegrityIssue> inspectComponentIntegrity(
     for (const auto& component : body.components()) {
         if (!body.findFeature(component.sourceFeatureId)) continue;
         std::string error;
-        const auto resolved = ComponentResolver::resolve(body, component.id, error, tolerance);
-        if (!resolved) {
+        const auto resolved = ComponentResolver::resolveCanonical(
+            body, component.id, error, tolerance);
+        const auto geometric = ComponentResolver::resolveFeature(
+            body, component.sourceFeatureId, tolerance);
+        const bool geometryResolved = std::any_of(geometric.begin(), geometric.end(),
+            [&component](const ComponentResolution& candidate) {
+                return candidate.component.id == component.id
+                    && !candidate.shape.IsNull();
+            });
+        if (resolved && resolved->lifecycleStatus
+            == ComponentLifecycleStatus::InvalidReplacementChain) {
+            issue(issues, "INVALID_REPLACEMENT_CHAIN", component.sourceFeatureId,
+                component.id, resolved->diagnosticMessage.c_str(),
+                ComponentIntegritySeverity::Error);
+        }
+        if (!resolved || resolved->shape.IsNull() || !geometryResolved) {
             issue(issues, "UNRESOLVED_COMPONENT_GEOMETRY", component.sourceFeatureId,
                 component.id, error.c_str(), ComponentIntegritySeverity::Error);
-        } else if (!component.replacementComponentIds.empty()) {
+        } else if (resolved->lifecycleStatus == ComponentLifecycleStatus::Replaced) {
             issue(issues, "REPLACED_COMPONENT_RESOLVABLE", component.sourceFeatureId,
                 component.id, "Resolver still returns a replaced component",
                 ComponentIntegritySeverity::Warning);

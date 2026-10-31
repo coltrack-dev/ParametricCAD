@@ -7,6 +7,7 @@
 #include <TopAbs_ShapeEnum.hxx>
 #include <QElapsedTimer>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -57,6 +58,7 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
     PresentationResult result;
     result.rebuilt = body_.recompute();
     if (!result.rebuilt) result.error = body_.lastError();
+    const auto canonicalComponents = cad::parametric::ComponentResolver::resolveAll(body_);
     viewer_.beginBulkUpdate();
     QStringList presentedComponents;
     for (const auto& feature : body_.features()) {
@@ -68,25 +70,22 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
             || feature->shape().IsNull()
             || (sketch && sketch->entities().empty())) continue;
         std::vector<cad::parametric::ComponentResolution> components;
-        if (feature->shape().ShapeType() != TopAbs_SOLID) {
+        const bool hasPersistedComponents = std::any_of(
+            body_.components().begin(), body_.components().end(),
+            [&feature](const cad::parametric::ModelComponent& component) {
+                return component.sourceFeatureId == feature->id();
+            });
+        if (feature->shape().ShapeType() != TopAbs_SOLID || hasPersistedComponents) {
             QElapsedTimer resolverTimer;
             resolverTimer.start();
-            components = cad::parametric::ComponentResolver::resolveFeature(
-                body_, feature->id());
+            for (const auto& resolved : canonicalComponents) {
+                if (resolved.component.sourceFeatureId != feature->id()
+                    || resolved.lifecycleStatus != cad::parametric::ComponentLifecycleStatus::Current
+                    || resolved.shape.IsNull()) continue;
+                components.push_back(resolved);
+            }
             resolverMilliseconds += resolverTimer.elapsed();
             ++resolverCalls;
-        }
-        if (components.empty() && feature->shape().ShapeType() == TopAbs_SOLID) {
-            // Component operations can produce a single-solid feature. If a
-            // persisted component record exists for it, use component-level
-            // presentation so technical replacement visibility is respected.
-            for (const auto& component : body_.components()) {
-                if (component.sourceFeatureId != feature->id()) continue;
-                std::string resolveError;
-                const auto resolved = cad::parametric::ComponentResolver::resolve(
-                    body_, component.id, resolveError);
-                if (resolved) components.push_back(*resolved);
-            }
         }
         if (!components.empty()) {
             // A feature with component records is represented by its component
@@ -149,17 +148,15 @@ void cad::viewer::ModelPresenter::applyVisibility()
     // visibility changes.  Re-apply the complete component policy here so a
     // loaded/recomputed document cannot leave an old component AIS displayed
     // after its parent Feature becomes hidden or replaced.
-    for (const auto& component : body_.components()) {
-        const auto feature = body_.findFeature(component.sourceFeatureId);
+    for (const auto& resolved : cad::parametric::ComponentResolver::resolveAll(body_)) {
+        if (resolved.lifecycleStatus != cad::parametric::ComponentLifecycleStatus::Current
+            || resolved.shape.IsNull()) continue;
+        const auto feature = body_.findFeature(resolved.component.sourceFeatureId);
         if (!feature) continue;
-        std::string resolveError;
-        const auto resolved = cad::parametric::ComponentResolver::resolve(
-            body_, component.id, resolveError);
-        if (!resolved) continue;
         const auto visibility = visibilityManager_.effectiveComponentVisibility(
-            *feature, resolved->component, body_);
+            *feature, resolved.component, body_);
         viewer_.setComponentVisibility(
-            QString::fromStdString(component.id), visibility.mode);
+            QString::fromStdString(resolved.component.id), visibility.mode);
     }
     if (sweepTraceEnabled()) {
         for (const auto& state : visibilityManager_.projection(body_)) {

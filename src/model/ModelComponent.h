@@ -37,10 +37,24 @@ struct ModelComponent
     bool technicalHidden{false};
 };
 
+enum class ComponentLifecycleStatus
+{
+    Current,
+    Replaced,
+    MissingSource,
+    Ambiguous,
+    InvalidReplacementChain
+};
+
+const char* componentLifecycleStatusName(ComponentLifecycleStatus status) noexcept;
+
 struct ComponentResolution
 {
     ModelComponent component;
     TopoDS_Shape shape;
+    ComponentLifecycleStatus lifecycleStatus{ComponentLifecycleStatus::Current};
+    std::string diagnosticCode;
+    std::string diagnosticMessage;
 };
 
 class Body;
@@ -58,6 +72,11 @@ public:
     static std::vector<ComponentResolution> resolveFeature(
         const Body& body, const std::string& featureId,
         double tolerance = 1.0e-6);
+    static std::vector<ComponentResolution> resolveAll(
+        const Body& body, double tolerance = 1.0e-6);
+    static std::optional<ComponentResolution> resolveCanonical(
+        const Body& body, const std::string& componentId,
+        std::string& error, double tolerance = 1.0e-6);
     static std::optional<ComponentResolution> resolve(
         const Body& body, const std::string& componentId,
         std::string& error, double tolerance = 1.0e-6);
