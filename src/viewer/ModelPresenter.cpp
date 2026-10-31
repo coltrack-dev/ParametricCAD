@@ -104,6 +104,13 @@ cad::viewer::PresentationResult cad::viewer::ModelPresenter::refreshModel()
             }
             continue;
         }
+        if (hasPersistedComponents) {
+            // Component metadata is authoritative for this feature even when
+            // none of its records is CURRENT.  Falling back to a feature AIS
+            // object here would redisplay historical/replaced geometry after
+            // project load.
+            continue;
+        }
         result.presentedIds.push_back(feature->id());
         traceSweepFeature("refresh.updateFeature", *feature);
         viewer_.updateFeature(feature->shape(), QString::fromStdString(feature->id()));

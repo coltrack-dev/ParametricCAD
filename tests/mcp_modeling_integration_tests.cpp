@@ -513,6 +513,37 @@ private slots:
             .value("success").toBool());
         QCOMPARE(callTool("cad.get_components").value("componentCount").toInt(), 5);
         const auto presentationAfterLoad = callTool("cad.get_application_status");
+        if (presentationAfterLoad.value("displayedFeaturePresentationCount").toInt() != 0) {
+            const auto featureTreeAfterLoad = callTool("cad.get_model_tree")
+                .value("features").toArray();
+            const auto componentsAfterLoad = callTool("cad.get_components")
+                .value("components").toArray();
+            for (const auto& featureValue : featureTreeAfterLoad) {
+                const auto feature = featureValue.toObject();
+                const auto featureId = feature.value("id").toString();
+                int currentComponents = 0;
+                int replacedComponents = 0;
+                QStringList componentDetails;
+                for (const auto& componentValue : componentsAfterLoad) {
+                    const auto component = componentValue.toObject();
+                    if (component.value("sourceFeatureId").toString() != featureId) continue;
+                    const auto status = component.value("lifecycleStatus").toString();
+                    if (status == QStringLiteral("CURRENT")) ++currentComponents;
+                    if (status == QStringLiteral("REPLACED")) ++replacedComponents;
+                    componentDetails.append(QStringLiteral("%1:%2")
+                        .arg(component.value("id").toString(), status));
+                }
+                qWarning().noquote() << QString(
+                    "AIS diagnostic feature=%1 type=%2 visible=%3 metadata=%4 current=%5 replaced=%6 components=[%7]"
+                    ).arg(featureId, feature.value("type").toString())
+                    .arg(feature.value("visible").toBool())
+                    .arg(currentComponents + replacedComponents > 0)
+                    .arg(currentComponents).arg(replacedComponents)
+                    .arg(componentDetails.join(","));
+            }
+            qWarning().noquote() << "AIS diagnostic status="
+                              << QJsonDocument(presentationAfterLoad).toJson(QJsonDocument::Compact);
+        }
         QCOMPARE(presentationAfterLoad.value("displayedFeaturePresentationCount").toInt(), 0);
         QVERIFY(presentationAfterLoad.value("displayedComponentPresentationCount").toInt() >= 2);
         const auto aggregateAfterLoad = callTool("cad.inspect_model");
@@ -522,6 +553,17 @@ private slots:
             aggregateAfterLoad.value("activeComponentCount").toInt());
         QVERIFY(aggregateAfterLoad.value("visibleGeometricSolidCount").toInt() >= 2);
         QVERIFY(aggregateAfterLoad.value("totalVisibleGeometricVolume").toDouble() > 0.0);
+        QVERIFY(callTool("cad.set_component_visibility", QJsonObject{
+            {"componentId", positiveComponent}, {"mode", "hidden"}})
+            .value("mode").toString() == QStringLiteral("hidden"));
+        QVERIFY(callTool("cad.set_component_visibility", QJsonObject{
+            {"componentId", positiveComponent}, {"mode", "visible"}})
+            .value("mode").toString() == QStringLiteral("visible"));
+        QVERIFY(callTool("cad.recompute").value("success").toBool());
+        const auto presentationAfterRefresh = callTool("cad.get_application_status");
+        QCOMPARE(presentationAfterRefresh.value("displayedFeaturePresentationCount").toInt(), 0);
+        QCOMPARE(presentationAfterRefresh.value("displayedComponentPresentationCount").toInt(),
+            presentationAfterLoad.value("displayedComponentPresentationCount").toInt());
         QVERIFY(callTool("cad.inspect_shape", QJsonObject{{"featureId", negativeFeature}})
             .value("valid").toBool());
         const auto movedAfterLoad = callTool("cad.get_component",
