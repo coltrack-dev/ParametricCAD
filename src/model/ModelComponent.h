@@ -50,6 +50,9 @@ class ComponentResolver final
 public:
     static std::vector<ModelComponent> enumerate(const Body& body,
                                                  const std::string& featureId);
+    static std::vector<ModelComponent> mergeFeatureMetadata(
+        const Body& body, const std::string& featureId,
+        std::string& error, double tolerance = 1.0e-6);
     static std::vector<ComponentResolution> resolveFeature(
         const Body& body, const std::string& featureId,
         double tolerance = 1.0e-6);

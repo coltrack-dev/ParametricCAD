@@ -118,6 +118,33 @@ bool Body::removeFeature(const std::string& featureId)
         throw std::invalid_argument("Remove dependent features before deleting '" + featureId + "'");
     }
     features_.erase(iterator);
+    std::unordered_set<std::string> removedComponentIds;
+    for (const auto& component : components_) {
+        if (component.sourceFeatureId == featureId)
+            removedComponentIds.insert(component.id);
+    }
+    components_.erase(std::remove_if(components_.begin(), components_.end(),
+        [&featureId](const ModelComponent& component) {
+            return component.sourceFeatureId == featureId;
+        }), components_.end());
+    for (auto& component : components_) {
+        if (component.parentComponentId
+            && removedComponentIds.contains(*component.parentComponentId)) {
+            component.parentComponentId.reset();
+        }
+        const auto oldSize = component.replacementComponentIds.size();
+        component.replacementComponentIds.erase(
+            std::remove_if(component.replacementComponentIds.begin(),
+                           component.replacementComponentIds.end(),
+                [&removedComponentIds](const std::string& id) {
+                    return removedComponentIds.contains(id);
+                }), component.replacementComponentIds.end());
+        if (oldSize != component.replacementComponentIds.size()
+            && component.replacementComponentIds.empty()) {
+            component.visible = true;
+            component.technicalHidden = false;
+        }
+    }
     resultShape_.Nullify();
     ++geometryRevision_;
     return true;

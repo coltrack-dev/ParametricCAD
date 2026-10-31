@@ -87,15 +87,20 @@ ModelComponent componentFromShape(const TopoDS_Shape& shape, const std::string& 
     return component;
 }
 
-std::vector<ModelComponent> componentMetadata(const cad::parametric::Body& body)
+std::vector<ModelComponent> componentMetadata(
+    const cad::parametric::Body& body, std::string& error)
 {
-    std::vector<ModelComponent> result = body.components();
-    std::unordered_set<std::string> persistedFeatures;
-    for (const auto& component : result) persistedFeatures.insert(component.sourceFeatureId);
+    error.clear();
+    std::vector<ModelComponent> result;
     for (const auto& feature : body.features()) {
-        if (persistedFeatures.contains(feature->id())) continue;
-        const auto generated = ComponentResolver::enumerate(body, feature->id());
-        result.insert(result.end(), generated.begin(), generated.end());
+        std::string mergeError;
+        const auto merged = ComponentResolver::mergeFeatureMetadata(
+            body, feature->id(), mergeError);
+        if (!mergeError.empty()) {
+            error = mergeError;
+            return {};
+        }
+        result.insert(result.end(), merged.begin(), merged.end());
     }
     return result;
 }
@@ -1895,7 +1900,9 @@ ModelingResult ModelingController::transformComponent(
         auto resultComponent = componentFromShape(transformed->shape(), resultComponentId, featureId);
         resultComponent.parentComponentId = componentId;
 
-        auto before = componentMetadata(body_);
+        std::string metadataError;
+        auto before = componentMetadata(body_, metadataError);
+        if (!metadataError.empty()) return componentFailure(metadataError);
         auto after = before;
         auto sourceIterator = std::find_if(after.begin(), after.end(),
             [&componentId](const ModelComponent& component) { return component.id == componentId; });
@@ -1950,7 +1957,9 @@ ModelingResult ModelingController::splitComponent(
         auto positiveComponent = componentFromShape(positive->shape(), positiveComponentId, positiveId);
         negativeComponent.parentComponentId = componentId;
         positiveComponent.parentComponentId = componentId;
-        auto before = componentMetadata(body_);
+        std::string metadataError;
+        auto before = componentMetadata(body_, metadataError);
+        if (!metadataError.empty()) return componentFailure(metadataError);
         auto after = before;
         auto sourceIterator = std::find_if(after.begin(), after.end(),
             [&componentId](const ModelComponent& component) { return component.id == componentId; });
@@ -1984,7 +1993,9 @@ ModelingResult ModelingController::trimBody(
     std::unordered_set<std::string> uniqueIds;
     std::vector<cad::parametric::ParametricFeature::Ptr> trims;
     std::vector<std::string> resultIds;
-    auto before = componentMetadata(body_);
+    std::string metadataError;
+    auto before = componentMetadata(body_, metadataError);
+    if (!metadataError.empty()) return componentFailure(metadataError);
     auto after = before;
     qInfo().noquote() << "Trim Body apply: targets=" << static_cast<int>(componentIds.size())
                       << "metadata=" << static_cast<int>(before.size());
@@ -2061,7 +2072,9 @@ ModelingResult ModelingController::recoverPreSplit(const std::string& rootFeatur
     }
     if (removableIds.empty()) return componentFailure("No downstream component Split/Transform history found");
 
-    const auto before = componentMetadata(body_);
+    std::string metadataError;
+    const auto before = componentMetadata(body_, metadataError);
+    if (!metadataError.empty()) return componentFailure(metadataError);
     auto after = before;
     std::unordered_set<std::string> removedFeatureIds(removableIds.begin(), removableIds.end());
     std::unordered_set<std::string> removedComponentIds;

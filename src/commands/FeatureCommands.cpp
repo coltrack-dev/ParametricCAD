@@ -541,6 +541,7 @@ RemoveFeatureCommand::RemoveFeatureCommand(parametric::Body& body, const std::st
 {
     const auto root = body.findFeature(featureId);
     if (!root) throw std::invalid_argument("Cannot delete unknown feature: " + featureId);
+    beforeComponents_ = body.components();
     setText("Delete " + QString::fromStdString(root->name()));
     std::unordered_set<std::string> affected{featureId};
     // Body guarantees dependency order. Keep original positions for restoration.
@@ -568,6 +569,7 @@ void RemoveFeatureCommand::undo()
 {
     if (!applied_) return;
     for (const auto& [position, feature] : removed_) body_.insertFeature(position, feature);
+    body_.replaceComponents(beforeComponents_);
     if (!body_.recomputeDeferred()) body_.recompute();
     applied_ = false;
 }
@@ -576,6 +578,12 @@ void RemoveFeatureCommand::redo()
 {
     if (applied_) return;
     for (auto it = removed_.rbegin(); it != removed_.rend(); ++it) body_.removeFeature(it->second->id());
+    if (!afterComponentsCaptured_) {
+        afterComponents_ = body_.components();
+        afterComponentsCaptured_ = true;
+    } else {
+        body_.replaceComponents(afterComponents_);
+    }
     if (!body_.recomputeDeferred()) body_.recompute();
     applied_ = true;
 }

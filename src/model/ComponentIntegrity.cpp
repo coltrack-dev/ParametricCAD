@@ -98,12 +98,16 @@ std::vector<ComponentIntegrityIssue> inspectComponentIntegrity(
         const auto persistedCount = persisted == byFeature.end() ? 0u : persisted->second.size();
         const auto currentSolids = solidCount(feature->shape());
         std::size_t currentPersisted = 0;
+        bool hasHistorical = false;
         if (persisted != byFeature.end()) {
-            for (const auto* component : persisted->second)
+            for (const auto* component : persisted->second) {
+                hasHistorical = hasHistorical || component->technicalHidden
+                    || !component->replacementComponentIds.empty();
                 if (!component->technicalHidden && component->replacementComponentIds.empty())
                     ++currentPersisted;
+            }
         }
-        if (persistedCount > 0 && currentSolids > currentPersisted
+        if (persistedCount > 0 && !hasHistorical && currentSolids > currentPersisted
             && currentPersisted > 0) {
             issue(issues, "PARTIAL_COMPONENT_METADATA", feature->id(), {},
                 "Persisted metadata covers only part of the current feature solids",

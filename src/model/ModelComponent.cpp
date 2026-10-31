@@ -14,6 +14,7 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <unordered_set>
 
 namespace {
 struct Metrics {
@@ -94,6 +95,101 @@ std::vector<ModelComponent> ComponentResolver::enumerate(const Body& body,
     return result;
 }
 
+std::vector<ModelComponent> ComponentResolver::mergeFeatureMetadata(
+    const Body& body, const std::string& featureId, std::string& error,
+    const double tolerance)
+{
+    error.clear();
+    const auto feature = body.findFeature(featureId);
+    if (!feature || feature->shape().IsNull()) return {};
+
+    std::vector<ModelComponent> persisted;
+    for (const auto& component : body.components()) {
+        if (component.sourceFeatureId == featureId) persisted.push_back(component);
+    }
+    std::vector<TopoDS_Shape> solids;
+    if (feature->shape().ShapeType() == TopAbs_SOLID) {
+        solids.push_back(feature->shape());
+    } else {
+        for (TopExp_Explorer explorer(feature->shape(), TopAbs_SOLID);
+             explorer.More(); explorer.Next()) solids.push_back(explorer.Current());
+    }
+
+    std::vector<std::pair<ModelComponent, Metrics>> current;
+    current.reserve(solids.size());
+    for (const auto& solid : solids) {
+        const auto value = metrics(solid);
+        ModelComponent component;
+        component.id = idFor(featureId, value);
+        component.name = feature->name() + " component";
+        component.sourceFeatureId = featureId;
+        component.minX = value.minX; component.minY = value.minY; component.minZ = value.minZ;
+        component.maxX = value.maxX; component.maxY = value.maxY; component.maxZ = value.maxZ;
+        component.volume = value.volume;
+        current.emplace_back(std::move(component), value);
+    }
+
+    std::unordered_set<std::string> generatedIds;
+    for (const auto& [component, value] : current) {
+        (void)value;
+        if (!generatedIds.insert(component.id).second) {
+            error = "Ambiguous generated component ID for feature '" + featureId + "'";
+            return {};
+        }
+    }
+
+    std::vector<ModelComponent> result = persisted;
+    if (persisted.empty()) {
+        for (const auto& [component, value] : current) {
+            (void)value;
+            result.push_back(component);
+        }
+        return result;
+    }
+    const bool hasActivePersisted = std::any_of(persisted.begin(), persisted.end(),
+        [](const ModelComponent& component) {
+            return !component.technicalHidden && component.replacementComponentIds.empty();
+        });
+    if (!hasActivePersisted) return result;
+
+    std::vector<bool> matched(persisted.size(), false);
+    for (const auto& [generatedComponent, generatedMetrics] : current) {
+        std::vector<std::size_t> matches;
+        for (std::size_t index = 0; index < persisted.size(); ++index) {
+            const auto& component = persisted[index];
+            if (component.technicalHidden || !component.replacementComponentIds.empty()) continue;
+            if (::matches(component, generatedMetrics, tolerance)) {
+                matches.push_back(index);
+            }
+        }
+        if (matches.size() > 1) {
+            error = "Ambiguous persisted component metadata match for feature '" + featureId + "'";
+            return {};
+        }
+        if (matches.size() == 1) {
+            if (matched[matches.front()]) {
+                error = "Ambiguous persisted component metadata reuse for feature '"
+                    + featureId + "'";
+                return {};
+            }
+            matched[matches.front()] = true;
+            continue;
+        }
+        result.push_back(generatedComponent);
+    }
+
+    for (std::size_t index = 0; index < persisted.size(); ++index) {
+        const auto& component = persisted[index];
+        if (!matched[index] && !component.technicalHidden
+            && component.replacementComponentIds.empty()) {
+            error = "Persisted component metadata no longer matches feature geometry '"
+                + featureId + "'";
+            return {};
+        }
+    }
+    return result;
+}
+
 std::vector<ComponentResolution> ComponentResolver::resolveFeature(
     const Body& body, const std::string& featureId, const double tolerance)
 {
@@ -118,27 +214,9 @@ std::vector<ComponentResolution> ComponentResolver::resolveFeature(
     candidates.reserve(solids.size());
     for (const auto& solid : solids) candidates.push_back({solid, metrics(solid)});
 
-    std::vector<ModelComponent> components;
-    for (const auto& component : body.components()) {
-        if (component.sourceFeatureId == featureId) components.push_back(component);
-    }
-    if (components.empty()) {
-        components.reserve(candidates.size());
-        for (const auto& candidate : candidates) {
-            ModelComponent component;
-            component.id = idFor(featureId, candidate.metrics);
-            component.name = feature->name() + " component";
-            component.sourceFeatureId = featureId;
-            component.minX = candidate.metrics.minX;
-            component.minY = candidate.metrics.minY;
-            component.minZ = candidate.metrics.minZ;
-            component.maxX = candidate.metrics.maxX;
-            component.maxY = candidate.metrics.maxY;
-            component.maxZ = candidate.metrics.maxZ;
-            component.volume = candidate.metrics.volume;
-            components.push_back(std::move(component));
-        }
-    }
+    std::string metadataError;
+    const auto components = mergeFeatureMetadata(body, featureId, metadataError, tolerance);
+    if (!metadataError.empty()) return {};
 
     std::vector<ComponentResolution> result;
     for (const auto& component : components) {

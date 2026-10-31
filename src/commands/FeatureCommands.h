@@ -397,6 +397,9 @@ public:
 private:
     parametric::Body& body_;
     std::vector<std::pair<std::size_t, parametric::ParametricFeature::Ptr>> removed_;
+    std::vector<parametric::ModelComponent> beforeComponents_;
+    std::vector<parametric::ModelComponent> afterComponents_;
+    bool afterComponentsCaptured_{false};
     bool applied_{false};
 };
 
