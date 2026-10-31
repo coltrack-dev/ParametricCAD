@@ -114,15 +114,11 @@ std::vector<ComponentIntegrityIssue> inspectComponentIntegrity(
                 ComponentIntegritySeverity::Warning);
         }
 
-        const auto generated = ComponentResolver::enumerate(body, feature->id());
-        std::unordered_map<std::string, std::size_t> generatedIds;
-        for (const auto& component : generated) ++generatedIds[component.id];
-        for (const auto& [id, count] : generatedIds) {
-            if (count > 1) {
-                issue(issues, "AMBIGUOUS_GENERATED_COMPONENT_ID", feature->id(), id,
-                    "Generated component ID is shared by multiple solids",
-                    ComponentIntegritySeverity::Error);
-            }
+        std::string enumerationError;
+        ComponentResolver::enumerate(body, feature->id(), enumerationError);
+        if (!enumerationError.empty()) {
+            issue(issues, "AMBIGUOUS_GENERATED_COMPONENT_ID", feature->id(), {},
+                enumerationError.c_str(), ComponentIntegritySeverity::Error);
         }
     }
 

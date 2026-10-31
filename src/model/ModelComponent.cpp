@@ -67,6 +67,14 @@ namespace cad::parametric {
 std::vector<ModelComponent> ComponentResolver::enumerate(const Body& body,
                                                          const std::string& featureId)
 {
+    std::string error;
+    return enumerate(body, featureId, error);
+}
+
+std::vector<ModelComponent> ComponentResolver::enumerate(
+    const Body& body, const std::string& featureId, std::string& error)
+{
+    error.clear();
     std::vector<ModelComponent> persisted;
     for (const auto& component : body.components())
         if (component.sourceFeatureId == featureId) persisted.push_back(component);
@@ -81,6 +89,7 @@ std::vector<ModelComponent> ComponentResolver::enumerate(const Body& body,
              explorer.More(); explorer.Next()) solids.push_back(explorer.Current());
     }
     std::vector<ModelComponent> result;
+    std::unordered_set<std::string> generatedIds;
     for (const auto& solid : solids) {
         const auto value = metrics(solid);
         ModelComponent component;
@@ -90,6 +99,11 @@ std::vector<ModelComponent> ComponentResolver::enumerate(const Body& body,
         component.minX = value.minX; component.minY = value.minY; component.minZ = value.minZ;
         component.maxX = value.maxX; component.maxY = value.maxY; component.maxZ = value.maxZ;
         component.volume = value.volume;
+        if (!generatedIds.insert(component.id).second) {
+            error = "AMBIGUOUS_GENERATED_COMPONENT_ID: feature '" + featureId
+                + "' has multiple solids with the same identity signature";
+            return {};
+        }
         result.push_back(std::move(component));
     }
     return result;
@@ -163,12 +177,12 @@ std::vector<ModelComponent> ComponentResolver::mergeFeatureMetadata(
             }
         }
         if (matches.size() > 1) {
-            error = "Ambiguous persisted component metadata match for feature '" + featureId + "'";
+            error = "AMBIGUOUS_PERSISTED_COMPONENT_MATCH: feature '" + featureId + "'";
             return {};
         }
         if (matches.size() == 1) {
             if (matched[matches.front()]) {
-                error = "Ambiguous persisted component metadata reuse for feature '"
+                error = "AMBIGUOUS_PERSISTED_COMPONENT_REUSE: feature '"
                     + featureId + "'";
                 return {};
             }
@@ -182,7 +196,7 @@ std::vector<ModelComponent> ComponentResolver::mergeFeatureMetadata(
         const auto& component = persisted[index];
         if (!matched[index] && !component.technicalHidden
             && component.replacementComponentIds.empty()) {
-            error = "Persisted component metadata no longer matches feature geometry '"
+            error = "UNRESOLVED_PERSISTED_COMPONENT_GEOMETRY: feature '"
                 + featureId + "'";
             return {};
         }
@@ -252,6 +266,12 @@ std::optional<ComponentResolution> ComponentResolver::resolve(
     // Legacy projects have no metadata.  Accept the deterministic signature
     // produced by enumerate(), but never silently choose an unrelated solid.
     for (const auto& feature : body.features()) {
+        std::string enumerationError;
+        ComponentResolver::enumerate(body, feature->id(), enumerationError);
+        if (!enumerationError.empty()) {
+            error = enumerationError;
+            return {};
+        }
         for (const auto& component : resolveFeature(body, feature->id(), tolerance)) {
             if (component.component.id == componentId) return component;
         }

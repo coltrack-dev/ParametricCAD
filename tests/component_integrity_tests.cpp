@@ -103,15 +103,14 @@ void c2GeneratedCollision()
     auto feature = std::make_shared<CompoundFeature>("equal-solids", true);
     body.addFeature(feature);
     check(body.recompute(), "C-2 recompute");
-    const auto generated = cad::parametric::ComponentResolver::enumerate(body, feature->id());
-    check(generated.size() == 2 && generated[0].id == generated[1].id,
-        "C-2 metric collision was not reproduced");
+    std::string enumerationError;
+    const auto generated = cad::parametric::ComponentResolver::enumerate(
+        body, feature->id(), enumerationError);
+    check(generated.empty() && enumerationError.find("AMBIGUOUS_GENERATED_COMPONENT_ID") == 0,
+        "C-2 metric collision was not rejected");
     const auto issues = cad::parametric::inspectComponentIntegrity(body);
     check(hasCode(issues, "AMBIGUOUS_GENERATED_COMPONENT_ID"),
         "C-2 collision diagnostic");
-    std::string error;
-    check(!cad::parametric::ComponentResolver::resolve(body, generated.front().id, error),
-        "C-2 ambiguous ID unexpectedly resolved");
 }
 
 void c3ReplacementChain()
@@ -165,6 +164,8 @@ void c4PartialMetadata()
     check(controller.body().recompute(), "C-4 controller recompute");
     const auto all = cad::parametric::ComponentResolver::enumerate(
         controller.body(), partial->id());
+    check(all.size() == 2 && all[0].id != all[1].id,
+          "C-2 distinct solids have distinct IDs");
     controller.body().replaceComponents({all.front()});
     std::string mergeError;
     const auto merged = cad::parametric::ComponentResolver::mergeFeatureMetadata(
@@ -179,12 +180,16 @@ void c4PartialMetadata()
                   "PARTIAL_COMPONENT_METADATA"), "C-4 partial state remains after merge");
 
     cad::application::ModelingController ambiguousController;
+    auto seed = std::make_shared<CompoundFeature>("ambiguous-seed", false);
     auto ambiguous = std::make_shared<CompoundFeature>("ambiguous-partial", true);
+    ambiguousController.body().addFeature(seed);
     ambiguousController.body().addFeature(ambiguous);
     check(ambiguousController.body().recompute(), "C-4 ambiguous recompute");
-    const auto ambiguousGenerated = cad::parametric::ComponentResolver::enumerate(
-        ambiguousController.body(), ambiguous->id());
-    ambiguousController.body().replaceComponents({ambiguousGenerated.front()});
+    auto ambiguousPersisted = cad::parametric::ComponentResolver::enumerate(
+        ambiguousController.body(), seed->id()).front();
+    ambiguousPersisted.id = "ambiguous-persisted-component";
+    ambiguousPersisted.sourceFeatureId = ambiguous->id();
+    ambiguousController.body().replaceComponents({ambiguousPersisted});
     std::string ambiguousError;
     const auto ambiguousMerged = cad::parametric::ComponentResolver::mergeFeatureMetadata(
         ambiguousController.body(), ambiguous->id(), ambiguousError);
@@ -288,6 +293,116 @@ void deletionAfterComponentOperations()
         controller.undo();
         check(controller.body().components().size() == 2, "delete multi undo metadata");
     }
+}
+
+void phase2bStableIdentity()
+{
+    cad::application::ModelingController controller;
+    auto source = std::make_shared<cad::parametric::BoxParametricFeature>(
+        "stable-source", 10, 10, 10);
+    controller.body().addFeature(source);
+    check(controller.body().recompute(), "Phase 2B initial recompute");
+    auto persisted = oneComponent(controller.body(), source->id());
+    persisted.id = "legacy-generated-component-id";
+    controller.body().replaceComponents({persisted});
+    const auto stableId = persisted.id;
+
+    check(controller.body().recompute(), "Phase 2B unchanged recompute");
+    check(controller.body().components().front().id == stableId,
+          "Phase 2B unchanged recompute changed ID");
+    source->setSize(14, 10, 10);
+    controller.body().markDirtyFrom(source->id());
+    check(controller.body().recompute(), "Phase 2B changed recompute");
+    check(controller.body().components().front().id == stableId,
+          "Phase 2B one-to-one recompute changed ID");
+    check(cad::parametric::inspectComponentIntegrity(controller.body()).empty(),
+          "Phase 2B stable component integrity");
+
+    QTemporaryDir directory;
+    check(directory.isValid(), "Phase 2B temporary directory");
+    Document document;
+    Document loadedDocument;
+    cad::parametric::Body loadedBody;
+    QString error;
+    const auto firstPath = directory.filePath("stable-first.pcad");
+    check(ProjectFile::save(firstPath, document, controller.body(), error),
+          "Phase 2B first save");
+    check(ProjectFile::load(firstPath, loadedDocument, loadedBody, error),
+          "Phase 2B first load");
+    check(loadedBody.components().size() == 1
+              && loadedBody.components().front().id == stableId,
+          "Phase 2B legacy ID save/load");
+
+    const auto secondPath = directory.filePath("stable-second.pcad");
+    check(ProjectFile::save(secondPath, loadedDocument, loadedBody, error),
+          "Phase 2B second save");
+    Document reloadedDocument;
+    cad::parametric::Body reloadedBody;
+    check(ProjectFile::load(secondPath, reloadedDocument, reloadedBody, error),
+          "Phase 2B second load");
+    check(reloadedBody.components().size() == 1
+              && reloadedBody.components().front().id == stableId,
+          "Phase 2B repeated save/load changed ID");
+
+    cad::application::ModelingController operationController;
+    auto operationSource = std::make_shared<cad::parametric::BoxParametricFeature>(
+        "stable-operation-source", 10, 10, 10);
+    operationController.body().addFeature(operationSource);
+    check(operationController.body().recompute(), "Phase 2B operation recompute");
+    const auto operationComponent = oneComponent(
+        operationController.body(), operationSource->id());
+    operationController.body().replaceComponents({operationComponent});
+    gp_Trsf translation;
+    translation.SetTranslation(gp_Vec(2, 0, 0));
+    const auto transform = operationController.transformComponent(
+        operationComponent.id, cad::parametric::TransformOperation::Translate,
+        cad::parametric::TransformResultMode::ReplaceResult,
+        translation);
+    check(transform.success, "Phase 2B transform after recompute");
+    check(operationController.body().recompute(), "Phase 2B transform recompute");
+    const auto trim = operationController.trimBody(
+        transform.componentIds, gp_Pnt(5, 0, 0), gp_Dir(1, 0, 0),
+        cad::parametric::TrimSide::Positive);
+    check(trim.success, "Phase 2B trim after recompute");
+    check(operationController.body().recompute(), "Phase 2B trim recompute");
+    const auto split = operationController.splitComponent(
+        trim.componentIds.front(), gp_Pnt(7, 0, 0), gp_Dir(1, 0, 0));
+    check(split.success && split.componentIds.size() == 2,
+          "Phase 2B split after recompute");
+    check(operationController.body().recompute(), "Phase 2B split recompute");
+    check(!hasCode(cad::parametric::inspectComponentIntegrity(
+                      operationController.body()), "DUPLICATE_COMPONENT_ID"),
+          "Phase 2B operation duplicate IDs");
+
+    cad::application::ModelingController sketchController;
+    const auto sketch = sketchController.createSketch();
+    check(sketch.success, "Phase 2B sketch creation");
+    check(sketchController.addSketchLine(sketch.id, {0, 0}, {20, 0}).success,
+          "Phase 2B sketch line 1");
+    check(sketchController.addSketchLine(sketch.id, {20, 0}, {20, 10}).success,
+          "Phase 2B sketch line 2");
+    check(sketchController.addSketchLine(sketch.id, {20, 10}, {0, 10}).success,
+          "Phase 2B sketch line 3");
+    check(sketchController.addSketchLine(sketch.id, {0, 10}, {0, 0}).success,
+          "Phase 2B sketch line 4");
+    const auto extrude = sketchController.createExtrudeFromSketch(
+        cad::application::SelectionSnapshot{{{
+            sketch.id, cad::application::SelectionKind::Object, std::nullopt}}}, 25.0);
+    check(extrude.success, "Phase 2B sketch extrude");
+    const auto sketchExtrudeComponent = oneComponent(
+        sketchController.body(), extrude.id);
+    sketchController.body().replaceComponents({sketchExtrudeComponent});
+    const auto sketchFeature = std::dynamic_pointer_cast<cad::parametric::SketchFeature>(
+        sketchController.body().findFeature(sketch.id));
+    check(static_cast<bool>(sketchFeature), "Phase 2B sketch feature");
+    check(sketchController.replaceSketchProfile(sketch.id, {
+        {{0, 0}, {24, 0}}, {{24, 0}, {24, 10}},
+        {{24, 10}, {0, 10}}, {{0, 10}, {0, 0}}}).success,
+          "Phase 2B sketch dimension change");
+    check(sketchController.body().components().front().id == sketchExtrudeComponent.id,
+          "Phase 2B sketch recompute changed ID");
+    check(cad::parametric::inspectComponentIntegrity(sketchController.body()).empty(),
+          "Phase 2B sketch integrity diagnostic");
 }
 
 void scenarioARepeatedTransform()
@@ -404,6 +519,7 @@ int main()
         c4PartialMetadata();
         diagnosticIssueCoverage();
         deletionAfterComponentOperations();
+        phase2bStableIdentity();
         scenarioARepeatedTransform();
         scenarioBRepeatedTrim();
         scenarioCUndoRedo();
